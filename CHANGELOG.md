@@ -1,20 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
 
-Documentation corrections; no code change.
+Fixes for what an independent review found; every finding below is now a
+regression test.
 
-- "A later failing run revokes DONE" holds only for runs on the implemented
-  commit. A run after the task file and receipts are committed is recorded but
-  ignored; record `implemented` again before testing again.
-- The verdict follows the newest `implemented` receipt, not HEAD: code committed
-  later without a new receipt is not checked.
-- Append-only is enforced against `HEAD` by the pre-commit hook only. A commit
-  made with `--no-verify` can drop receipts, and `check` in CI does not notice.
-- Squash and rebase merges are not supported: they remove the commits receipts
-  name, and `check` then refuses in fresh clones. Use merge commits.
-- `receipt merged` and `receipt deployed` count only when the branch's code is
-  exactly the implemented code; after other work lands, they do not count.
+- A test run counts when its code matches the implemented code, on any commit.
+  Committing the task file and receipts no longer hides later runs: a later
+  failing run revokes DONE again, and a passing run after that commit counts.
+  A DONE that was hiding such a failure becomes IN_PROGRESS.
+- The pre-commit check (`check --staged`) refuses a commit that newly marks a
+  task DONE or CLOSED when the code in that commit differs from the implemented
+  code. `check <id>` notes when the code has changed since the implementation,
+  and its `Next:` line then says to record `implemented` again.
+- `check --base REF` refuses if receipts committed on `REF` were removed or
+  changed, so a `--no-verify` commit cannot drop a failing run past CI. The
+  README's Actions example uses it.
+- A receipt that is recorded but cannot count (a test on changed code, a merge
+  without the tested code, a read-back out of order, delivery receipts a task
+  does not ship) says why and exits 1. Before, most of these exited 0.
+- New receipts and claims record only Git `user.name`, not the hostname.
+- Documentation states what is not covered yet: squash and rebase merges, and
+  `merged`/`deployed` receipts on a branch where other work has landed.
 
 ## 0.2.0
 

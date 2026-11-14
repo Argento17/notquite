@@ -44,7 +44,6 @@ def contract_debt(root, record, history, implemented, staged=False):
                 proved |= any(evidence["ref"] == "receipt:" + entry["hash"]
                               and entry["kind"] == "test" and entry["exit_code"] == 0
                               and entry["valid"] and implemented is not None
-                              and entry["commit"] == implemented["commit"]
                               and entry["code"] == implemented["code"] for entry in history)
         if item["critical"] and not proved:
             debts.append(f"contract {cid}: {item['requires']} evidence")
@@ -61,9 +60,9 @@ def verdict(root, record, staged=False):
     if not implemented:
         done.append("implementation")
     else:
-        # The latest test run on the implemented commit decides; a later failure revokes an earlier pass.
-        runs = [e for e in current if e["kind"] == "test" and e["commit"] == implemented["commit"]
-                and e["code"] == implemented["code"]]
+        # The latest test run on the implemented code decides; a later failure revokes an earlier pass.
+        # Code leaves out tasks/ and .notquite/, so committing the receipts does not hide later runs.
+        runs = [e for e in current if e["kind"] == "test" and e["code"] == implemented["code"]]
         if not runs or runs[-1]["exit_code"] != 0 or not runs[-1]["valid"]:
             done.append(f"a passing test on {implemented['commit'][:7]}")
     done += contract_debt(root, record, current, implemented, staged)
@@ -107,10 +106,59 @@ def waits(record, all_records, views):
     return result
 
 
-def check(root, staged=False):
+def committed_status(root, tid):
+    """The status line of tasks/<tid>.md in HEAD, or None if HEAD has no readable record."""
+    shown = s.git(root, "show", f"HEAD:tasks/{tid}.md", required=False)
+    if shown.returncode:
+        return None
+    lines = shown.stdout.replace("\r\n", "\n").splitlines()
+    try:
+        return s.front_matter(tid, lines[1:lines.index("---", 1)]).get("status")
+    except (s.Refused, ValueError):
+        return None
+
+
+def newest_implementation(history):
+    index = max((i for i, e in enumerate(history) if e["kind"] == "implemented"), default=-1)
+    return history[index] if index >= 0 else None
+
+
+def fresh_claim_on_changed_code(root, record):
+    """A commit that newly claims DONE or CLOSED must carry exactly the implemented code."""
+    tid = record["id"]
+    if record["status"] not in {"DONE", "CLOSED"} or committed_status(root, tid) in {"DONE", "CLOSED"}:
+        return None
+    implemented = newest_implementation(s.entries(root, tid, staged=True))
+    if implemented is None or s.index_code(root) == implemented["code"]:
+        return None
+    return (f"NOT QUITE  {tid} is being marked {record['status']}, but the code in this commit differs"
+            f" from the implemented commit {implemented['commit'][:7]}. Record notquite receipt"
+            f" implemented --task {tid} and test again.")
+
+
+def base_problems(root, base, staged=False):
+    """Receipts committed on the base revision must still be there, unchanged, as a prefix."""
+    found = s.git(root, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", required=False)
+    if found.returncode:
+        raise s.Refused(f"base {base} is not in this clone; fetch it"
+                        " (in GitHub Actions: actions/checkout with fetch-depth: 0)")
+    commit = found.stdout.strip()
+    listed = s.git(root, "ls-tree", "-r", "--name-only", commit, "--", ".notquite/receipts").stdout
+    present = set(s.files(root, ".notquite/receipts", staged))
+    problems = []
+    for path in sorted(p for p in listed.splitlines() if p.endswith(".jsonl")):
+        tid = path.rsplit("/", 1)[-1].removesuffix(".jsonl")
+        before = s.git(root, "show", f"{commit}:{path}").stdout.replace("\r\n", "\n")
+        now = s.read_text(root, path, staged) if path in present else None
+        if now is None or not now.startswith(before):
+            problems.append(f"{tid}: receipts recorded on {base} were removed or changed")
+    return problems
+
+
+def check(root, staged=False, base=None):
     all_records = records(root, staged)
     views = {tid: verdict(root, record, staged) for tid, record in all_records.items()}
-    problems = []
+    problems = base_problems(root, base, staged) if base else []
     # Also inspect ledgers removed from the current snapshot.
     old = s.git(root, "ls-tree", "-r", "--name-only", "HEAD", "--", ".notquite/receipts", required=False)
     paths = set(old.stdout.splitlines()) | set(s.files(root, ".notquite/receipts", staged))
@@ -149,6 +197,10 @@ def check(root, staged=False):
         if debt:
             problems.append(f"NOT QUITE  {tid} says {record['status']} but owes: {', '.join(debt)}."
                             f" Details: notquite check {tid}")
+        elif staged:
+            changed = fresh_claim_on_changed_code(root, record)
+            if changed:
+                problems.append(changed)
     return problems
 
 
@@ -161,11 +213,14 @@ def claim_debt(record, all_records, views):
     return done + (delivery if claimed == "CLOSED" else []) + waits(record, all_records, views)
 
 
-def next_step(item, record):
+def next_step(item, record, code_changed=False):
     tid = record["id"]
     if item == "implementation":
         return f"commit the code, then: notquite receipt implemented --task {tid}"
     if item.startswith("a passing test on"):
+        if code_changed:
+            return (f"notquite receipt implemented --task {tid}, then"
+                    f" notquite receipt test --task {tid} -- <your test command>")
         return f"notquite receipt test --task {tid} -- <your test command>"
     if item.startswith("contract "):
         return f"add qualifying evidence to {record['contract']}"
@@ -190,25 +245,71 @@ def test_line(history):
         return None, "none counted: no implementation recorded"
     implemented = history[index]
     short = implemented["commit"][:7]
-    runs = [e for e in history[index + 1:] if e["kind"] == "test"
-            and e["commit"] == implemented["commit"] and e["code"] == implemented["code"]]
+    runs = [e for e in history[index + 1:] if e["kind"] == "test" and e["code"] == implemented["code"]]
     if runs:
         newest = runs[-1]
+        where = newest["commit"][:7]
+        if newest["commit"] != implemented["commit"]:
+            where += f", same code as {short}"
         if newest["exit_code"] != 0:
-            latest = f"FAIL (exit {newest['exit_code']}, {short})"
+            latest = f"FAIL (exit {newest['exit_code']}, {where})"
         elif not newest["valid"]:
-            latest = f"not counted: files or HEAD changed while it ran ({short})"
+            latest = f"not counted: files or HEAD changed while it ran ({where})"
         else:
-            return short, f"PASS (exit 0, {short})"
+            return short, f"PASS (exit 0, {where})"
         if any(e["exit_code"] == 0 and e["valid"] for e in runs):
             return short, f"{latest}; an earlier run passed, but the latest run decides"
         return short, latest
     tests = [e for e in history if e["kind"] == "test"]
     if not tests:
         return short, "no passing test for this commit"
-    if tests[-1]["commit"] == implemented["commit"]:
+    if tests[-1]["code"] == implemented["code"]:
         return short, "no passing test for this commit; the last test was recorded before the implementation"
     return short, f"no passing test for this commit; the last test ran on {tests[-1]['commit'][:7]}"
+
+
+def uncounted(record, history):
+    """Why the newest receipt, though recorded, cannot count toward the verdict; None if it can.
+
+    Failed or invalid runs are reported by their exit code and are not repeated here.
+    """
+    item, before = history[-1], history[:-1]
+    kind = item["kind"]
+    if kind == "implemented" or (kind in {"test", "deployed", "live"}
+                                 and (item["exit_code"] != 0 or not item["valid"])):
+        return None
+    tid = record["id"]
+    implemented = newest_implementation(before)
+    if kind in {"merged", "deployed", "live"}:
+        needed = {"merged": {"repo", "live"}, "deployed": {"live"}, "live": {"live"}}[kind]
+        if record["ships"] not in needed:
+            return f"{tid} has ships: {record['ships']}, so a {kind} receipt is not part of its evidence"
+    if implemented is None:
+        return f"no implementation is recorded yet; run notquite receipt implemented --task {tid} first"
+    short = implemented["commit"][:7]
+    if kind in {"test", "merged", "deployed"} and item["code"] != implemented["code"]:
+        if kind == "test":
+            return (f"this code differs from the implemented commit {short}; run"
+                    f" notquite receipt implemented --task {tid} first")
+        if kind == "merged":
+            return (f"{item['ref']} on origin does not hold exactly the code of the implemented commit"
+                    f" {short}; other work may have landed there")
+        return f"the deployed checkout's code differs from the implemented commit {short}"
+    current = before[before.index(implemented) + 1:]
+    merges = [i for i, e in enumerate(current) if e["kind"] == "merged"]
+    if kind == "deployed" and not merges:
+        return f"no merge is recorded since the implementation; run notquite receipt merged --task {tid} first"
+    if kind == "live":
+        after_merge = current[merges[-1] + 1:] if merges else []
+        deployed = [e for e in after_merge if e["kind"] == "deployed"]
+        if not deployed:
+            return "no deployment read-back is recorded after the merge"
+        if deployed[-1]["exit_code"] != 0 or not deployed[-1]["valid"]:
+            return "the latest deployment read-back did not pass"
+        if deployed[-1]["commit"] != item["commit"] or deployed[-1]["target"] != item["target"]:
+            return (f"it does not match the latest deployment read-back"
+                    f" ({deployed[-1]['target']} on {deployed[-1]['commit'][:7]})")
+    return None
 
 
 def explain(root, tid):
@@ -220,14 +321,19 @@ def explain(root, tid):
     record = all_records[tid]
     computed, done, delivery = views[tid]
     debt = claim_debt(record, all_records, views)
-    commit, test = test_line(s.entries(root, tid))
+    history = s.entries(root, tid)
+    commit, test = test_line(history)
+    implemented = newest_implementation(history)
+    code_changed = implemented is not None and s.code_digest(root, s.head(root)) != implemented["code"]
     claimed = record["status"]
     lines = [f"NOT QUITE  {tid}" if debt else f"{claimed}  {tid}", "",
              f"  Claimed:  {claimed}", f"  Computed: {computed}",
              f"  Commit:   {commit or 'none recorded'}", f"  Test:     {test}"]
+    if code_changed:
+        lines.append(f"  Note:     the code has changed since {commit}; this verdict is about {commit}")
     if debt:
         lines += [f"  Missing:  {item}" for item in debt]
-        lines += [f"  Next:     {next_step(item, record)}" for item in debt]
+        lines += [f"  Next:     {next_step(item, record, code_changed)}" for item in debt]
         result = "NOT DONE" if done or claimed == "DONE" else "NOT CLOSED"
         lines += ["", f"  Result: {result}. The status says {claimed}; the evidence above does not support it."]
     else:

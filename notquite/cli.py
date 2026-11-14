@@ -45,6 +45,9 @@ def parser():
     check.add_argument("task", nargs="?",
                        help="explain one task, by id (TASK-1) or path (tasks/TASK-1.md)")
     check.add_argument("--staged", action="store_true", help="check the staged files (pre-commit)")
+    check.add_argument("--base", metavar="REF",
+                       help="also refuse if receipts committed on REF were removed or changed"
+                            " (in CI: the pull request's base branch)")
     return result
 
 
@@ -93,11 +96,15 @@ def main(argv=None):
             print(f"{options.task} {options.kind} {item['commit'][:7]}{detail} - recorded")
             if command:
                 print("command: " + shlex.join(command))
-            if item.get("exit_code") == 0 and not item["valid"]:
-                print("not counted: " + invalid_reason(root, item))
-            _, done, delivery = gate.verdict(root, s.record(root, options.task))
+            record = s.record(root, options.task)
+            reason = (invalid_reason(root, item) if item.get("exit_code") == 0 and not item["valid"]
+                      else gate.uncounted(record, s.entries(root, options.task)))
+            if reason:
+                print("recorded, but does not count: " + reason)
+            _, done, delivery = gate.verdict(root, record)
             print(f"{options.task} still owes: {', '.join(done + delivery) or 'nothing'}")
-            return 0 if item.get("exit_code", 0) == 0 and item.get("valid", True) else 1
+            failed = item.get("exit_code", 0) != 0 or not item.get("valid", True)
+            return 1 if failed or reason else 0
         elif options.action == "show":
             record = s.record(root, options.task)
             computed, done, delivery = gate.verdict(root, record)
@@ -120,13 +127,13 @@ def main(argv=None):
         elif options.action == "ready":
             print("\n".join(gate.ready(root)) or "no open work")
         elif options.task:
-            if options.staged:
-                raise s.Refused("--staged checks every task; leave out the task")
+            if options.staged or options.base:
+                raise s.Refused("--staged and --base check every task; leave out the task")
             lines, refused = gate.explain(root, task_argument(options.task))
             print("\n".join(lines))
             return int(refused)
         else:
-            problems = gate.check(root, options.staged)
+            problems = gate.check(root, options.staged, options.base)
             print("\n".join(problems) if problems else "check: OK")
             return int(bool(problems))
         return 0

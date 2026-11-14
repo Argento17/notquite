@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import sysconfig
@@ -123,16 +124,16 @@ def test_new_refuses_an_unreachable_remote(clones):
 
 def test_second_claim_refused_and_only_holder_releases(clones):
     one, two = clones
-    assert "held by one@" in ok(one, "claim", "--task", "TASK-1")
+    assert "held by one since" in ok(one, "claim", "--task", "TASK-1")
     denied = cli(two, "claim", "--task", "TASK-1")
-    assert denied.returncode == 1 and "held by one@" in denied.stderr
+    assert denied.returncode == 1 and "held by one since" in denied.stderr
     assert cli(two, "release", "--task", "TASK-1").returncode == 1
-    assert "TASK-1 held by one@" in ok(two, "claims")
+    assert "TASK-1 held by one since" in ok(two, "claims")
     ok(one, "claim", "--task", "TASK-1")  # same clone can retry safely
     ok(one, "release", "--task", "TASK-1")
     assert ok(two, "claims").strip() == "no active claims"
     ok(two, "claim", "--task", "TASK-1")
-    assert "held by two@" in ok(one, "claims")
+    assert "held by two since" in ok(one, "claims")
     assert len([r for r in store.remote_refs(one) if "/claims/" in r]) == 2
 
 
@@ -165,7 +166,7 @@ def test_test_receipt_runs_command_and_keeps_the_real_failure(clones):
     receipt = store.entries(one, "TASK-1")[-1]
     assert receipt["exit_code"] == 7 and not receipt["valid"]
     assert receipt["commit"] == commit and receipt["command"][-1] == "raise SystemExit(7)"
-    assert receipt["who"].startswith("one@") and receipt["at"]
+    assert receipt["who"] == "one" and receipt["at"]
     task(one, status="DONE")
     assert cli(one, "check").returncode == 1
     assert "computed IN_PROGRESS" in ok(one, "show", "--task", "TASK-1")
@@ -256,7 +257,9 @@ def test_merge_of_different_code_is_not_delivery(clones):
     git(two, "add", "app.py")
     git(two, "commit", "-qm", "Change the initial list")
     git(two, "push", "-q", "origin", "HEAD:refs/heads/main")
-    ok(one, "receipt", "merged", "--task", "TASK-1")
+    landed = cli(one, "receipt", "merged", "--task", "TASK-1")
+    assert landed.returncode == 1
+    assert "recorded, but does not count: refs/heads/main on origin does not hold exactly" in landed.stdout
     task(one, status="CLOSED")
     assert "merge of the tested code" in cli(one, "check").stdout
 
@@ -267,14 +270,16 @@ def test_live_needs_successful_readback_after_deployment(clones):
     implement(one)
     passed(one)
     merge(one)
-    assert readback(one, "live").returncode == 0  # too early; cannot discharge later delivery
+    early = readback(one, "live")  # too early; cannot discharge later delivery
+    assert early.returncode == 1 and "no deployment read-back is recorded after the merge" in early.stdout
     assert readback(one, "deployed").returncode == 0
     task(one, status="CLOSED", ships="live")
     denied = cli(one, "check")
     assert denied.returncode == 1 and "live read-back" in denied.stdout
     assert readback(one, "live", stamp="no version here").returncode == 1
     assert cli(one, "check").returncode == 1
-    assert readback(one, "live", target="other").returncode == 0
+    other = readback(one, "live", target="other")
+    assert other.returncode == 1 and "does not match the latest deployment read-back" in other.stdout
     assert cli(one, "check").returncode == 1
     assert readback(one, "live").returncode == 0
     ok(one, "check")
@@ -289,7 +294,8 @@ def test_failed_or_wrong_stamp_deploy_cannot_close(clones):
     merge(one)
     result = readback(one, "deployed", stamp=store.head(one)[:7])
     assert result.returncode == 1
-    assert readback(one, "live").returncode == 0
+    late = readback(one, "live")
+    assert late.returncode == 1 and "the latest deployment read-back did not pass" in late.stdout
     task(one, ships="live", status="CLOSED")
     assert "deployment read-back" in cli(one, "check").stdout
 
@@ -361,7 +367,7 @@ def test_ready_reports_free_held_blocked_and_delivery(clones):
     assert "TASK-1 free" in ok(one, "ready")
     assert "TASK-2 blocked: task:TASK-1, person:bo" in ok(one, "ready")
     ok(one, "claim", "--task", "TASK-1")
-    assert "TASK-1 held by one@" in ok(one, "ready")
+    assert "TASK-1 held by one since" in ok(one, "ready")
     ok(one, "release", "--task", "TASK-1")
     implement(one)
     passed(one)
@@ -464,7 +470,8 @@ def test_workflow_installs_kit_runs_tests_and_checker():
 
 def test_test_before_implementation_does_not_complete_task(clones):
     one, _ = clones
-    passed(one)
+    early = cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "pass")
+    assert early.returncode == 1 and "no implementation is recorded yet" in early.stdout
     implement(one)
     task(one, status="DONE")
     assert "passing test on" in cli(one, "check").stdout
@@ -595,6 +602,7 @@ def test_explain_rejects_a_test_from_an_older_commit(clones):
     assert result.returncode == 1
     assert f"the last test ran on {old}" in result.stdout
     assert f"Missing:  a passing test on {new}" in result.stdout
+    assert "Note:" not in result.stdout  # the README and demo output stay exactly as shown
 
 
 def test_explain_accepts_valid_done_and_shows_the_passing_test(clones):
@@ -647,7 +655,7 @@ def test_untracked_output_during_a_test_is_named(clones):
     result = cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c",
                  "open('build.log', 'w').write('x')")
     assert result.returncode == 1
-    assert "not counted: files changed while the command ran" in result.stdout
+    assert "recorded, but does not count: files changed while the command ran" in result.stdout
     assert "build.log" in result.stdout and ".gitignore" in result.stdout
     refused = cli(one, "receipt", "implemented", "--task", "TASK-1")
     assert refused.returncode == 1 and "build.log" in refused.stderr
@@ -827,8 +835,8 @@ def test_another_clone_cannot_release_by_copying_what_the_tag_shows(clones):
         refused = cli(two, "release", "--task", "TASK-1")
         assert refused.returncode == 1 and "only its holder can release it" in refused.stderr
         denied = cli(two, "claim", "--task", "TASK-1")
-        assert denied.returncode == 1 and "held by one@" in denied.stderr
-    assert "TASK-1 held by one@" in ok(two, "claims")
+        assert denied.returncode == 1 and "held by one since" in denied.stderr
+    assert "TASK-1 held by one since" in ok(two, "claims")
 
 
 def test_holder_releases_once_and_a_lost_token_cannot_release(clones):
@@ -1158,3 +1166,142 @@ def test_a_hash_after_a_value_stays_part_of_the_value(clones):
     path.write_text(path.read_text(encoding="utf-8").replace('priority: "P1"', "priority: P1 # soon"),
                     encoding="utf-8")
     assert store.record(one, "TASK-1")["priority"] == "P1 # soon"
+
+
+# 0.2.1: the independent review's reproductions, kept as regression tests.
+
+def commit_receipts(root, message="Record receipts"):
+    git(root, "add", "tasks", ".notquite")
+    git(root, "commit", "-qm", message)
+    return store.head(root)
+
+
+def test_a_failing_run_after_the_receipts_are_committed_revokes_done(clones):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    task(one, status="DONE")
+    commit_receipts(one)
+    ok(one, "check")
+    failed = cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "raise SystemExit(1)")
+    assert failed.returncode == 1 and "still owes: a passing test on" in failed.stdout
+    refused = cli(one, "check")
+    assert refused.returncode == 1 and "says DONE but owes: a passing test on" in refused.stdout
+    passed(one)
+    ok(one, "check")
+
+
+def test_a_passing_run_on_the_same_code_after_the_receipts_commit_counts(clones):
+    one, _ = clones
+    old = implement(one)[:7]
+    new = commit_receipts(one)[:7]
+    result = cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "pass")
+    assert result.returncode == 0 and "does not count" not in result.stdout
+    task(one, status="DONE")
+    explained = cli(one, "check", "TASK-1")
+    assert explained.returncode == 0, explained.stdout
+    assert f"Test:     PASS (exit 0, {new}, same code as {old})" in explained.stdout
+
+
+def test_a_test_on_changed_code_does_not_count_and_says_what_to_do(clones):
+    one, _ = clones
+    old = implement(one)[:7]
+    (one / "app.py").write_text("items = ['changed']\n", encoding="utf-8")
+    git(one, "commit", "-qam", "Change the list")
+    result = cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "pass")
+    assert result.returncode == 1
+    assert f"recorded, but does not count: this code differs from the implemented commit {old}" in result.stdout
+    task(one, status="DONE")
+    explained = cli(one, "check", "TASK-1")
+    assert explained.returncode == 1
+    assert f"Note:     the code has changed since {old}; this verdict is about {old}" in explained.stdout
+    assert ("Next:     notquite receipt implemented --task TASK-1, then notquite receipt test"
+            in explained.stdout)
+
+
+def test_the_hook_refuses_a_fresh_done_on_changed_code(clones):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    commit_receipts(one)
+    (one / "app.py").write_text("items = ['changed after testing']\n", encoding="utf-8")
+    task(one, status="DONE")
+    git(one, "add", "app.py", "tasks/TASK-1.md")
+    staged = cli(one, "check", "--staged")
+    assert staged.returncode == 1
+    assert ("TASK-1 is being marked DONE, but the code in this commit differs from the implemented"
+            in staged.stdout)
+    git(one, "config", "core.hooksPath", str(PACKAGE / "hooks"))
+    env = dict(os.environ, PYTHONPATH=str(PACKAGE))
+    hooked = subprocess.run(["git", "commit", "-qm", "Done, with an untested change"], cwd=one,
+                            env=env, capture_output=True, encoding="utf-8")
+    assert hooked.returncode != 0 and "is being marked DONE" in hooked.stdout + hooked.stderr
+    git(one, "reset", "-q", "app.py")
+    (one / "app.py").write_text("items = []\n", encoding="utf-8")  # back to the tested code
+    ok(one, "check", "--staged")
+
+
+def test_an_earlier_done_is_kept_when_later_code_lands_and_explain_notes_it(clones):
+    one, _ = clones
+    old = implement(one)[:7]
+    passed(one)
+    task(one, status="DONE")
+    commit_receipts(one)
+    (one / "other.py").write_text("x = 1\n", encoding="utf-8")
+    git(one, "add", "other.py")
+    ok(one, "check", "--staged")  # only a commit that newly claims DONE is held to its code
+    git(one, "commit", "-qm", "Other work")
+    ok(one, "check")
+    explained = cli(one, "check", "TASK-1")
+    assert explained.returncode == 0
+    assert f"Note:     the code has changed since {old}; this verdict is about {old}" in explained.stdout
+
+
+def test_check_base_finds_receipts_dropped_in_a_later_commit(clones):
+    one, _ = clones
+    implement(one)
+    cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "raise SystemExit(1)")
+    base = commit_receipts(one)
+    ok(one, "check", "--base", base)
+    ledger = one / store.ledger_path("TASK-1")
+    ledger.write_text(ledger.read_text(encoding="utf-8").splitlines(keepends=True)[0], encoding="utf-8")
+    git(one, "commit", "-qam", "Drop the failing run")  # the helper skips hooks, like --no-verify
+    ok(one, "check")  # without a base, the commit is compared only with itself
+    refused = cli(one, "check", "--base", base)
+    assert refused.returncode == 1
+    assert f"TASK-1: receipts recorded on {base} were removed or changed" in refused.stdout
+    ledger.unlink()
+    git(one, "commit", "-qam", "Drop the ledger")
+    assert f"TASK-1: receipts recorded on {base} were removed or changed" in cli(one, "check", "--base", base).stdout
+    missing = cli(one, "check", "--base", "origin/no-such-branch")
+    assert missing.returncode == 1 and "is not in this clone" in missing.stderr
+    assert cli(one, "check", "TASK-1", "--base", base).returncode == 1
+
+
+def test_receipts_and_claims_no_longer_carry_the_hostname(clones):
+    one, _ = clones
+    implement(one)
+    ok(one, "claim", "--task", "TASK-1")
+    host = socket.gethostname()
+    assert store.entries(one, "TASK-1")[-1]["who"] == "one"
+    assert host not in (one / store.ledger_path("TASK-1")).read_text(encoding="utf-8")
+    assert claim_tag_value(one)["who"] == "one"
+
+
+@pytest.mark.parametrize("ships, kind, message", [
+    ("none", "merged", "has ships: none, so a merged receipt is not part of its evidence"),
+    ("repo", "deployed", "has ships: repo, so a deployed receipt is not part of its evidence"),
+    ("live", "deployed", "no merge is recorded since the implementation"),
+])
+def test_delivery_receipts_that_cannot_count_exit_1_with_a_reason(clones, ships, kind, message):
+    one, _ = clones
+    task(one, ships=ships)
+    implement(one)
+    passed(one)
+    if kind == "merged":
+        git(one, "push", "-q", "origin", "HEAD:refs/heads/main")
+        result = cli(one, "receipt", "merged", "--task", "TASK-1")
+    else:
+        result = readback(one, kind)
+    assert result.returncode == 1
+    assert "recorded, but does not count: " in result.stdout and message in result.stdout

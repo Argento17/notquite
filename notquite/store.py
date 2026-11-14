@@ -8,7 +8,6 @@ import hmac
 import json
 from pathlib import Path
 import re
-import socket
 import subprocess
 import uuid
 
@@ -51,10 +50,11 @@ def git(root, *args, data=None, required=True):
 
 
 def who(root):
+    # Only the Git user name: receipts and claims are pushed, and a hostname says more than needed.
     name = git(root, "config", "user.name", required=False).stdout.strip()
     if not name:
         raise Refused("set git user.name first")
-    return f"{name}@{socket.gethostname()}"
+    return name
 
 
 def head(root):
@@ -510,6 +510,11 @@ def code_digest(root, commit):
     code = [entry for entry in tree.split("\0") if entry
             and not entry.partition("\t")[2].startswith(("tasks/", ".notquite/"))]
     return digest("\0".join(code).encode())
+
+
+def index_code(root):
+    """The code fingerprint of what the next commit would contain (the index)."""
+    return code_digest(root, git(root, "write-tree").stdout.strip())
 
 
 def dirty_paths(root):

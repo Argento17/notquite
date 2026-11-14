@@ -9,7 +9,7 @@ pipx install notquite
 No pipx? On Ubuntu or Debian: `sudo apt install pipx && pipx ensurepath`. Other systems: see the [pipx install guide](https://pipx.pypa.io/stable/how-to/install-pipx.html). Plain `pip install` outside a virtual environment is blocked on recent Ubuntu; the [quick start](#quick-start) uses one.
 
 - A task's status is a claim; its actual state is computed from recorded evidence.
-- DONE needs an implementation on a clean commit plus a passing latest test run on that exact commit. A later failing run on that commit revokes it.
+- DONE needs an implementation on a clean commit plus a passing latest test run on that exact code. A later failing run revokes it.
 - CLOSED can also require merge and deploy read-back evidence.
 - Three lines in `CLAUDE.md` / `AGENTS.md` tell Claude Code or Codex to use it ([see below](#using-it-with-coding-agents)).
 
@@ -21,7 +21,7 @@ Or the tests passed and the code was merged, then came a deploy nobody read back
 
 **NotQuite checks the evidence behind task status.**
 
-Tasks are Markdown files. Each implementation is tied to a Git commit, and test results are recorded against that exact commit. If the required evidence is missing, or older than the last recorded implementation, DONE fails.
+Tasks are Markdown files. Each implementation is tied to a Git commit, and test results are recorded against that exact code. If the required evidence is missing, or older than the last recorded implementation, DONE fails.
 
 CLOSED can require more: a merge, a deployment check, and a live read-back command that returned the expected commit ID.
 
@@ -151,16 +151,19 @@ contract: "none"
 ## What counts as DONE
 
 1. `notquite receipt implemented` on a clean, committed tree. Uncommitted or untracked code is refused, so build output belongs in `.gitignore`.
-2. The latest `notquite receipt test -- <command>` on that same commit exited 0, with nothing changed while it ran. A later failure on that commit revokes DONE until a later run passes; every run stays in the receipts.
+2. The latest `notquite receipt test -- <command>` on that same code exited 0, with nothing changed while it ran. A later failure revokes DONE until a later run passes; every run stays in the receipts.
 3. Every critical contract criterion met, if there is a contract.
 4. Nothing left in `waits_on` or `depends_on`: each task dependency computes DONE or CLOSED, and no `person:` wait remains.
 
-A test recorded before the latest implementation, on another commit, or while files or HEAD changed does not count. Each `receipt test` runs the command itself and records the real exit code. A failed command makes `notquite` exit 1.
+"Code" is every file outside `tasks/` and `.notquite/`, so committing the task file and receipts does not change it: a later run on the same code still counts, pass or fail. A test recorded before the latest implementation, on different code, or while files or HEAD changed does not count. Each `receipt test` runs the command itself and records the real exit code. A failed command makes `notquite` exit 1.
 
-NotQuite checks the last recorded implementation, not your latest commit:
+A receipt that is recorded but cannot count, such as a test on code that changed since `receipt implemented`, says why and exits 1.
 
-- Code committed later without a new `notquite receipt implemented` is not checked.
-- Committing the task file and receipts makes a new commit, so a test run after that is recorded but does not count, pass or fail. To test again, run `notquite receipt implemented` first, then the test.
+NotQuite judges the last recorded implementation, not your latest commit:
+
+- The pre-commit hook refuses a commit that newly marks a task DONE or CLOSED when the code in that commit differs from the implemented code.
+- `notquite check <id>` adds a note when the code has changed since the implementation.
+- Code that lands after a task is DONE is not re-tested by NotQuite; that is your CI's job.
 
 ## What counts as CLOSED
 
@@ -242,9 +245,11 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install notquite==0.2.0
-      - run: notquite check
+      - run: python -m pip install notquite==0.2.1
+      - run: notquite check --base origin/${{ github.base_ref }}
 ```
+
+`--base` also refuses if receipts already on the base branch were removed or changed. The pre-commit hook alone cannot promise that, because `git commit --no-verify` skips it.
 
 Use merge commits for branches that carry receipts. Receipts name the commits they were recorded on. A squash or rebase merge followed by deleting the branch removes those commits, and `notquite check` then refuses in every fresh clone.
 
@@ -258,11 +263,11 @@ chmod +x .git/hooks/pre-commit
 ## Limitations
 
 - Receipts are hash-chained, not signed. Anyone who can write files can forge one, and rewriting Git history rewrites the proof. NotQuite catches missing and stale evidence, not deliberate forgery.
-- Receipts already committed can only be appended to, but only the pre-commit hook enforces this, against the previous commit. `git commit --no-verify` skips the hook, and `notquite check` in CI does not compare the receipts with earlier commits, so a removed receipt goes unnoticed.
+- Receipts already committed can only be appended to. The pre-commit hook enforces this against the previous commit, and `notquite check --base <branch>` against the base branch. Without `--base`, a commit made with `git commit --no-verify` can remove receipts unnoticed.
 - Squash and rebase merges are not supported yet (see [CI and hooks](#ci-and-hooks)).
 - A passing test is only as good as its assertions.
 - Only task files are checked. Claims made in chat, issues or pull request text are not.
-- Receipts and claims record your Git `user.name` and your computer's hostname, and both are pushed.
+- Receipts and claims record your Git `user.name`, and it is pushed. Receipts written by 0.2.0 or earlier also carry the computer's hostname, and keep it.
 - Tag-based claims depend on your remote's permissions (see [Git claims](#git-claims)).
 
 ## Contributing

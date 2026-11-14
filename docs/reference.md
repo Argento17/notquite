@@ -14,14 +14,16 @@ code in `notquite/`; if the two disagree, the code wins and this file has a bug.
 | `notquite receipt deployed --task ID --target NAME -- CMD...` | Runs a read-back command; valid only if it exits 0 and its output contains the full commit ID |
 | `notquite receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
 | `notquite check [ID or tasks/ID.md]` | No argument: one line per refused claim in the repository, or `check: OK`; use this in hooks and CI. With a task: an explanation of that task alone |
-| `notquite check --staged` | Checks the staged versions of task files and receipts (for pre-commit) |
+| `notquite check --staged` | Checks the staged versions of task files and receipts (for pre-commit); also refuses a commit that newly claims DONE or CLOSED on code other than the implemented code |
+| `notquite check --base REF` | Also refuses if receipts committed on `REF` were removed or changed (for CI: the pull request's base branch) |
 | `notquite show --task ID` | Recorded status, computed status, what is still owed |
 | `notquite claim --task ID` / `release --task ID` | Takes or gives up a task with a pushed tag |
 | `notquite claims` | Active claims |
 | `notquite ready` | Open tasks: free, held, blocked, or waiting for delivery |
 
 Every command exits 1 when it refuses something, including a command receipt
-whose command failed. Run commands from the repository root.
+whose command failed and a receipt that was recorded but cannot count (it says
+why). Run commands from the repository root.
 
 ## Task files
 
@@ -110,10 +112,10 @@ add requirements.
 ## How the status is computed
 
 - **IN_PROGRESS** until there is an `implemented` receipt, the latest `test`
-  receipt on the same commit and code after it is passing and valid, and every
-  critical contract criterion is met. A later failing or invalid run on that
-  commit revokes an earlier pass; a later passing run restores it. Runs on any
-  other commit are recorded but ignored.
+  receipt on the same code after it is passing and valid, and every critical
+  contract criterion is met. A later failing or invalid run on that code
+  revokes an earlier pass; a later passing run restores it. Runs on different
+  code are recorded but ignored, and the receipt command exits 1.
 - **DONE** when that holds.
 - **CLOSED** when DONE and delivery is complete:
   - `ships: none`: nothing more.
@@ -133,12 +135,14 @@ was still clean with HEAD unchanged when it finished.
 
 "Code" is a SHA-256 over the commit's file listing, leaving out `tasks/` and
 `.notquite/`. Committing task files and receipts does not change it, so they
-can be committed after the evidence is recorded. The commit does change, so a
-test run after that commit does not count, pass or fail, until a new
-`implemented` receipt is recorded on it.
+can be committed after the evidence is recorded, and later runs on the same
+code, on any commit, still count.
 
-The verdict looks only at the newest `implemented` receipt, never at HEAD:
-code committed after it without a new `implemented` receipt is not checked.
+The verdict looks only at the newest `implemented` receipt, never at HEAD.
+Two checks cover the gap: `check --staged` (the pre-commit hook) refuses a
+commit that changes a task's status to DONE or CLOSED when the code in that
+commit differs from the implemented code, and `check <id>` adds a note when
+HEAD's code differs. Code that lands after a task is DONE is not re-tested.
 
 Receipts name commits. If those commits disappear (a squash or rebase merge
 whose branch is then deleted), `check` refuses in any clone that lacks them.
@@ -147,7 +151,8 @@ Use merge commits for branches that carry receipts.
 ## Receipts
 
 `.notquite/receipts/<id>.jsonl` holds one JSON object per line. Every receipt
-has `task`, `kind`, `at`, `who` (`user.name@hostname`), `commit`, `code`,
+has `task`, `kind`, `at`, `who` (Git `user.name`; receipts written by 0.2.0 or
+earlier carry `user.name@hostname`), `commit`, `code`,
 `previous` (the hash of the receipt before it, or empty) and `hash` (SHA-256 of
 the receipt without `hash`). Command receipts add `command`, `exit_code` and
 `valid`. Read-backs add `target` and `output_sha256`. Merges add `ref`.
@@ -159,8 +164,10 @@ A ledger without a matching task file is reported.
 The append-only rule compares the working tree or the index with `HEAD` only.
 It protects receipts while you commit, through `check --staged` in the
 pre-commit hook. Once a commit that drops receipts exists (for example one made
-with `git commit --no-verify`), `check` on that commit compares it with itself
-and passes; it does not look at earlier commits.
+with `git commit --no-verify`), plain `check` on that commit compares it with
+itself and passes. `check --base REF` compares every ledger committed on `REF`
+with the current one and refuses if any receipt was removed or changed; run it
+in CI against the pull request's base branch.
 
 None of this is signed. Anyone who can write the file and run SHA-256 can
 create a receipt that passes.
@@ -214,6 +221,11 @@ protect `notquite/*` tags if it matters.
 - Receipts are unchanged. Task files are left out of the code fingerprint, so
   switching a task from the simple to the extended format, in either YAML or
   JSON style, keeps its receipts valid.
+- 0.2.1 reads the same receipts with three differences. A test run counts when
+  its code matches the implemented code, on any commit, so a DONE that was
+  hiding a later failing run on the same code becomes IN_PROGRESS. A receipt
+  that is recorded but cannot count exits 1. New receipts and claims record
+  only `user.name`.
 
 ## Line endings
 
