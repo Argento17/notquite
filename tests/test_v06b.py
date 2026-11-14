@@ -14,6 +14,11 @@ PASS = f'{PYTHON} -c pass'
 NOTICE = 'Acceptance lists are not checked; 1 supported claim rests on its declared test only.'
 
 
+def fill_sections(path):
+    path.write_text(path.read_text() + "\n## Scope\n\nAdd calculation.\n\n## Acceptance\n\n- Adds correctly.\n")
+    return path
+
+
 def evidence(root, tid='TASK-1'):
     store.receipt(root, tid, 'implemented')
     store.receipt(root, tid, 'test', gate.declared_test(store.record(root, tid)))
@@ -47,8 +52,12 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
     ok(root, 'init', '--check')
     assert snapshot == [p.read_bytes() for p in paths]
     readme = (PACKAGE / 'README.md').read_text()
-    for content in snapshot[1:]:
+    for content in snapshot[1:3]:
         assert content.decode().strip() in readme
+    # The README example has a test extra; this fixture has no test dependencies.
+    example_dependencies = ("      - name: Install project test dependencies\n"
+                            "        run: python -m pip install -e '.[test]'\n")
+    assert snapshot[3].decode().strip() in readme.replace(example_dependencies, '')
 
 
 def test_init_preserves_existing_hook_and_workflow(local_repo):
@@ -81,12 +90,12 @@ def test_installed_hook_warns_without_workorder(local_repo, tmp_path):
 def test_done_records_only_changed_implementation_and_note(local_repo):
     root = local_repo
     path = task(root, ships='none', test=PASS)
-    path.write_text(path.read_text() + '\n## Acceptance\n\n- Adds correctly.\n')
+    path.write_text(path.read_text() + '\n## Scope\n\nAdd calculation.\n\n## Acceptance\n\n- Adds correctly.\n')
     original_head = store.head(root)
     output = ok(root, 'done', '--task', 'TASK-1', '--note', 'Ready for review')
     assert 'Acceptance is not checked by Workorder: confirm each item is met.' in output
     assert '- Adds correctly.' in output
-    success = 'TASK-1 DONE: claim supported; commit tasks/ and .workorder/'
+    success = 'TASK-1 DONE: its declared test passed on this code'
     assert success in output and output.index('Acceptance') < output.index(success)
     assert store.record(root, 'TASK-1')['status'] == 'DONE'
     assert ': Ready for review' in path.read_text()
@@ -109,6 +118,7 @@ def test_done_refusal_keeps_status(local_repo, reason):
     path = task(root, status='BLOCKED', ships='none', test=test,
                 waits=['person:sam'] if reason == 'dependency' else (),
                 contract='contract.json' if reason == 'contract' else 'none')
+    fill_sections(path)
     if reason == 'contract':
         (root / 'contract.json').write_text('{"task":"TASK-1","criteria":[{"id":"C1","ask":"proof",'
                                           '"critical":true,"requires":"REAL","evidence":[]}]}')
@@ -293,7 +303,7 @@ def test_show_unclaimed_headline(local_repo, status):
     evidence(root)
     output = ok(root, 'show', '--task', 'TASK-1')
     assert output.splitlines()[0] == f'TASK-1 {status} (not claimed finished); its test evidence is in place'
-    assert 'computed CLOSED' not in output
+    assert 'Evidence: CLOSED' not in output
 
 
 def test_show_unclaimed_headline_names_owed_evidence(local_repo):
@@ -410,7 +420,7 @@ def test_stale_result_names_claim_without_contradicting_computed(local_repo):
     path.write_text(path.read_text().replace('IN_PROGRESS', 'DONE'))
     commit_all(root)
     result = cli(root, 'check', 'TASK-1')
-    assert result.returncode == 1 and 'Computed: DONE' in result.stdout
+    assert result.returncode == 1 and 'Evidence: DONE' in result.stdout
     assert 'Result: the DONE claim is on code other than the tested code; run workorder renew --task TASK-1' in result.stdout
     assert 'Result: NOT DONE' not in result.stdout
 
@@ -422,15 +432,16 @@ def test_done_preserves_bom_crlf_and_body_status(local_repo, block):
     if block:
         path.write_text(path.read_text().replace('status:', 'mission: |\n  Example\n  ---\n  More text\nstatus:'))
     original = ('\ufeff' + path.read_text().replace('Add a list filter', 'A --- separator')
-                + '\n## Acceptance\n- All good.\n\nstatus: leave body alone\n').replace('\n', '\r\n').encode()
+                + '\n## Scope\nAdd calculation.\n\n## Acceptance\n- All good.\n\nstatus: leave body alone\n').replace('\n', '\r\n').encode()
     path.write_bytes(original)
     ok(root, 'done', '--task', 'TASK-1')
-    assert path.read_bytes() == original.replace(b'status: "IN_PROGRESS"', b'status: DONE', 1)
+    assert path.read_bytes() == original.replace(b'status: "IN_PROGRESS"', b'status: "DONE"', 1)
 
 
 def test_done_restores_status_if_final_check_errors(local_repo, monkeypatch, capsys):
     root = local_repo
     path = task(root, status='BLOCKED', ships='none', test=PASS)
+    fill_sections(path)
     before = path.read_bytes()
     real_explain = gate.explain
 
@@ -482,7 +493,7 @@ def test_docs_state_review_rights_and_opt_in_policies():
     for name in ('README.md', 'docs/reference.md'):
         text = (PACKAGE / name).read_text()
         for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
-                       'WORKORDER_AGENT', 'import sys; sys.exit(0)', 'pipx install workorder', 'workorder==0.7.0'):
+                       'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.7.0'):
             assert phrase in text
 
 
@@ -530,7 +541,7 @@ def test_strict_pytest_configuration_keeps_default_discovery(local_repo, config,
 
 def test_done_failed_test_keeps_handover_note(local_repo):
     root = local_repo
-    task(root, status='BLOCKED', ships='none', test=f'{PYTHON} -c "raise SystemExit(3)"')
+    fill_sections(task(root, status='BLOCKED', ships='none', test=f'{PYTHON} -c "raise SystemExit(3)"'))
     result = cli(root, 'done', '--task', 'TASK-1', '--note', 'Test failed; investigate next session')
     assert result.returncode == 1 and 'Missing:' in result.stdout
     assert store.record(root, 'TASK-1')['status'] == 'BLOCKED'

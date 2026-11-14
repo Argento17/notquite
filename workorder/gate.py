@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import ast
+from collections import Counter
 import configparser
 import fnmatch
 import json
+import os
+from pathlib import Path
 import posixpath
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 
 from . import store as s
@@ -678,6 +683,12 @@ def repository_files(root, rev=None):
     return set(s.git(root, *args).stdout.split("\0")) - {""}
 
 
+def _repository_test_path(root, path):
+    if Path(path).is_absolute():
+        path = Path(path).relative_to(root).as_posix()
+    return posixpath.normpath(s.local_path(root, path).relative_to(root).as_posix())
+
+
 def test_files(root, record, base, staged=False):
     """Expand current and base definitions, so deleting a test or changing its path cannot hide it."""
     before = fields_at(root, record["id"], base)
@@ -698,7 +709,7 @@ def test_files(root, record, base, staged=False):
             if "test_paths" not in definition:
                 path = path.split("::", 1)[0]  # pytest node selection
             try:
-                path = posixpath.normpath(s.local_path(root, path).relative_to(root).as_posix())
+                path = _repository_test_path(root, path)
             except (s.Refused, ValueError):
                 continue
             found |= {p for p in candidates if path == "." or p == path or p.startswith(path + "/")}
@@ -711,12 +722,18 @@ def uses_pytest(record):
                for word in command)
 
 
-def pytest_sections(text):
+PYTEST_CONFIG_NAMES = {'pytest.ini', '.pytest.ini', 'pytest.toml', '.pytest.toml',
+                       'tox.ini', 'setup.cfg', 'pyproject.toml'}
+
+
+def pytest_sections(text, native=False):
     """Keep pytest TOML sections only; unrelated project settings do not require acceptance."""
     found, selected = [], False
     for line in text.splitlines():
         if re.match(r"^\s*\[", line):
             selected = bool(re.match(r'''^\s*\[\[?\s*["']?tool["']?\s*\.\s*["']?pytest''', line))
+            if native:
+                selected |= bool(re.match(r'''^\s*\[\[?\s*["']?pytest["']?\s*[.\]]''', line))
         if selected:
             found.append(line)
     return "\n".join(found).strip()
@@ -729,17 +746,17 @@ def pytest_patterns(root, base, staged=False, configs=()):
     candidates = repository_files(root, base) | repository_files(root) | changed_paths(root, base, staged) | set(configs)
     for path in sorted(candidates):
         name = posixpath.basename(path)
-        if name not in {'pytest.ini', 'tox.ini', 'setup.cfg', 'pyproject.toml'} and path not in configs:
+        if name not in PYTEST_CONFIG_NAMES and path not in configs:
             continue
         old = s.git(root, 'show', f'{base}:{path}', required=False).stdout
         try:
             current = s.read_text(root, path, staged)
-        except (OSError, s.Refused):
+        except (OSError, s.Refused, UnicodeError):
             current = ''
         for text in (old, current):
             if name.endswith('.toml'):
                 # python_files is a string or array of strings in pytest's TOML options.
-                lines = pytest_sections(text).splitlines()
+                lines = pytest_sections(text, native=name != 'pyproject.toml').splitlines()
                 for i, line in enumerate(lines):
                     value = re.match(r'^\s*python_files\s*=\s*(.*)', line)
                     if not value:
@@ -776,7 +793,7 @@ def pytest_configs(root, definition):
                 else word[2:] if word.startswith('-c') and len(word) > 2 else None)
         if path:
             try:
-                found.add(posixpath.normpath(s.local_path(root, path).relative_to(root).as_posix()))
+                found.add(_repository_test_path(root, path))
             except (s.Refused, ValueError):
                 continue
     return found
@@ -794,7 +811,13 @@ def strict_test_files(root, record, base, staged=False):
         if uses_pytest(definition) and 'test_paths' not in definition:
             # Config arguments alone do not select tests. With no Python collection paths,
             # guard discovery, including custom python_files patterns from either snapshot.
-            selected = test_files(root, {**definition, 'id': record['id']}, base, staged)
+            selected = set()
+            for word in declared_test(definition) or []:
+                try:
+                    path = _repository_test_path(root, word.split('::', 1)[0])
+                except (s.Refused, ValueError):
+                    continue
+                selected |= {p for p in candidates if path == '.' or p == path or p.startswith(path + '/')}
             if not any(p.endswith('.py') for p in selected):
                 patterns = pytest_patterns(root, base, staged, tuple(sorted(configs)))
                 paths |= {p for p in candidates if any(fnmatch.fnmatchcase(posixpath.basename(p), pattern)
@@ -805,15 +828,18 @@ def strict_test_files(root, record, base, staged=False):
                  and not (p in configs and p.endswith('.toml'))}
     for path in changed_paths(root, base, staged):
         name = posixpath.basename(path)
-        if name in {"conftest.py", "pytest.ini", "tox.ini", "setup.cfg"}:
+        if name in (PYTEST_CONFIG_NAMES - {'pyproject.toml'}) | {'conftest.py'}:
             paths.add(path)
         elif name == "pyproject.toml" or (path in configs and path.endswith('.toml')):
             old = s.git(root, 'show', f'{base}:{path}', required=False).stdout
             try:
                 current = s.read_text(root, path, staged)
+            except UnicodeError:
+                paths.add(path)  # pytest cannot read this configuration, so run and report its failure
+                continue
             except (OSError, s.Refused):
                 current = ""
-            if pytest_sections(old) != pytest_sections(current):
+            if pytest_sections(old, native=name != 'pyproject.toml') != pytest_sections(current, native=name != 'pyproject.toml'):
                 paths.add(path)
     return paths
 
@@ -848,7 +874,7 @@ def test_file_changes(root, base, record, staged=False, strict=False):
     return None
 
 
-def scope(root, reference, staged, names, all_records, include_tests=False, strict_tests=False):
+def scope(root, reference, staged, names, all_records, include_tests=False, strict_tests=False, errors=None):
     """The tasks a change touches (task file, receipts, contract or its evidence), and every task that
     depends on one of them, directly or not."""
     changed = changed_paths(root, reference, staged)
@@ -857,9 +883,15 @@ def scope(root, reference, staged, names, all_records, include_tests=False, stri
     touched |= {s.receipt_task(path) for path in changed} - {None}
     touched |= {tid for tid, record in all_records.items() if evidence_paths(root, record, staged) & changed}
     if include_tests:
-        protected = strict_test_files if strict_tests else test_files
-        touched |= {tid for tid, record in all_records.items()
-                    if protected(root, record, reference, staged) & changed}
+        for tid, record in all_records.items():
+            try:
+                if strict_test_files(root, record, reference, staged) & changed:
+                    touched.add(tid)
+            except (s.Refused, OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as error:
+                if errors is None:
+                    raise
+                touched.add(tid)
+                errors[tid] = f'could not determine its changed tests: {error}'
     growing = True
     while growing:
         growing = False
@@ -945,26 +977,55 @@ def pytest_no_pass(output):
     return None
 
 
-def run_declared_test(root, record, counts=None, notes=None, strict=False, results=None, regression=False):
+def pytest_counts(output):
+    """Read pytest's final outcomes, including the progress-only output of -qq."""
+    output = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    names = {'passed', 'failed', 'error', 'errors', 'skipped', 'xfailed', 'xpassed', 'deselected'}
+    for line in reversed(output.splitlines()):
+        match = re.fullmatch(r"\s*(?:=+\s*)?(.*?)\s+in\s+\d+(?:\.\d+)?s(?:\s+\([^)]*\))?\s*(?:=+)?\s*", line)
+        if match:
+            pairs = re.findall(r'\b(\d+) ([a-z]+)\b', match[1])
+            if pairs or 'no tests ran' in match[1]:
+                return Counter({name: int(number) for number, name in pairs if name in names})
+    outcomes = ''.join(m[1] for line in output.splitlines()
+                       if (m := re.fullmatch(r'\s*([.sxFEfXP]+)(?:\s+\[\s*\d+(?:%|/\d+)\])?\s*', line)))
+    if outcomes:
+        found = Counter()
+        for symbol, name in (('.', 'passed'), ('s', 'skipped'), ('x', 'xfailed'), ('F', 'failed'),
+                             ('E', 'errors'), ('X', 'xpassed'), ('P', 'passed')):
+            found[name] += outcomes.count(symbol)
+        return found
+    return None
+
+
+def _run_test(root, command, timeout, counts):
+    try:
+        run = s.run_test(command, root, timeout=timeout, capture_output=True)
+        print(run.stdout or '', end='')
+        print(run.stderr or '', end='', file=sys.stderr)
+        if counts is not None:
+            counts['tests'] = counts.get('tests', 0) + 1
+        return run.returncode, (run.stdout or '') + (run.stderr or '')
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return f'not started: {getattr(error, "strerror", None) or str(error)}', ''
+    finally:
+        s.invalidate_reads()  # a declared command may have changed files or refs
+
+
+def _test_key(record, timeout):
+    return tuple(declared_test(record) or []), s.test_timeout(record, timeout)
+
+
+def run_declared_test(root, record, counts=None, notes=None, strict=False, results=None, regression=False,
+                      timeout=None):
     """Run a task's declared test here (CI), without a shell; return a problem line, or None if it passed."""
     tid, declared = record["id"], declared_test(record)
     if declared is None:
         return f"NOT QUITE  {tid} says {record['status']} but declares no test for this check to run"
     results = {} if results is None else results
-    key = tuple(declared)
+    key = _test_key(record, timeout)
     if key not in results:
-        try:
-            run = subprocess.run(declared, cwd=root, capture_output=True, encoding='utf-8', errors='replace')
-            code, output = run.returncode, run.stdout + run.stderr
-            print(run.stdout, end='')
-            print(run.stderr, end='', file=sys.stderr)
-            if counts is not None:
-                counts["tests"] += 1
-        except OSError as error:
-            code, output = f"not started: {error.strerror}", ""
-        finally:
-            s.invalidate_reads()  # a declared command may have changed files or refs
-        results[key] = code, output
+        results[key] = _run_test(root, declared, s.test_timeout(record, timeout), counts)
     code, output = results[key]
     empty = pytest_no_pass(output) if uses_pytest(record) else None
     if empty and strict:
@@ -982,6 +1043,253 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
     if regression:
         return f"regression: {tid}'s test fails on this code"
     return f"NOT QUITE  {tid} says {record['status']}, but its test failed when this check ran it (exit {code})"
+
+
+def _test_bytes(root, path, base=None, staged=False):
+    if base is not None:
+        result = subprocess.run(['git', 'show', f'{base}:{path}'], cwd=root, capture_output=True, timeout=30)
+        return result.stdout if result.returncode == 0 else None
+    try:
+        return s.read_bytes(root, path, staged)
+    except (OSError, s.Refused):
+        return None
+
+
+def _pytest_disabling(text):
+    """Count syntax that adds skipping without mistaking comments and strings for code."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, UnicodeError, ValueError):
+        return Counter()
+    aliases = {'pytest': 'pytest'}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == 'pytest':
+                    aliases[alias.asname or 'pytest'] = 'pytest'
+        elif isinstance(node, ast.ImportFrom) and node.module == 'pytest':
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = 'pytest.' + alias.name
+
+    def name(node):
+        if isinstance(node, ast.Name):
+            return aliases.get(node.id, node.id)
+        if isinstance(node, ast.Attribute):
+            return name(node.value) + '.' + node.attr
+        return ''
+
+    found = Counter()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            value = name(node)
+            if value in {'pytest.mark.skip', 'pytest.mark.skipif', 'pytest.mark.xfail'}:
+                found[value] += 1
+        if isinstance(node, ast.Call) and name(node.func) in {'pytest.skip', 'pytest.xfail'}:
+            found[name(node.func)] += 1
+    return found
+
+
+def _pytest_policy_changes(root, base, record, paths, staged):
+    before = fields_at(root, record['id'], base) or {}
+    pytest_command = uses_pytest(record) or uses_pytest(before)
+    found = []
+    configs = pytest_configs(root, record) | pytest_configs(root, before)
+    for path in paths:
+        name = posixpath.basename(path)
+        old = _test_bytes(root, path, base) or b''
+        new = _test_bytes(root, path, staged=staged) or b''
+        if pytest_command and (name in PYTEST_CONFIG_NAMES | {'conftest.py'} or path in configs):
+            if (name.endswith('.toml') and name not in {'pytest.toml', '.pytest.toml'}
+                    and pytest_sections(old.decode('utf-8', 'replace'), native=name != 'pyproject.toml')
+                    == pytest_sections(new.decode('utf-8', 'replace'), native=name != 'pyproject.toml')):
+                continue
+            found.append(f'pytest configuration changed since {base} ({path})')
+        if path.endswith('.py'):
+            added = _pytest_disabling(new) - _pytest_disabling(old)
+            if added:
+                found.append(f'new skip or xfail behavior since {base} ({path}: {", ".join(sorted(added))})')
+    old_command, command = declared_test(before) or [], declared_test(record) or []
+
+    def filters(words):
+        return [word + (' ' + words[i + 1] if word in {'-k', '--deselect'} and i + 1 < len(words) else '')
+                for i, word in enumerate(words)
+                if word in {'-k', '--deselect'} or word.startswith('--deselect=') or (word.startswith('-k') and len(word) > 2)]
+
+    if pytest_command and Counter(filters(command)) - Counter(filters(old_command)):
+        found.append(f'pytest selection changed with -k or --deselect since {base}')
+    return [f"{record['id']}: {line}" for line in found]
+
+
+def _snapshot_write(destination, path, content, mode=None, source_root=None):
+    target = s.local_path(destination, path)
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+    elif target.is_dir():
+        shutil.rmtree(target)
+    if content is not None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if mode is not None and mode & 0o170000 == 0o120000:
+            link = os.fsdecode(content)
+            if source_root is not None and Path(link).is_absolute() and Path(link).is_relative_to(source_root):
+                link = os.path.relpath(destination / Path(link).relative_to(source_root), target.parent)
+            target.symlink_to(link)
+            return
+        target.write_bytes(content)
+        if mode is not None:
+            target.chmod(mode & 0o777)
+
+
+def _test_snapshot(root, destination, staged=False):
+    """Copy current files, with an independent Git directory and no checkout of the user's tree."""
+    cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
+                            capture_output=True, encoding='utf-8', errors='replace', timeout=30)
+    if cloned.returncode:
+        raise s.Refused('could not create a temporary test copy: ' + cloned.stderr.strip())
+
+    def ignored(directory, names):
+        return {name for name in names if name in {'.git', '__pycache__', '.pytest_cache'}}
+
+    shutil.copytree(root, destination, dirs_exist_ok=True, symlinks=True, ignore=ignored)
+    for directory, folders, files in os.walk(root, followlinks=False):
+        folders[:] = [name for name in folders if name not in {'.git', '__pycache__', '.pytest_cache'}]
+        for name in folders + files:
+            source = Path(directory) / name
+            if not source.is_symlink():
+                continue
+            target = source.resolve()
+            if target.is_relative_to(root):
+                copied = destination / source.relative_to(root)
+                copied.unlink()
+                copied.symlink_to(os.path.relpath(destination / target.relative_to(root), copied.parent),
+                                  target_is_directory=source.is_dir())
+    s.git(destination, 'read-tree', 'HEAD')
+    if staged:
+        indexed = repository_files(root)
+        untracked = set(s.git(root, 'ls-files', '--others', '--exclude-standard', '-z').stdout.split('\0')) - {''}
+        for path in (repository_files(root, 'HEAD') - indexed) | untracked:
+            _snapshot_write(destination, path, None)
+        listing = s.git(root, 'ls-files', '--stage', '-z').stdout
+        for entry in listing.split('\0'):
+            if not entry:
+                continue
+            info, path = entry.split('\t', 1)
+            mode, _, stage = info.split()
+            if stage != '0':
+                raise s.Refused(f'unmerged staged test copy: {path}')
+            if mode == '160000':
+                continue  # submodules were copied with their current working files
+            _snapshot_write(destination, path, s.read_bytes(root, path, True), int(mode, 8), root)
+
+
+def _snapshot_command(command, root, destination):
+    """An absolute in-repository script or test path must also use the temporary copy."""
+    prefix = str(root) + str(Path('/'))
+    result = []
+    for word in command:
+        option, separator, value = word.partition('=')
+        path = value if separator and option.startswith('-') else word
+        if path == str(root) or path.startswith(prefix):
+            path = str(destination) + path[len(str(root)):]
+        result.append(option + separator + path if separator and option.startswith('-') else path)
+    return result
+
+
+def test_change_problems(root, base, record, timeout=None, *, staged=False, strict=False, allow=False,
+                         run_tests=True, counts=None, notes=None, results=None, completed=False):
+    """Keep comparison errors attached to their task so other tasks are still checked."""
+    try:
+        return _test_change_problems(root, base, record, timeout, staged=staged, strict=strict, allow=allow,
+                                     run_tests=run_tests, counts=counts, notes=notes, results=results,
+                                     completed=completed)
+    except (OSError, s.Refused, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as error:
+        return [f"{record['id']}: could not compare its changed tests with {base}: {error}"]
+
+
+def _test_change_problems(root, base, record, timeout=None, *, staged=False, strict=False, allow=False,
+                          run_tests=True, counts=None, notes=None, results=None, completed=False):
+    """Review changed tests and compare both versions on current code without writing receipts.
+
+    Allow accepts static policy changes; failing commands and outcome regressions are never waived.
+    Completed exempts an untouched, already finished task only from static review requirements.
+    """
+    notes = [] if notes is None else notes
+    results = {} if results is None else results
+    tid = record['id']
+    protected = strict_test_files(root, record, base, staged)
+    paths = sorted(protected & changed_paths(root, base, staged))
+    policy = []
+    if strict or not run_tests:
+        changed = test_file_changes(root, base, record, staged, strict)
+        if changed:
+            policy.append(changed)
+    if run_tests:
+        policy += _pytest_policy_changes(root, base, record, paths, staged)
+    problems = []
+    if not completed:
+        for line in policy:
+            if allow:
+                notes.append(line + ' (allowed)')
+            else:
+                problems.append(line + f'; a reviewer accepts it with --allow {tid}')
+    if not run_tests or not paths:
+        return problems
+    command = declared_test(record)
+    if not command:
+        problems.append(f'{tid}: its test files changed but it declares no test for this check to run')
+        return problems
+    try:
+        with tempfile.TemporaryDirectory(prefix='workorder-tests-') as temporary:
+            snapshot = Path(temporary) / 'code'
+            _test_snapshot(root, snapshot, staged)
+            current_root = Path(temporary) / 'current'
+            shutil.copytree(snapshot, current_root, symlinks=True)
+            current_command = _snapshot_command(command, root, current_root)
+            # Share the logical command key with --all-tests even when the staged run uses a copy.
+            key = _test_key(record, timeout)
+            if key not in results:
+                results[key] = _run_test(current_root, current_command, s.test_timeout(record, timeout), counts)
+            failed = run_declared_test(current_root, record, counts, notes, strict, results, timeout=timeout)
+            if failed:
+                problems.append(failed)
+            before = fields_at(root, tid, base) or record
+            base_command = declared_test(before) or command
+            # There is nothing to rerun when all selected test files are new.
+            existing = protected & repository_files(root, base)
+            if uses_pytest(record):
+                existing = {path for path in existing if posixpath.basename(path) not in
+                            PYTEST_CONFIG_NAMES | {'conftest.py'}
+                            and path not in pytest_configs(root, before)}
+            if not existing:
+                return problems
+            base_key = ('base', base, tuple(paths), tuple(base_command), s.test_timeout(record, timeout), staged)
+            if base_key not in results:
+                for path in paths:
+                    content = _test_bytes(root, path, base)
+                    mode = None
+                    if content is not None:
+                        info = s.git(root, 'ls-tree', base, '--', f':(literal){path}').stdout.split()
+                        mode = int(info[0], 8) if info else None
+                    _snapshot_write(snapshot, path, content, mode, root)
+                results[base_key] = _run_test(snapshot, _snapshot_command(base_command, root, snapshot),
+                                              s.test_timeout(record, timeout), counts)
+            base_code, base_output = results[base_key]
+            if base_code != 0:
+                problems.append(f'{tid}: its tests from {base} fail on this code; the change weakened or broke them')
+                return problems
+            if uses_pytest(record) and uses_pytest(before):
+                old_counts = pytest_counts(base_output)
+                new_counts = pytest_counts(results[key][1])
+                if old_counts is None or new_counts is None:
+                    problems.append(f'{tid}: cannot compare test outcomes with {base}; pytest did not report its outcomes')
+                else:
+                    if new_counts['passed'] < old_counts['passed']:
+                        problems.append(f"{tid}: fewer tests pass than at {base} ({old_counts['passed']} -> {new_counts['passed']})")
+                    for outcome in ('skipped', 'xfailed', 'deselected'):
+                        if new_counts[outcome] > old_counts[outcome]:
+                            problems.append(f'{tid}: more tests are {outcome} than at {base} ({old_counts[outcome]} -> {new_counts[outcome]})')
+    except (OSError, s.Refused, ValueError, subprocess.SubprocessError) as error:
+        problems.append(f'{tid}: could not compare its changed tests with {base}: {error}')
+    return problems
 
 
 class Views(dict):
@@ -1064,7 +1372,7 @@ def check_summary(counts, run_tests=False, single_unclaimed=False):
 
 @s.read_session()
 def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, counts=None,
-          strict_tests=False, all_tests=False, require_task=False):
+          strict_tests=False, all_tests=False, require_task=False, timeout=None):
     """Problems that refuse the check.
 
     Plain check reads every task. With --staged (the pre-commit hook) or --base REF (CI) it judges the
@@ -1086,7 +1394,7 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
         reference = None  # the first commit: nothing to compare with, check everything
     if reference:
         selected, changed = scope(root, reference, staged, names, all_records, include_tests=bool(base),
-                                  strict_tests=strict_tests)
+                                  strict_tests=strict_tests, errors=errors)
     else:
         selected, changed = set(names), None
     counts.update(tasks=len(selected), claimed=sum(r["status"] in FINISHED for tid, r in all_records.items()
@@ -1127,6 +1435,7 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
     visiting, visited = set(), set()
     cycles = dependency_cycles(all_records)
     problems += [f"{tid}: {message}" for tid, message in sorted(cycles.items()) if tid in selected]
+    results = {}
 
     def walk(tid):
         if tid in visiting:
@@ -1180,12 +1489,12 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
                     notes.append(line + " (definition allowed)")
                 else:
                     problems.append(line + f"; a reviewer accepts its definition with --allow {tid}")
-            changed_tests = test_file_changes(root, base, record, staged, strict_tests)
-            if changed_tests:
-                if tid in allow:
-                    notes.append(changed_tests + " (allowed)")
-                else:
-                    problems.append(changed_tests + f"; a reviewer accepts it with --allow {tid}")
+            before = fields_at(root, tid, base) or {}
+            completed = (before.get('status') in FINISHED and f'tasks/{tid}.md' not in changed
+                         and not any(s.receipt_task(path) == tid for path in changed))
+            problems += test_change_problems(root, base, record, timeout, staged=staged,
+                                             strict=strict_tests, allow=tid in allow, run_tests=run_tests,
+                                             counts=counts, notes=notes, results=results, completed=completed)
             for change in requirement_changes(root, base, record):
                 line = f"{tid}: {change} since {base}"
                 if tid in allow:
@@ -1195,15 +1504,16 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
         elif staged:
             for change in requirement_changes(root, "HEAD", record):
                 notes.append(f"{tid}: {change} in this commit")
-        if run_tests and not all_tests and not found and record["status"] in FINISHED:
-            failed = run_declared_test(root, record, counts, notes, strict_tests)
+        if (run_tests and not all_tests and not found and record["status"] in FINISHED
+                and _test_key(record, timeout) not in results):
+            failed = run_declared_test(root, record, counts, notes, strict_tests, results, timeout=timeout)
             if failed:
                 problems.append(failed)
     if all_tests:
-        results = {}
         for record in all_records.values():
             if record['status'] in FINISHED:
-                failed = run_declared_test(root, record, counts, notes, strict_tests, results, regression=True)
+                failed = run_declared_test(root, record, counts, notes, strict_tests, results,
+                                           regression=True, timeout=timeout)
                 if failed:
                     problems.append(failed)
     return problems
@@ -1322,7 +1632,8 @@ def test_line(record, history):
         if newest["commit"] != implemented["commit"]:
             where += f", same code as {short}"
         if newest["exit_code"] != 0:
-            latest = f"FAIL (exit {newest['exit_code']}, {where})"
+            timed_out = 'timed out, ' if newest['exit_code'] == 124 else ''
+            latest = f"FAIL ({timed_out}exit {newest['exit_code']}, {where})"
         elif not newest["valid"]:
             latest = f"not counted: files or HEAD changed while it ran ({where})"
         else:
@@ -1407,7 +1718,8 @@ def timeline(root, record, history):
         if kind == "implemented":
             what = f"implemented {commit}"
         elif kind == "test":
-            result = "PASS" if item["exit_code"] == 0 else f"FAIL (exit {item['exit_code']})"
+            timed_out = 'timed out, ' if item['exit_code'] == 124 else ''
+            result = "PASS" if item["exit_code"] == 0 else f"FAIL ({timed_out}exit {item['exit_code']})"
             what = f"test {result}: {s.join_command(item['command'])} on {commit}"
             reason = None
             if not item['valid']:
@@ -1458,7 +1770,7 @@ def record_lines(root, tid):
     debt, stale = claim_details(root, record, all_records, views)
     stale_debt = debt if stale else []
     if record['status'] in FINISHED:
-        headline = f"{tid} recorded {record['status']}; computed {computed}"
+        headline = f"{tid}\n  Claimed:  {record['status']}\n  Evidence: {computed}"
     else:
         headline = unfinished_headline(record, done, delivery, open_waits)
     lines = [headline,
@@ -1533,7 +1845,7 @@ def explain(root, tid, claim=None):
         code_note = None
     if claimed in FINISHED:
         lines = [f"NOT QUITE  {tid}" if debt else f"{claimed}  {tid}", "",
-                 f"  Claimed:  {claimed}", f"  Computed: {computed}"]
+                 f"  Claimed:  {claimed}", f"  Evidence: {computed}"]
     else:
         lines = [unfinished_headline(record, done, delivery, open_waits), ""]
     lines += [f"  Commit:   {commit or 'none recorded'}", f"  Test:     {test}"]
@@ -1561,12 +1873,13 @@ def explain(root, tid, claim=None):
         owed = done + delivery
         if owed:
             lines.append(f"  Owes:     {', '.join(owed)}")
-        lines += ["", f"  Result: {'claim supported' if claimed in {'DONE', 'CLOSED'} else 'no completion claimed'}"]
+        result = 'the declared test passed on this code' if claimed in FINISHED else 'no completion claimed'
+        lines += ["", f"  Result: {result}"]
     return lines, bool(debt)
 
 
 @s.read_session()
-def ready(root):
+def ready(root, local_claims=None):
     # A refused DONE or CLOSED claim is shown on its own task; it does not hide the rest of the work.
     # Cycles belong to their participants; unrelated work remains visible.
     issues = check(root)
@@ -1585,7 +1898,8 @@ def ready(root):
     lines = [f"{tid} cannot be read: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())]
     upstream = {}
     try:
-        claims = s.active_claims(root, upstream) if s.has_origin(root) else {}
+        claims = (local_claims if local_claims is not None
+                  else s.active_claims(root, upstream) if s.has_origin(root) else {})
     except s.Refused:
         claims = {}
         upstream = {}

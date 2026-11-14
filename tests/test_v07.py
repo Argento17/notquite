@@ -8,7 +8,7 @@ import pytest
 from workorder import bootstrap, cli as command, gate, store
 from test_workorder import PACKAGE, PYTHON, cli, git, local_repo, ok, task
 from test_v05 import commit_all
-from test_v06b import PASS, evidence, supported
+from test_v06b import PASS, evidence, supported, fill_sections
 
 
 @pytest.mark.parametrize('reason', ['test', 'wait'])
@@ -16,6 +16,7 @@ def test_done_refusal_reports_the_status_it_kept(local_repo, reason):
     root = local_repo
     path = task(root, ships='none', test=PASS if reason == 'wait' else f'{PYTHON} -c "exit(1)"',
                 waits=['person:alex'] if reason == 'wait' else [])
+    fill_sections(path)
     before = path.read_bytes()
     result = cli(root, 'done', '--task', 'TASK-1')
     assert result.returncode == 1 and path.read_bytes() == before
@@ -41,6 +42,7 @@ def test_done_saves_note_before_early_refusal(local_repo, reason):
 @pytest.mark.parametrize('final_error', [False, True])
 def test_done_final_refusal_restores_status_and_keeps_note(local_repo, monkeypatch, capsys, final_error):
     path = task(local_repo, status='BLOCKED', ships='none', test=PASS)
+    fill_sections(path)
     explain = gate.explain
 
     def refuse(root, tid, claim=None):
@@ -64,20 +66,22 @@ def test_done_final_refusal_restores_status_and_keeps_note(local_repo, monkeypat
 
 @pytest.mark.parametrize('remote', [None, 'backup', 'origin'])
 def test_done_success_only_suggests_push_with_origin(local_repo, tmp_path, remote):
-    task(local_repo, ships='none', test=PASS)
+    fill_sections(task(local_repo, ships='none', test=PASS))
     if remote:
         git(local_repo, 'remote', 'add', remote, str(tmp_path / 'unused-remote'))
     output = ok(local_repo, 'done', '--task', 'TASK-1')
     success = next(line for line in output.splitlines() if line.startswith('TASK-1 DONE:'))
-    assert success == ('TASK-1 DONE: claim supported; commit tasks/ and .workorder/'
-                       + (' and push' if remote == 'origin' else ''))
+    assert success == 'TASK-1 DONE: its declared test passed on this code'
+    assert output.splitlines()[-1] == ('commit tasks/ and .workorder/'
+                                      + (' and push' if remote == 'origin' else ''))
 
 
 def test_done_names_template_acceptance_as_unfilled(local_repo):
     ok(local_repo, 'new', '--title', 'Add calc', '--owner', 'solo', '--test', PASS)
-    output = ok(local_repo, 'done', '--task', 'TASK-1')
-    assert 'the Acceptance list is not filled in' in output
-    assert '(empty)' not in output
+    result = cli(local_repo, 'done', '--task', 'TASK-1')
+    assert result.returncode == 1
+    assert 'fill in Scope and Acceptance first' in result.stdout
+    assert store.record(local_repo, 'TASK-1')['status'] == 'IN_PROGRESS'
 
 
 @pytest.mark.parametrize('work', ['no-receipts', 'failed-test', 'acceptance', 'missing-test',
@@ -147,8 +151,8 @@ def test_conflicted_rebase_show_and_check_keep_same_evidence_verdict(local_repo,
     checked = cli(root, 'check', 'TASK-1')
     shown = ok(root, 'show', '--task', 'TASK-1')
     expected = 'CLOSED' if ships == 'none' else 'DONE'
-    assert checked.returncode == 1 and f'Computed: {expected}' in checked.stdout
-    assert f'recorded DONE; computed {expected}' in shown
+    assert checked.returncode == 1 and f'Evidence: {expected}' in checked.stdout
+    assert f'Claimed:  DONE\n  Evidence: {expected}' in shown
     reason = 'the DONE claim is on code other than the tested code; run workorder renew --task TASK-1'
     assert reason in shown and reason in checked.stdout
     assert before == {p: p.read_bytes() for p in (root / '.workorder').rglob('*.json')}

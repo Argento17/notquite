@@ -12,6 +12,13 @@ from . import __version__, gate
 from . import store as s
 
 
+def timeout_argument(value):
+    try:
+        return s.positive_seconds(value)
+    except s.Refused as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
 def parser():
     result = argparse.ArgumentParser(
         prog="workorder", description="The task record for coding agents: every task recorded, a clear history, agents always go back to it.",
@@ -22,6 +29,9 @@ def parser():
     init = commands.add_parser("init", help="add agent instructions, a pre-commit hook and a workflow")
     init.add_argument("--check", action="store_true", help="report missing setup without changing files")
     init.add_argument("--force", action="store_true", help="replace a different pre-commit hook")
+    init.add_argument("--claude", action="store_true", help="also install Claude Code project hooks")
+    hook = commands.add_parser("hook", help="run a local agent session or stop check")
+    hook.add_argument("event", choices=["session-start", "stop"])
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
     done.add_argument("--task", required=True)
     done.add_argument("--note", help="add a dated Progress line, including when done refuses")
@@ -45,7 +55,7 @@ def parser():
     receipt.add_argument("--target", help="deployment name, required for deployed and live")
     receipt.add_argument("--ref", default="refs/heads/main",
                          help="branch on origin that merged reads (default: refs/heads/main)")
-    helps = {"show": "print a task's recorded and computed status",
+    helps = {"show": "print a task's claim and evidence",
              "claim": "take a task with a pushed Git tag", "release": "give up your claim on a task"}
     for name, text in helps.items():
         sub = commands.add_parser(name, help=text)
@@ -57,9 +67,10 @@ def parser():
     renew = commands.add_parser("renew", help="record implemented and the task's test again on the current"
                                 " commit (after a squash merge or rebase); merges are computed")
     renew.add_argument("--task", required=True)
-    note = commands.add_parser("note", help="add a dated line under the task's Progress section")
+    note = commands.add_parser("note", help="set the next action or add a dated Progress line")
     note.add_argument("--task", required=True)
-    note.add_argument("text", help="what was done, or what is next")
+    note.add_argument("--next", dest="next_text", help="set the task's next field")
+    note.add_argument("text", nargs="?", help="what was done, or what is next")
     repair = commands.add_parser("repair", help="convert a verified legacy append conflict to receipt files")
     repair.add_argument("--task", required=True)
     commands.add_parser("ready", help="list open work: free, held, blocked or awaiting delivery")
@@ -73,7 +84,7 @@ def parser():
                        help="with --base: accept task definition or test file changes, or complete removal"
                             " (comma-separated ids, for a reviewer to pass)")
     check.add_argument("--run-tests", action="store_true",
-                       help="with --base: run the declared test of every task this change claims DONE or CLOSED")
+                       help="with --base: run claimed tasks' tests and compare changed tests with their base versions")
     check.add_argument("--strict-tests", action="store_true",
                        help="with --base: require --allow for all test and pytest configuration changes;"
                             " with --run-tests, refuse pytest runs with no passed tests")
@@ -87,7 +98,10 @@ def parser():
                             " removed or changed test-file lines; tasks created and claimed finished in"
                             " the same change; and task removal. Use --allow for reviewer acceptance of"
                             " definition changes or complete removal of finished or cancelled tasks;"
-                            " use --run-tests to rerun declared tests of supported DONE/CLOSED claims")
+                            " use --run-tests to rerun declared tests and compare changed tests with their base versions")
+    for sub in (done, receipt, renew, check):
+        sub.add_argument("--timeout", type=timeout_argument, metavar="SECONDS",
+                         help="test deadline in seconds, overriding the task's test_timeout")
     return result
 
 
@@ -118,7 +132,7 @@ def done_refusal(tid, status, lines):
     print("\n".join(line for line in lines if line.startswith(("  Missing:", "  Next:"))))
 
 
-def finish_task(root, tid, note=None):
+def finish_task(root, tid, note=None, timeout=None):
     """Use the same evidence and claim checks as the individual commands, restoring status on refusal."""
     status = None
     try:
@@ -132,32 +146,39 @@ def finish_task(root, tid, note=None):
         command = gate.declared_test(record)
         if not command:
             raise s.Refused(f"{tid} needs a declared test command; add test: to tasks/{tid}.md")
+        sections = s.task_body_sections(s.read_text(root, f"tasks/{tid}.md"))
+        filled = {heading: re.sub(r'<!--.*?-->', '', '\n'.join(body), flags=re.S).strip()
+                  for heading, body in sections}
+        if not all(filled.get(name) for name in ("Scope", "Acceptance")):
+            raise s.Refused("fill in Scope and Acceptance first")
+        hook = root / s.git(root, 'rev-parse', '--git-path', 'hooks/pre-commit').stdout.strip()
+        if not hook.is_file():
+            print("Warning: pre-commit hook is missing in this clone; run workorder init")
         implemented = gate.newest_implementation(s.entries(root, tid))
         if implemented is None or implemented["code"] != s.code_digest(root, s.head(root)):
             item = s.receipt(root, tid, "implemented")
             print(f"{tid} implemented {item['commit'][:7]} - recorded")
-        item = s.receipt(root, tid, "test", command)
+        item = s.receipt(root, tid, "test", command, timeout=timeout)
         print(f"{tid} test {item['commit'][:7]} exit {item['exit_code']} - recorded")
         lines, refused = gate.explain(root, tid, claim="DONE")
         if refused or item["exit_code"] or not item["valid"]:
             done_refusal(tid, status, lines)
             return 1
         print("Acceptance:")
-        sections = s.task_body_sections(s.read_text(root, f"tasks/{tid}.md"))
-        acceptance = [line for heading, body in sections if heading == "Acceptance"
-                      for line in body if line.strip() and not line.strip().startswith("<!--")]
-        print("\n".join(acceptance) or "  the Acceptance list is not filled in")
+        print(filled["Acceptance"])
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
+        for branch in ('main', 'master'):
+            base = f'origin/{branch}'
+            if not s.git(root, 'rev-parse', '--verify', '--quiet', f'refs/remotes/{base}^{{commit}}',
+                         required=False).returncode:
+                for problem in gate.test_change_problems(root, base, record, timeout=timeout):
+                    print(f"Warning: {problem}")
+                break
         path = s.local_path(root, f"tasks/{tid}.md")
         before = path.read_bytes()
-        # Match only the validated front matter; preserve every other byte, including CRLF and BOM.
-        raw_lines = before.splitlines(keepends=True)
-        closing = next(i for i in range(1, len(raw_lines)) if raw_lines[i].rstrip(b'\r\n') == b'---')
-        end = sum(len(line) for line in raw_lines[:closing])
-        front = re.sub(rb"(?m)^status:[^\r\n]*", b"status: DONE", before[:end], count=1)
         supported = False
         try:
-            path.write_bytes(front + before[end:])
+            s.set_task_field(root, tid, "status", "DONE")
             if s.record(root, tid)['status'] != 'DONE':
                 raise s.Refused('could not set the task status to DONE')
             lines, refused = gate.explain(root, tid)
@@ -169,8 +190,11 @@ def finish_task(root, tid, note=None):
             done_refusal(tid, status, lines)
             return 1
         print("\n".join(lines))
+        _, owed, delivery = gate.verdict(root, s.record(root, tid))
+        debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""
+        print(f"{tid} DONE: its declared test passed on this code{debt}")
         push = " and push" if s.has_origin(root) else ""
-        print(f"{tid} DONE: claim supported; commit tasks/ and .workorder/{push}")
+        print(f"commit tasks/ and .workorder/{push}")
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
         done_refusal(tid, status, [f"  Missing:  {error}"])
@@ -196,14 +220,21 @@ def main(argv=None):
                 raise s.Refused("--allow, --run-tests, --strict-tests, --all-tests and --require-task go with --base")
             if options.all_tests and not options.run_tests:
                 raise s.Refused("--all-tests goes with --base --run-tests")
+            if options.timeout is not None and not options.run_tests:
+                raise s.Refused("--timeout goes with --run-tests")
+        if options.action == "receipt" and options.timeout is not None and options.kind != "test":
+            raise s.Refused("--timeout applies to receipt test")
         if command and options.action != "renew" and (options.action != "receipt"
                                                       or options.kind not in {"test", "deployed", "live"}):
             raise s.Refused("this command does not accept a command after --")
         if options.action == "init":
             from .bootstrap import initialize
-            return initialize(root, options.check, options.force)
+            return initialize(root, options.check, options.force, claude=options.claude)
+        elif options.action == "hook":
+            from .hooks import run
+            return run(root, options.event)
         elif options.action == "done":
-            return finish_task(root, s.task_id(options.task), options.note)
+            return finish_task(root, s.task_id(options.task), options.note, options.timeout)
         elif options.action == "new":
             shared = s.has_origin(root) and not options.local
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
@@ -215,7 +246,8 @@ def main(argv=None):
         elif options.action == "receipt":
             if options.kind == "test" and not command:
                 command = gate.declared_test(s.record(root, options.task)) or []  # the task's own test
-            item = s.receipt(root, options.task, options.kind, command, options.target, options.ref)
+            item = s.receipt(root, options.task, options.kind, command, options.target, options.ref,
+                             timeout=options.timeout)
             detail = f" exit {item['exit_code']}" if "exit_code" in item else ""
             print(f"{options.task} {options.kind} {item['commit'][:7]}{detail} - recorded")
             if command:
@@ -237,7 +269,15 @@ def main(argv=None):
                 print(f"{snapshot['ref']} has newer work on this task: pull before you start")
             print("\n".join(gate.record_lines(root, s.task_id(options.task))))
         elif options.action == "note":
-            print(f"{options.task}: {s.add_note(root, options.task, options.text)}")
+            if options.text is None and options.next_text is None:
+                raise s.Refused("give a note or --next TEXT")
+            if options.text is not None and not options.text.strip():
+                raise s.Refused("a note needs some text")
+            if options.next_text is not None:
+                s.set_task_field(root, options.task, 'next', options.next_text)
+                print(f"{options.task}: next: {options.next_text}")
+            if options.text is not None:
+                print(f"{options.task}: {s.add_note(root, options.task, options.text)}")
         elif options.action == "repair":
             print(s.repair(root, options.task))
         elif options.action == "renew":
@@ -249,7 +289,8 @@ def main(argv=None):
             failed = False
             # Merges are computed from Git history; renew never records one that might not count.
             for kind in ("implemented", "test"):
-                item = s.receipt(root, options.task, kind, command if kind == "test" else ())
+                item = s.receipt(root, options.task, kind, command if kind == "test" else (),
+                                 timeout=options.timeout)
                 detail = f" exit {item['exit_code']}" if "exit_code" in item else ""
                 print(f"{options.task} {kind} {item['commit'][:7]}{detail} - recorded")
                 reason = gate.uncounted(root, s.record(root, options.task), s.entries(root, options.task))
@@ -290,7 +331,8 @@ def main(argv=None):
             counts = {}
             allow = {item.strip() for item in options.allow.split(",") if item.strip()}
             problems = gate.check(root, options.staged, options.base, notes, allow, options.run_tests, counts,
-                                  options.strict_tests, options.all_tests, options.require_task)
+                                  options.strict_tests, options.all_tests, options.require_task,
+                                  timeout=options.timeout)
             if options.staged and not counts["tasks"] and not problems and not notes and not options.run_tests:
                 return 0
             print("\n".join(problems) if problems else "check: OK")

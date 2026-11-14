@@ -2,11 +2,34 @@
 
 ## 0.7.0 (unreleased)
 
+- Compare changed tests with their base versions on current code in a temporary
+  copy. Passing additions and edits preserving those tests need no label;
+  refuse old-test failures, fewer pytest passes and more skipped/xfailed/deselected
+  tests. New skips, selection flags and pytest configuration need acceptance.
+  Strict mode still requires acceptance for all test edits.
+- Keep test-change acceptance scoped to current work: untouched tasks already
+  DONE/CLOSED at the base need no label for shared test changes, while runtime
+  comparisons and all-task regression runs still cover them.
+- Generate workflows that install detected project test dependencies, pin the
+  running Workorder version (or PEP 610 Git commit), then check with --all-tests
+  and --require-task and reviewer allow labels. Report the dependency choice.
+- Refuse done until Scope and Acceptance are filled in, keep existing status
+  quotes, name merge debt on success, and warn about missing clone hooks and
+  test weakening against locally available origin/main before writing DONE.
+- Add init --claude project hooks: session context for locally held tasks and a
+  Stop refusal for unsupported finished claims, with stop-loop prevention.
+- Use Claimed/Evidence consistently and say the declared test passed on this
+  code. Warn once when the pre-commit hook cannot find Workorder.
+- Add test_timeout and --timeout to test-running commands; record timed-out
+  tests as failed runs with exit 124.
+- Add note --next with an optional Progress note. Teach the agent block to use
+  it, work on a branch, open a pull request and check on main after merging.
+
 - When `done` refuses, say DONE was not written and name the unchanged status
   before the Missing lines. Keep dated `--note` text on early refusals too,
   including uncommitted code and missing test commands.
 - Ask for a push after `done` only when the repository has an origin remote.
-- Describe template-only Acceptance as not filled in; show the edit in the
+- Refuse template-only Acceptance as not filled in; show the edit in the
   quick start. Use `done` in `show` next steps for implementation, tests and
   remaining Acceptance work.
 - Update the agent block to pull from origin with an explicit branch and

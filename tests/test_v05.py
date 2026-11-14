@@ -82,7 +82,7 @@ def test_feature_checkout_recognises_target_merge(local_repo, method, checkout):
         git(root, 'checkout', '-q', '--detach', 'feature')
     ok(root, 'check')
     ok(root, 'check', 'TASK-1')
-    assert 'computed CLOSED' in ok(root, 'show', '--task', 'TASK-1')
+    assert 'Evidence: CLOSED' in ok(root, 'show', '--task', 'TASK-1')
     assert 'TASK-1' not in ok(root, 'ready')
 
 
@@ -297,7 +297,7 @@ def test_squashed_done_without_delivery_stays_done_on_a_feature_checkout(local_r
     git(root, 'commit', '-qm', 'Squash completed work')
     git(root, 'checkout', '-q', '-b', 'feat/next')
     ok(root, 'check')
-    assert 'computed CLOSED' in ok(root, 'show', '--task', 'TASK-1')
+    assert 'Evidence: CLOSED' in ok(root, 'show', '--task', 'TASK-1')
     assert 'TASK-1' not in ok(root, 'ready')
 
 

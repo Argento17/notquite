@@ -55,7 +55,7 @@ def test_two_tasks_in_one_squash_protect_their_own_paths(local_repo, mode, prote
     if mode == "staged":
         ok(root, "check", "--staged")
     else:
-        assert "claim supported" in ok(root, "check", "TASK-2")
+        assert "the declared test passed on this code" in ok(root, "check", "TASK-2")
     # A base check still rejects TASK-1's stale claim, but must accept TASK-2.
     result = cli(root, "check", "--base", landing, *(["--staged"] if mode == "staged" else []))
     assert result.returncode == 1 and "TASK-1" in result.stdout
@@ -88,7 +88,7 @@ def test_previous_implementation_bounds_the_current_task_paths(local_repo):
         (root / name).write_text("later = True\n")
     task(root, ships="repo", status="DONE")
     commit_all(root, "Claim after earlier paths changed")
-    assert "claim supported" in ok(root, "check", "TASK-1")
+    assert "the declared test passed on this code" in ok(root, "check", "TASK-1")
     (root / "current.py").unlink()
     task(root, ships="repo", status="CLOSED")
     commit_all(root, "Delete current work and close")
@@ -113,7 +113,7 @@ def test_committed_claim_keeps_other_tasks_recorded_boundaries(local_repo):
     # Removing another task later must not rewrite a supported historical claim.
     git(root, "rm", "-r", "tasks/TASK-1.md", ".workorder/receipts/TASK-1")
     commit_all(root, "Remove TASK-1 and its receipts")
-    assert "claim supported" in ok(root, "check", "TASK-2")
+    assert "the declared test passed on this code" in ok(root, "check", "TASK-2")
 
 
 def test_renew_help_names_only_the_receipts_it_records(local_repo):

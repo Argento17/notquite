@@ -10,11 +10,14 @@ import hashlib
 import hmac
 import heapq
 import json
+import math
 import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
+import sys
 import time
 import uuid
 
@@ -168,7 +171,7 @@ CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract"
 # Optional fields. Dependencies and the test add requirements; merge_ref selects delivery's target,
 # and test_paths selects files guarded by a base check. Planning fields never stand in for evidence.
 EXTENDED_FIELDS = ("business_owner", "priority", "created_at", "mission", "depends_on", "blocks",
-                   "next", "summary", "test", "test_paths", "merge_ref")
+                   "next", "summary", "test", "test_paths", "test_timeout", "merge_ref")
 EXTENDED_ORDER = ("id", "title", "owner", "business_owner", "priority", "created_at", "mission",
                   "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "test",
                   "contract")
@@ -354,6 +357,8 @@ def record(root, tid, staged=False):
             raise Refused(f"{tid}: {key} must be text")
     if fields.get("test", "").strip():
         split_command(fields["test"], f"{tid}: test")
+    if "test_timeout" in fields:
+        fields["test_timeout"] = positive_seconds(fields["test_timeout"], f"{tid}: test_timeout")
     if "test_paths" in fields:
         paths = fields["test_paths"]
         if not isinstance(paths, list) or any(not isinstance(p, str) or not p.strip() for p in paths):
@@ -549,6 +554,12 @@ def holds(held, token):
     return isinstance(expected, str) and hmac.compare_digest(expected, token_hash(token))
 
 
+def cache_reservation(root, ref, oid):
+    """Keep successfully pushed claim/release tags available to hooks that never fetch."""
+    if oid:
+        git(root, "update-ref", ref, oid, required=False)
+
+
 def claim(root, tid):
     repository(root)
     record(root, tid)
@@ -565,6 +576,7 @@ def claim(root, tid):
     token = token_path.read_text(encoding="utf-8") if token_path.exists() else uuid.uuid4().hex
     if held and not held["released"]:
         if holds(held, token):
+            cache_reservation(root, NAMESPACE + f"claims/{tid}/{held['generation']}", held["oid"])
             return held
         raise Refused(f"{tid} is held by {held['who']} since {held['at']} - not claimed")
     generation = held["generation"] + 1 if held else 1
@@ -573,9 +585,12 @@ def claim(root, tid):
     # Save before pushing: a crash can leave a recoverable claim, never a lost key.
     token_path.parent.mkdir(parents=True, exist_ok=True)
     token_path.write_text(token, encoding="utf-8", newline="\n")
-    if not reserve(root, NAMESPACE + f"claims/{tid}/{generation}", value):
+    ref = NAMESPACE + f"claims/{tid}/{generation}"
+    oid = reserve(root, ref, value)
+    if not oid:
         winner = active_claims(root).get(tid)
         raise Refused(f"{tid} was claimed by {winner['who']} first - not claimed")
+    cache_reservation(root, ref, oid)
     return value
 
 
@@ -593,7 +608,8 @@ def release(root, tid, force=False):
         raise Refused(f"{tid}: only its holder can release it; if that clone or worktree is gone, run"
                       f" workorder release --task {tid} --force")
     value = {"at": now(), "who": who(root), **({} if holder else {"forced": True, "holder": held["who"]})}
-    reserve(root, NAMESPACE + f"releases/{tid}/{held['oid']}", value)
+    ref = NAMESPACE + f"releases/{tid}/{held['oid']}"
+    cache_reservation(root, ref, reserve(root, ref, value))
     return not holder
 
 
@@ -664,9 +680,37 @@ def task_body_sections(text):
     return sections
 
 
+def set_task_field(root, tid, key, value):
+    """Replace status or next in validated front matter, keeping other bytes and scalar quotes."""
+    record(root, tid)
+    if key not in {"status", "next"}:
+        raise Refused("only status and next can be updated here")
+    path = local_path(root, f"tasks/{tid}.md")
+    lines = path.read_bytes().splitlines(keepends=True)
+    closing = next(i for i in range(1, len(lines)) if lines[i].rstrip(b'\r\n') == b'---')
+    start = next((i for i in range(1, closing) if lines[i].startswith(key.encode() + b':')), closing)
+    newline = b'\r\n' if lines[0].endswith(b'\r\n') else b'\n'
+    raw = lines[start].rstrip(b'\r\n').partition(b':')[2].strip() if start < closing else b''
+    if raw.startswith(b"'") and raw.endswith(b"'") and not any(c in value for c in '\r\n'):
+        encoded = ("'" + value.replace("'", "''") + "'").encode('utf-8')
+    elif key == "status" and not raw.startswith(b'"'):
+        encoded = value.encode('utf-8')
+    else:
+        encoded = packed(value).encode('utf-8')
+    end = start + 1 if start < closing else start
+    if raw.decode('utf-8') in BLOCK_INDICATORS:
+        while end < closing and (not lines[end].strip() or lines[end].startswith(b' ')):
+            end += 1
+        while end > start + 1 and not lines[end - 1].strip():
+            end -= 1
+    prefix = lines[start].partition(b':')[0] + b': ' if start < closing else key.encode() + b': '
+    lines[start:end] = [prefix + encoded + newline]
+    path.write_bytes(b''.join(lines))
+    invalidate_reads()
+
+
 def add_note(root, tid, text):
-    """Add "- YYYY-MM-DD: text" at the end of the task's Progress section (creating it if needed).
-    This is the one change Workorder makes to a task file after new; every other byte is kept."""
+    """Add "- YYYY-MM-DD: text" at the end of Progress, creating the section if needed."""
     record(root, tid)
     text = " ".join(text.split())
     if not text:
@@ -1184,9 +1228,54 @@ def describe_dirty(paths):
     return f"uncommitted or untracked files: {shown} (commit them, or add build output to .gitignore)"
 
 
-def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main"):
+def positive_seconds(value, what="timeout"):
+    try:
+        seconds = float(value) if not isinstance(value, bool) else 0
+    except (ValueError, TypeError, OverflowError):
+        seconds = 0
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise Refused(f"{what} must be a positive number of seconds")
+    return seconds
+
+
+def test_timeout(record, override=None):
+    value = override if override is not None else record.get("test_timeout")
+    return positive_seconds(value) if value is not None else None
+
+
+def run_test(command, root, timeout=None, capture_output=True):
+    """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
+    # Keep the ordinary subprocess path when there is no deadline. With a deadline,
+    # use a process group so child test runners cannot keep captured pipes open.
+    if timeout is None:
+        return subprocess.run(list(command), cwd=root, capture_output=capture_output,
+                              encoding="utf-8", errors="replace")
+    with subprocess.Popen(list(command), cwd=root, stdout=subprocess.PIPE if capture_output else None,
+                          stderr=subprocess.PIPE if capture_output else None,
+                          encoding="utf-8", errors="replace", start_new_session=os.name != 'nt') as process:
+        try:
+            output, errors = process.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(command, process.returncode, output, errors)
+        except subprocess.TimeoutExpired:
+            if os.name != 'nt':
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.kill()
+            output, errors = process.communicate()
+            message = f"test timed out after {timeout:g} seconds (exit 124)\n"
+            if capture_output:
+                errors = (errors or "") + message
+            else:
+                print(message, end='', file=sys.stderr, flush=True)
+            return subprocess.CompletedProcess(command, 124, output, errors)
+
+
+def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None):
     repository(root)
-    record(root, tid)
+    definition = record(root, tid)
     commit = head(root)
     if kind not in KINDS:
         raise Refused("unknown receipt kind")
@@ -1208,8 +1297,11 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main"):
         if kind in {"deployed", "live"} and not target:
             raise Refused("read-backs need --target")
         try:
-            run = subprocess.run(list(command), cwd=root, capture_output=kind != "test",
-                                 encoding="utf-8", errors="replace")
+            if kind == "test":
+                run = run_test(command, root, test_timeout(definition, timeout), capture_output=False)
+            else:
+                run = subprocess.run(list(command), cwd=root, capture_output=True,
+                                     encoding="utf-8", errors="replace")
             exit_code = run.returncode
             output = run.stdout or ""
         except OSError as error:

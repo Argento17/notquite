@@ -182,7 +182,7 @@ def test_test_receipt_runs_command_and_keeps_the_real_failure(clones):
     assert receipt["who"] == "one" and receipt["at"]
     task(one, status="DONE")
     assert cli(one, "check").returncode == 1
-    assert "computed IN_PROGRESS" in ok(one, "show", "--task", "TASK-1")
+    assert "Evidence: IN_PROGRESS" in ok(one, "show", "--task", "TASK-1")
 
 
 def test_done_needs_a_test_on_the_implemented_commit(clones):
@@ -262,7 +262,7 @@ def test_repo_closes_only_after_merge_of_tested_code(clones):
     task(one, status="CLOSED")
     assert cli(one, "check").returncode == 1
     merge(one)
-    assert "computed CLOSED" in ok(one, "show", "--task", "TASK-1")
+    assert "Evidence: CLOSED" in ok(one, "show", "--task", "TASK-1")
     ok(one, "check")
 
 
@@ -334,7 +334,7 @@ def test_live_needs_successful_readback_after_deployment(clones):
     assert cli(one, "check").returncode == 1
     assert readback(one, "live").returncode == 0
     ok(one, "check")
-    assert "computed CLOSED" in ok(one, "show", "--task", "TASK-1")
+    assert "Evidence: CLOSED" in ok(one, "show", "--task", "TASK-1")
 
 
 def test_failed_or_wrong_stamp_deploy_cannot_close(clones):
@@ -791,17 +791,17 @@ def test_latest_test_run_decides_and_history_is_kept(clones):
     task(one, status="DONE")
     fail = [PYTHON, "-c", "raise SystemExit(2)"]
     passed(one)
-    assert "computed DONE" in ok(one, "show", "--task", "TASK-1")
+    assert "Evidence: DONE" in ok(one, "show", "--task", "TASK-1")
     ok(one, "check")
     cli(one, "receipt", "test", "--task", "TASK-1", "--", *fail)
-    assert "computed IN_PROGRESS" in ok(one, "show", "--task", "TASK-1")
+    assert "Evidence: IN_PROGRESS" in ok(one, "show", "--task", "TASK-1")
     refused = cli(one, "check", "TASK-1")
     assert refused.returncode == 1 and "Result: NOT DONE" in refused.stdout
     assert (f"Test:     FAIL (exit 2, {commit}); an earlier run passed, but the latest run decides"
             in refused.stdout)
     assert cli(one, "check").returncode == 1
     passed(one)
-    assert "computed DONE" in ok(one, "show", "--task", "TASK-1")
+    assert "Evidence: DONE" in ok(one, "show", "--task", "TASK-1")
     ok(one, "check")
     kinds = [(e["kind"], e.get("exit_code")) for e in store.entries(one, "TASK-1")]
     assert kinds == [("implemented", None), ("test", 0), ("test", 2), ("test", 0)]
@@ -894,7 +894,7 @@ def test_crlf_checkout_of_committed_records_still_verifies(clones):
         (one / path).write_bytes(data.replace(b"\n", b"\r\n"))
     assert ok(one, "check").splitlines()[0] == "check: OK"
     passed(one)
-    assert "computed DONE" in ok(one, "show", "--task", "TASK-1")
+    assert "Evidence: DONE" in ok(one, "show", "--task", "TASK-1")
 
 
 def claim_tag_value(root, tid="TASK-1", generation=1):
@@ -1472,7 +1472,7 @@ def test_a_later_merge_receipt_that_cannot_count_does_not_undo_an_earlier_one(cl
     late = cli(one, "receipt", "merged", "--task", "TASK-1", "--ref", "refs/heads/elsewhere")
     assert late.returncode == 1 and "does not count" in late.stdout
     ok(one, "check")
-    assert "computed CLOSED" in ok(one, "show", "--task", "TASK-1")
+    assert "Evidence: CLOSED" in ok(one, "show", "--task", "TASK-1")
 
 
 def test_files_in_tasks_that_are_not_task_ids_are_ignored(local_repo):
@@ -1998,9 +1998,9 @@ def test_show_owes_what_check_owes_for_a_stale_claim(local_repo):
     git(local_repo, "commit", "-qam", "Later change")
     task(local_repo, "TASK-1", ships="none", status="DONE")
     shown = ok(local_repo, "show", "--task", "TASK-1")
-    assert "computed CLOSED" in shown and "a passing test on the code marked DONE" in shown
+    assert "Evidence: CLOSED" in shown and "a passing test on the code marked DONE" in shown
     checked = cli(local_repo, "check", "TASK-1")
-    assert checked.returncode == 1 and "Computed: CLOSED" in checked.stdout
+    assert checked.returncode == 1 and "Evidence: CLOSED" in checked.stdout
     reason = "the DONE claim is on code other than the tested code; run workorder renew --task TASK-1"
     assert reason in shown and reason in checked.stdout
     assert cli(local_repo, "check").returncode == 1
@@ -2011,6 +2011,6 @@ def test_a_half_done_task_with_passing_tests_is_not_presented_as_finished(local_
     finish_with_evidence(local_repo, "TASK-1")
     shown = ok(local_repo, "show", "--task", "TASK-1")
     assert "IN_PROGRESS (not claimed finished); its test evidence is in place" in shown
-    assert "computed CLOSED" not in shown
+    assert "Evidence: CLOSED" not in shown
     assert "note:     the evidence covers the task's test only, not its Acceptance list" in shown
     assert "not its Acceptance list" in ok(local_repo, "check", "TASK-1")
