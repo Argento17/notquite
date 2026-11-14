@@ -1803,6 +1803,17 @@ def test_done_needs_a_declared_test_or_an_explicit_any(local_repo):
     ok(local_repo, "check")
 
 
+def test_renew_never_records_a_merge_that_cannot_count(clones):
+    # Found in a blind review: renew on a feature branch recorded a merged receipt that did not count,
+    # exited 1, and the receipt stayed in the history for good. Merges are computed now.
+    one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")
+    task(one, ships="repo", test=f"{PYTHON} -c pass")
+    renewed = ok(one, "renew", "--task", "TASK-1")
+    assert "merged" not in renewed and "does not count" not in renewed
+    assert [e["kind"] for e in store.entries(one, "TASK-1")] == ["implemented", "test"]
+
+
 def test_a_squash_onto_a_moved_main_is_renewed_in_one_command(clones, tmp_path):
     one, two = clones
     git(one, "checkout", "-q", "-b", "feature")

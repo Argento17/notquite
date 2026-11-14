@@ -18,7 +18,7 @@ code in `workorder/`; if the two disagree, the code wins and this file has a bug
 | `workorder check --base REF [--allow IDS] [--run-tests]` | For CI, against the pull request's base branch: checks the tasks changed since `REF` and their dependents; refuses receipts removed or changed since `REF`, a DONE or CLOSED claimed since `REF` on code other than the implementation it relied on, and any change to a task's `test`, contract, evidence or dependencies unless the task is in `--allow`. `--run-tests` runs the declared test of each task the change claims DONE or CLOSED |
 | `workorder show --task ID` | The task as a record: recorded and computed status, what is still owed, title, mission, next and test, a dated timeline of its receipts, its Progress notes and the next step |
 | `workorder note --task ID TEXT` | Adds `- YYYY-MM-DD: TEXT` at the end of the task's Progress section (creating it if needed) |
-| `workorder renew --task ID [-- CMD...]` | Records `implemented` and the task's test again on the current commit, and `merged` if the task ships and there is an `origin`: one step after a squash merge or rebase |
+| `workorder renew --task ID [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded by `renew` |
 | `workorder repair --task ID` | Verifies a conflicted legacy append, keeps the common prefix, and converts each side's extra lines to receipt files |
 | `workorder claim --task ID` / `release --task ID [--force]` | Takes or gives up a task with a pushed tag; `--force` releases a claim whose clone or worktree is gone, and records that it was forced |
 | `workorder claims` | Active claims |

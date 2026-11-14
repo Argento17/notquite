@@ -143,8 +143,8 @@ def main(argv=None):
                 raise s.Refused(f"{options.task} declares no test; add test: to tasks/{options.task}.md,"
                                 " or put the test command after --")
             failed = False
-            kinds = ["implemented", "test"] + (["merged"] if record["ships"] != "none" and s.has_origin(root) else [])
-            for kind in kinds:
+            # Merges are computed from Git history; renew never records one that might not count.
+            for kind in ("implemented", "test"):
                 item = s.receipt(root, options.task, kind, command if kind == "test" else ())
                 detail = f" exit {item['exit_code']}" if "exit_code" in item else ""
                 print(f"{options.task} {kind} {item['commit'][:7]}{detail} - recorded")
