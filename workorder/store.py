@@ -554,17 +554,29 @@ def receipt_task(path):
     return None
 
 
-def receipt_paths(root, staged=False, rev=None):
+def receipt_paths(root, staged=False, rev=None, tid=None):
+    """Receipt files of every task, or of one task (its legacy ledger and its folder) when tid is given."""
+    scopes = ([f"{d}/{tid}.jsonl" for d in RECEIPT_DIRS] + [f"{d}/{tid}" for d in RECEIPT_DIRS]
+              if tid else list(RECEIPT_DIRS))
     if rev:
-        return git(root, "ls-tree", "-r", "--name-only", rev, "--", *RECEIPT_DIRS,
+        return git(root, "ls-tree", "-r", "--name-only", rev, "--", *scopes,
                    required=False).stdout.splitlines()
-    return [p for directory in RECEIPT_DIRS for p in files(root, directory, staged)]
+    if staged:
+        return sorted(p for p in git(root, "ls-files", "-z", "--", *scopes).stdout.split("\0") if p)
+    found = []
+    for scope in scopes:
+        path = local_path(root, scope)
+        if path.is_file():
+            found.append(scope)
+        elif path.is_dir():
+            found += files(root, scope)
+    return sorted(found)
 
 
 def receipt_texts(root, tid, staged=False, rev=None):
     return {p: (git(root, "show", f"{rev}:{p}").stdout.replace("\r\n", "\n") if rev
                 else read_text(root, p, staged))
-            for p in receipt_paths(root, staged, rev) if receipt_task(p) == tid}
+            for p in receipt_paths(root, staged, rev, tid) if receipt_task(p) == tid}
 
 
 def verify_receipt(root, tid, value):
