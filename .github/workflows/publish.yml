@@ -33,6 +33,11 @@ jobs:
                 "4a3ccae8f1e00130dd9fd56617d4e57b2b407803142213e49fe21f3c56bd5f67  notquite-0.1.0-py3-none-any.whl" \
                 "37139120d47142a2d3c64108bbd5f12cb6206f7a884f6f34c39bf023c4144805  notquite-0.1.0.tar.gz" \
                 > expected.sha256 ;;
+            v0.2.0)
+              printf '%s\n' \
+                "2e8c71a60f750049e0acc05b55cbb28e7244d423d614d62e0dcba44ac7e1241a  notquite-0.2.0-py3-none-any.whl" \
+                "3e8a54019f86d8a9bdf45e0438995128ce08a280f15fc1b0c885656c117a9841  notquite-0.2.0.tar.gz" \
+                > expected.sha256 ;;
             *) echo "No tested checksums recorded for $TAG"; exit 1 ;;
           esac
           cd dist
