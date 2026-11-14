@@ -1,5 +1,6 @@
 """Repository setup text, also shown verbatim in the README."""
 
+import os
 from . import store as s
 
 
@@ -62,7 +63,9 @@ def initialize(root, check=False, force=False):
             path.write_text(original + ('\n\n' if original else '') + AGENT_BLOCK,
                             encoding='utf-8', newline='\n')
             print(f'{name}: added agent block')
-    if hook_exists and not different and hook.stat().st_mode & 0o111:
+    # Git for Windows runs hooks without an executable bit; elsewhere the bit is required.
+    runnable = hook_exists and (os.name == 'nt' or bool(hook.stat().st_mode & 0o111))
+    if hook_exists and not different and runnable:
         print(f'{hook_name}: already installed')
     elif check:
         missing = True

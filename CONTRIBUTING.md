@@ -6,7 +6,7 @@ anything that changes what counts as evidence.
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
 python -m pip install -e '.[test]'
-python -m pytest
+python -m pytest -n auto   # in parallel; plain `python -m pytest` also works
 ```
 
 - Keep the runtime on Python's standard library.

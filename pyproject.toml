@@ -23,7 +23,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+test = ["pytest>=7", "pytest-xdist>=3"]
 
 [project.urls]
 Homepage = "https://github.com/Argento17/workorder"
