@@ -251,6 +251,8 @@ def test_repo_closes_only_after_merge_of_tested_code(clones):
 
 def test_merge_of_different_code_is_not_delivery(clones):
     one, two = clones
+    (one / "app.py").write_text("items = ['mine']\n", encoding="utf-8")
+    git(one, "commit", "-qam", "My change, not pushed")
     implement(one)
     passed(one)
     (two / "app.py").write_text("items = ['other']\n", encoding="utf-8")
@@ -259,9 +261,35 @@ def test_merge_of_different_code_is_not_delivery(clones):
     git(two, "push", "-q", "origin", "HEAD:refs/heads/main")
     landed = cli(one, "receipt", "merged", "--task", "TASK-1")
     assert landed.returncode == 1
-    assert "recorded, but does not count: refs/heads/main on origin does not hold exactly" in landed.stdout
+    assert ("recorded, but does not count: refs/heads/main on origin neither contains the implemented commit"
+            in landed.stdout)
     task(one, status="CLOSED")
     assert "merge of the tested code" in cli(one, "check").stdout
+
+
+def test_a_merge_commit_with_other_work_beside_it_counts(clones):
+    one, two = clones
+    (one / "app.py").write_text("items = ['mine']\n", encoding="utf-8")
+    git(one, "commit", "-qam", "My change")
+    implement(one)
+    passed(one)
+    task(one, status="DONE")
+    git(one, "add", "tasks", ".workorder")
+    git(one, "commit", "-qm", "Done, on the tested code")
+    (two / "other.py").write_text("x = 1\n", encoding="utf-8")
+    git(two, "add", "other.py")
+    git(two, "commit", "-qm", "Other work lands first")
+    git(two, "push", "-q", "origin", "HEAD:refs/heads/main")
+    git(one, "pull", "-q", "--no-rebase", "--no-edit", "origin", "main")  # a merge commit, as a PR merge makes
+    git(one, "push", "-q", "origin", "HEAD:refs/heads/main")
+    ok(one, "receipt", "merged", "--task", "TASK-1")
+    task(one, status="CLOSED")
+    ok(one, "check")
+    task(one, status="IN_PROGRESS")
+    git(one, "add", "tasks")
+    git(one, "commit", "-qm", "Reopen")
+    task(one, status="CLOSED")  # claimed straight from IN_PROGRESS on merged code the tests never saw
+    assert "is being marked CLOSED, but the code now differs" in cli(one, "check").stdout
 
 
 def test_live_needs_successful_readback_after_deployment(clones):
@@ -693,7 +721,9 @@ def test_shallow_clone_explains_missing_history(clones, tmp_path):
     shallow = tmp_path / "shallow"
     git(tmp_path, "clone", "-q", "--depth", "1", Path(remote).resolve().as_uri(), str(shallow))
     result = cli(shallow, "check")
-    assert result.returncode == 1 and "fetch-depth: 0" in result.stderr
+    assert result.returncode == 1 and "is not in this clone" in result.stdout
+    explained = cli(shallow, "check", "TASK-1")
+    assert "Next:     fetch the full history" in explained.stdout
 
 
 def test_latest_test_run_decides_and_history_is_kept(clones):
@@ -981,7 +1011,6 @@ def test_simple_yaml_style_lists_are_read(clones):
     (('priority: "P1"', "priority: |\n  P1"), "priority cannot be a > or | block"),
     (('summary: "A filter button"', "summary: A filter\n  button"), "indented lines belong only under"),
     (("depends_on: []", "depends_on:\n  - id: TASK-2"), 'list lines look like "  - TASK-1"'),
-    (('priority: "P1"', '# note: urgent\npriority: "P1"'), "line 6:"),
     (("depends_on: []", "depends_on: &deps [TASK-2]"), "depends_on must be a list of task ids"),
     (('summary: "A filter button"', "summary: |2\n    text"), "indented lines belong only under"),
     (('summary: "A filter button"', 'summary: "A filter\n  button"'), "indented lines belong only under"),
@@ -1075,7 +1104,7 @@ def test_yaml_style_fixtures_read_to_the_expected_values(clones):
     load_fixtures(one)
     records = gate.records(one)
     full = records["TASK-11"]
-    assert list(full) == list(store.EXTENDED_ORDER)
+    assert list(full) == [k for k in store.EXTENDED_ORDER if k != "test"]
     assert full["mission"] == "Let a user share a read-only list with someone else.\nNobody else can edit it.\n"
     assert full["next"] == "Agree how long a shared link stays valid before building the share button."
     assert full["summary"] == ("A share button creates a read-only link to the list.\n"
@@ -1359,12 +1388,12 @@ def test_a_later_merge_receipt_that_cannot_count_does_not_undo_an_earlier_one(cl
     merge(one)
     task(one, status="CLOSED")
     ok(one, "check")
-    (two / "other.py").write_text("x = 1\n", encoding="utf-8")
-    git(two, "add", "other.py")
-    git(two, "commit", "-qm", "Other work")
-    git(two, "pull", "-q", "--no-rebase", "origin", "main")
-    git(two, "push", "-q", "origin", "HEAD:refs/heads/main")
-    late = cli(one, "receipt", "merged", "--task", "TASK-1")
+    git(two, "checkout", "-q", "--orphan", "elsewhere")
+    (two / "app.py").write_text("items = ['unrelated history']\n", encoding="utf-8")
+    git(two, "add", "app.py")
+    git(two, "commit", "-qm", "A branch without the tested commit")
+    git(two, "push", "-q", "origin", "HEAD:refs/heads/elsewhere")
+    late = cli(one, "receipt", "merged", "--task", "TASK-1", "--ref", "refs/heads/elsewhere")
     assert late.returncode == 1 and "does not count" in late.stdout
     ok(one, "check")
     assert "computed CLOSED" in ok(one, "show", "--task", "TASK-1")
@@ -1408,7 +1437,8 @@ def test_check_base_refuses_a_done_claimed_since_the_base_on_untested_code(local
     git(local_repo, "add", "app.py", "tasks")
     git(local_repo, "commit", "-qm", "Done, without testing the change")  # hooks skipped, like --no-verify
     claim = store.head(local_repo)[:7]
-    ok(local_repo, "check")  # the verdict is about the implemented code
+    plain = cli(local_repo, "check")  # plain check finds the claim in the task file's history too
+    assert plain.returncode == 1 and f"TASK-1 was marked DONE in {claim}" in plain.stdout
     refused = cli(local_repo, "check", "--base", base)
     assert refused.returncode == 1
     assert f"TASK-1 was marked DONE in {claim} on code other than the implemented commit" in refused.stdout
@@ -1416,3 +1446,97 @@ def test_check_base_refuses_a_done_claimed_since_the_base_on_untested_code(local
     git(local_repo, "add", ".workorder")
     git(local_repo, "commit", "-qm", "Tested again")
     ok(local_repo, "check", "--base", base)
+
+
+def test_a_declared_test_is_the_only_command_that_counts(local_repo):
+    ok(local_repo, "new", "--title", "Calc", "--owner", "solo", "--ships", "none",
+       "--test", f"{PYTHON} -c pass")
+    record = store.record(local_repo, "TASK-1")
+    assert record["test"] == f"{PYTHON} -c pass"
+    ok(local_repo, "receipt", "implemented", "--task", "TASK-1")
+    other = cli(local_repo, "receipt", "test", "--task", "TASK-1", "--", "true")
+    assert other.returncode == 1 and "TASK-1 declares its test as:" in other.stdout
+    text = (local_repo / "tasks/TASK-1.md").read_text(encoding="utf-8")
+    (local_repo / "tasks/TASK-1.md").write_text(text.replace('status: "IN_PROGRESS"', 'status: "DONE"'),
+                                                encoding="utf-8")
+    refused = cli(local_repo, "check", "TASK-1")
+    assert refused.returncode == 1 and "no run of the task's test for this commit" in refused.stdout
+    assert f"Next:     workorder receipt test --task TASK-1 -- {PYTHON} -c pass" in refused.stdout
+    ran = ok(local_repo, "receipt", "test", "--task", "TASK-1")  # no command: runs the declared test
+    assert "still owes: nothing" in ran
+    assert "Command:  " + f"{PYTHON} -c pass" in ok(local_repo, "check", "TASK-1")
+
+
+def test_after_a_squash_merge_the_repository_keeps_working_and_evidence_can_be_renewed(clones, tmp_path):
+    one, _ = clones
+    task(one, "TASK-2", ships="none")
+    git(one, "add", "tasks")
+    git(one, "commit", "-qm", "Another task")
+    git(one, "push", "-q", "origin", "HEAD:refs/heads/main")
+    git(one, "checkout", "-q", "-b", "feature")
+    (one / "app.py").write_text("items = ['feature']\n", encoding="utf-8")
+    git(one, "commit", "-qam", "Feature")
+    task(one, ships="none")
+    implement(one)
+    passed(one)
+    task(one, status="DONE", ships="none")
+    git(one, "add", "tasks", ".workorder")
+    git(one, "commit", "-qm", "Done")
+    git(one, "checkout", "-q", "main")
+    git(one, "merge", "-q", "--squash", "feature")
+    git(one, "commit", "-qm", "Feature (squashed)")
+    git(one, "branch", "-q", "-D", "feature")
+    git(one, "push", "-q", "origin", "HEAD:refs/heads/main")
+    fresh = tmp_path / "fresh"
+    git(tmp_path, "clone", "-q", "--no-local", git(one, "remote", "get-url", "origin"), str(fresh))
+    git(fresh, "config", "user.name", "fresh")
+    refused = cli(fresh, "check")
+    assert refused.returncode == 1 and "is not in this clone" in refused.stdout
+    assert "TASK-2" not in refused.stdout  # the other task is unaffected
+    assert "TASK-2 free" in ok(fresh, "ready")
+    ok(fresh, "receipt", "implemented", "--task", "TASK-1")  # renew the evidence on the merged code
+    ok(fresh, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "pass")
+    ok(fresh, "check")
+
+
+def test_plain_check_refuses_a_done_set_on_code_changed_after_testing(local_repo):
+    task(local_repo, "TASK-1", ships="none")
+    finish_with_evidence(local_repo, "TASK-1")
+    (local_repo / "app.py").write_text("items = ['changed after testing']\n", encoding="utf-8")
+    git(local_repo, "commit", "-qam", "A last tweak")
+    task(local_repo, "TASK-1", ships="none", status="DONE")
+    refused = cli(local_repo, "check")
+    assert refused.returncode == 1
+    assert "TASK-1 is being marked DONE, but the code now differs from the implemented commit" in refused.stdout
+    explained = cli(local_repo, "check", "TASK-1")
+    assert explained.returncode == 1 and "Missing:  a passing test on the code marked DONE" in explained.stdout
+    assert "Next:     workorder receipt implemented --task TASK-1, then" in explained.stdout
+
+
+def test_common_yaml_forms_are_read(clones):
+    one, _ = clones
+    task(one, "TASK-2")
+    path = extended(one)
+    text = path.read_text(encoding="utf-8")
+    text = text.replace('priority: "P1"', "# urgent, agreed with sam\npriority: 'P1'")
+    text = text.replace("depends_on: []", "depends_on:\n- TASK-2")
+    text = text.replace('summary: "A filter button"', "summary: 'It''s a filter button'")
+    path.write_bytes(("\ufeff" + text).encode("utf-8"))
+    record = store.record(one, "TASK-1")
+    assert record["priority"] == "P1" and record["depends_on"] == ["TASK-2"]
+    assert record["summary"] == "It's a filter button"
+
+
+def test_a_stray_tag_under_claims_does_not_break_claiming(clones):
+    one, two = clones
+    git(two, "tag", "workorder/claims/not-a-claim")
+    git(two, "push", "-q", "origin", "refs/tags/workorder/claims/not-a-claim")
+    assert "held by one since" in ok(one, "claim", "--task", "TASK-1")
+    assert "TASK-1 held by one since" in ok(two, "claims")
+
+
+def test_claiming_a_task_this_checkout_does_not_have_says_so(clones):
+    one, _ = clones
+    result = cli(one, "claim", "--task", "TASK-7")
+    assert result.returncode == 1
+    assert "no task record tasks/TASK-7.md in this checkout" in result.stderr

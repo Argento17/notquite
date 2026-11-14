@@ -25,6 +25,8 @@ def parser():
     new.add_argument("--ships", choices=["none", "repo", "live"], default="repo",
                      help="what CLOSED needs beyond DONE (default: repo)")
     new.add_argument("--prefix", default="TASK", help="id prefix (default: TASK)")
+    new.add_argument("--test", default="", metavar="COMMAND",
+                     help="the task's test command; once set, only a run of exactly this command counts")
     new.add_argument("--template", choices=["extended", "simple"], default="extended",
                      help="extended: planning fields and Context/Scope/Lanes/Acceptance/Progress sections;"
                           " simple: the seven required fields only, as in 0.1.0 (default: extended)")
@@ -86,11 +88,13 @@ def main(argv=None):
         if options.action == "new":
             shared = s.has_origin(root)
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
-                        options.template)
+                        options.template, options.test)
             where = ("reserved on origin" if shared
                      else "local id: no origin remote, so other clones could pick the same id")
             print(f"{tid} opened: tasks/{tid}.md ({where})")
         elif options.action == "receipt":
+            if options.kind == "test" and not command:
+                command = gate.declared_test(s.record(root, options.task)) or []  # the task's own test
             item = s.receipt(root, options.task, options.kind, command, options.target, options.ref)
             detail = f" exit {item['exit_code']}" if "exit_code" in item else ""
             print(f"{options.task} {options.kind} {item['commit'][:7]}{detail} - recorded")
@@ -98,7 +102,7 @@ def main(argv=None):
                 print("command: " + shlex.join(command))
             record = s.record(root, options.task)
             reason = (invalid_reason(root, item) if item.get("exit_code") == 0 and not item["valid"]
-                      else gate.uncounted(record, s.entries(root, options.task)))
+                      else gate.uncounted(root, record, s.entries(root, options.task)))
             if reason:
                 print("recorded, but does not count: " + reason)
             _, done, delivery = gate.verdict(root, record)
@@ -107,9 +111,12 @@ def main(argv=None):
             return 1 if failed or reason else 0
         elif options.action == "show":
             record = s.record(root, options.task)
-            computed, done, delivery = gate.verdict(root, record)
+            all_records = gate.records(root)
+            views = {tid: gate.verdict(root, item) for tid, item in all_records.items()}
+            computed, done, delivery = views.get(options.task) or gate.verdict(root, record)
+            open_waits = gate.waits(record, all_records, views)
             print(f"{options.task} recorded {record['status']}; computed {computed}")
-            print("still owes: " + (", ".join(done + delivery) or "nothing"))
+            print("still owes: " + (", ".join(done + delivery + open_waits) or "nothing"))
             needs = s.dependencies(record)
             if needs:
                 print("waits_on: " + ", ".join(needs))

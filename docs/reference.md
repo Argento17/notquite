@@ -42,7 +42,10 @@ byte for byte.
 Front matter is not parsed as YAML. Workorder reads this subset and refuses
 everything else with a message naming the line:
 
-- `key: value` on one line: plain text, or a JSON string (`"..."`).
+- `key: value` on one line: plain text, a JSON string (`"..."`), or a single-quoted
+  YAML string (`'...'`, with `''` for a quote).
+- Comment lines starting with `#` at the left margin. A UTF-8 byte order mark
+  at the start of the file is ignored.
 - Lists, on one line: JSON (`["TASK-1", "task:TASK-2"]`) or simple
   (`[TASK-1, task:TASK-2]`, items without spaces or quotes).
 - Indented lists for `depends_on`, `blocks` and `waits_on` only:
@@ -53,6 +56,8 @@ everything else with a message naming the line:
     - "TASK-2"
   ```
 
+  The `- item` lines may also start at the left margin, as YAML allows.
+
   A list field with nothing after the colon and no items is an empty list.
 - `>` (folded) and `|` (literal) blocks for `mission`, `next` and `summary`
   only, with optional `-` (strip) or `+` (keep) chomping. They follow YAML:
@@ -62,8 +67,8 @@ everything else with a message naming the line:
 
 Not read, and refused:
 
-- comment lines (`# ...`), anchors and aliases (`&`, `*`), tags (`!`), nested
-  mappings, and multi-line plain or quoted values. A `#` after a value on the
+- anchors and aliases (`&`, `*`), tags (`!`), nested mappings, and
+  multi-line plain or quoted values. A `#` after a value on the
   same line is not a comment here: it stays part of the value;
 - block text on any field other than `mission`, `next` and `summary`, and
   indented lists on any field other than the three list fields;
@@ -85,7 +90,7 @@ the same, except that Workorder refuses the less-indented lines above.
 `workorder new` (and `--template extended`) writes these optional fields too,
 in this order: `id`, `title`, `owner`, `business_owner`, `priority`, `created_at`,
 `mission`, `depends_on`, `blocks`, `next`, `summary`, `status`, `ships`,
-`waits_on`, `contract`. The body gets `## Context`, `## Scope`, `## Lanes`,
+`waits_on`, `test`, `contract`. The body gets `## Context`, `## Scope`, `## Lanes`,
 `## Acceptance` and `## Progress` sections. Any subset of the optional fields
 may be used; any other field is refused, so typos are caught.
 
@@ -94,6 +99,10 @@ may be used; any other field is refused, so typos are caught.
 - `created_at`: empty or an ISO date or time (`2026-11-14`,
   `2026-11-14T09:30:00Z`). `new` fills in today's UTC date.
 - `depends_on`: task ids (`TASK-2` or `task:TASK-2`). Not the task itself.
+- `test`: empty, or the task's test command as one line, split like a shell
+  would split it (no shell runs it). Once set, only a `test` receipt whose
+  command is exactly this counts, and `receipt test --task ID` with nothing
+  after it runs this command. `new --test COMMAND` fills it in.
 - `blocks`: task ids. Informational: `check` reports a `blocks` entry that
   names an unknown task, or two tasks that each say they block the other, but
   never makes a task wait because of it.
@@ -123,11 +132,13 @@ add requirements.
 - **DONE** when that holds.
 - **CLOSED** when DONE and delivery is complete:
   - `ships: none`: nothing more.
-  - `ships: repo`: a `merged` receipt, after the implementation, whose code
-    matches the implemented code. Any such receipt counts; a later one that
-    cannot count does not undo it.
-  - `ships: live`: also a valid `deployed` receipt after that merge, with the
-    implemented code, then a valid `live` receipt for the same commit and
+  - `ships: repo`: a `merged` receipt, after the implementation, whose commit
+    contains the implemented commit or whose code matches the implemented
+    code. Any such receipt counts; a later one that cannot count does not undo
+    it.
+  - `ships: live`: also a valid `deployed` receipt after that merge, whose
+    commit contains the implemented commit or holds its code, then a valid
+    `live` receipt for the same commit and
     target. "Valid" means the read-back command exited 0 and returned the
     expected commit ID. It does not show which server answered or that it is
     production.
@@ -136,26 +147,33 @@ Only receipts after the newest `implemented` receipt count. Recording a new
 implementation starts the evidence again.
 
 A `test` receipt is valid only if the command exited 0, and the working tree
-was still clean with HEAD unchanged when it finished.
+was still clean with HEAD unchanged when it finished. When the task declares a
+`test`, only receipts whose command is exactly that one decide.
 
 "Code" is a SHA-256 over the commit's file listing, leaving out `tasks/` and
 `.workorder/`. Committing task files and receipts does not change it, so they
 can be committed after the evidence is recorded, and later runs on the same
 code, on any commit, still count.
 
-The verdict looks only at the newest `implemented` receipt, never at HEAD.
-Three checks cover the gap. `check --staged` (the pre-commit hook) refuses a
-commit that changes a task's status to DONE or CLOSED when the code in that
-commit differs from the implemented code. `check --base REF` applies the same
-rule in CI to every commit since `REF` that made such a change, unless a newer
-`implemented` receipt was recorded after it. `check <id>` adds a note when
-HEAD's code differs, and a `Command:` line naming the command behind the
-deciding test run. Code that lands after a task is DONE is not re-tested.
+The verdict looks only at the newest `implemented` receipt, never at HEAD. A
+DONE or CLOSED claim must therefore be made on the implemented code:
 
-Receipts name commits. If those commits disappear (a squash merge, a rebase
-or an amend, once the originals are gone), `check` refuses in any clone that
-lacks them.
-Use merge commits for branches that carry receipts.
+- An uncommitted claim (the task says DONE or CLOSED, HEAD's copy does not) is
+  compared with HEAD's code, or with the index under `--staged`.
+- A committed claim is traced through the task file's history to the commit
+  that made it (since `REF` with `--base REF`), and that commit's code is
+  compared with the implementation the claim relied on, unless a newer
+  `implemented` receipt was recorded after it.
+
+`check <id>` adds a note when HEAD's code differs, and a `Command:` line naming
+the command behind the deciding test run. Code that lands after a task is DONE
+does not reopen it.
+
+Receipts name commits. A receipt whose commit is not in this clone (after a
+squash merge, a rebase or an amend once the originals are gone, or in a
+shallow clone) is kept but never counts; it does not stop `check` for other
+tasks. Record `implemented` and the test again on the new commit, or fetch the
+full history.
 
 ## Receipts
 

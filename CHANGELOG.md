@@ -28,6 +28,27 @@ regression test.
 - Only `tasks/<id>.md` files are task records; a README or notes in `tasks/`
   no longer break every check. A broken contract file is named in the error.
 
+From the second, neutral four-reviewer round:
+
+- A task can declare its own `test` command (`workorder new --test ...`). Once
+  set, only a run of exactly that command counts, and `workorder receipt test
+  --task ID` runs it.
+- Plain `workorder check` refuses a DONE or CLOSED claimed, in the working
+  tree or in a commit, on code other than the implementation it relies on.
+- Merges and deployments count when they contain the implemented commit, so a
+  task can reach CLOSED on a busy main with merge commits.
+- After a squash merge, a rebase or an amend, receipts whose commits are gone
+  no longer stop `check` for the whole repository: they stop counting, and the
+  task's evidence is recorded again on the new commit.
+- `ready` lists every task even when one claim is refused; `show` lists open
+  dependencies under "still owes"; a stray tag under `claims/` is ignored;
+  claiming a task this checkout lacks says so.
+- Front matter also reads `#` comment lines, single-quoted values,
+  left-margin `- item` lists and a UTF-8 byte order mark.
+- The README's pre-commit hook says what to do when `workorder` is not on
+  PATH, and the agent instructions cover the task's `test`, committing,
+  pushing and recording the merge.
+
 - A test run counts when its code matches the implemented code, on any commit.
   Committing the task file and receipts no longer hides later runs: a later
   failing run revokes DONE again, and a passing run after that commit counts.

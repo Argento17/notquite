@@ -8,6 +8,7 @@ import hmac
 import json
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import uuid
 
@@ -89,7 +90,7 @@ def read_bytes(root, relative, staged=False):
 
 def read_text(root, relative, staged=False):
     # Git on Windows may check text files out with CRLF; the content is the same.
-    return read_bytes(root, relative, staged).decode("utf-8").replace("\r\n", "\n")
+    return read_bytes(root, relative, staged).decode("utf-8").removeprefix("\ufeff").replace("\r\n", "\n")
 
 
 def files(root, directory, staged=False):
@@ -101,12 +102,14 @@ def files(root, directory, staged=False):
 
 
 CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract")
-# Optional fields of the extended template. Only depends_on affects a verdict, and only by adding
-# dependencies; the rest is information for people and never stands in for evidence.
+# Optional fields of the extended template. Only depends_on and test affect a verdict, and only by
+# adding requirements (dependencies; the one test command that counts); the rest is information for
+# people and never stands in for evidence.
 EXTENDED_FIELDS = ("business_owner", "priority", "created_at", "mission", "depends_on", "blocks",
-                   "next", "summary")
+                   "next", "summary", "test")
 EXTENDED_ORDER = ("id", "title", "owner", "business_owner", "priority", "created_at", "mission",
-                  "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "contract")
+                  "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "test",
+                  "contract")
 TASK_REF = r"[A-Z][A-Z0-9]*-[1-9][0-9]*"
 FRONT_MATTER_HELP = ("front matter takes `key: value` lines: plain single-line text, a JSON string, or a"
                      ' list such as ["TASK-1"]; mission, next and summary may use > or | blocks, and'
@@ -121,6 +124,8 @@ PLAIN_ITEM = r"[A-Za-z0-9_.@:-]+"
 def front_value(tid, key, raw):
     """Parse one value: plain text, a JSON string or list, or a simple [a, b] list."""
     raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
+        return raw[1:-1].replace("''", "'")  # a single-quoted YAML scalar
     if not raw.startswith(('"', '[')):
         return raw
     try:
@@ -176,7 +181,7 @@ def block_list(tid, key, block):
     for line in block:
         if not line.strip():
             continue
-        match = re.fullmatch(r" +- +(.+?)\s*", line)
+        match = re.fullmatch(r" *- +(.+?)\s*", line)
         item = match.group(1) if match else None
         if item and item.startswith('"'):
             try:
@@ -195,12 +200,17 @@ def front_matter(tid, lines):
     while index < len(lines):
         line, number = lines[index], index + 2
         end = index + 1
-        while end < len(lines) and (not lines[end].strip() or lines[end].startswith(" ")):
+        # A list field may also carry its "- item" lines at the left margin, as YAML allows.
+        list_head = line.partition(":")[0] in LIST_FIELDS and not line.partition(":")[2].strip()
+        while end < len(lines) and (not lines[end].strip() or lines[end].startswith(" ")
+                                    or (list_head and lines[end].startswith("- "))):
             end += 1
         block = lines[index + 1:end]
         index = end
         if not line.strip():
             continue
+        if line.startswith("#") and not any(item.strip() for item in block):
+            continue  # a YAML comment line
         key, separator, raw = line.partition(":")
         if not separator or not key or key != key.strip() or line.startswith("#"):
             raise Refused(f"{tid}: line {number}: {FRONT_MATTER_HELP}")
@@ -236,6 +246,8 @@ def task_refs(tid, key, value):
 
 def record(root, tid, staged=False):
     task_id(tid)
+    if not staged and not local_path(root, f"tasks/{tid}.md").is_file():
+        raise Refused(f"no task record tasks/{tid}.md in this checkout; pull the commit that added it")
     text = read_text(root, f"tasks/{tid}.md", staged)
     lines = text.splitlines()
     if not lines or lines[0] != "---" or "---" not in lines[1:]:
@@ -263,9 +275,14 @@ def record(root, tid, staged=False):
         for w in waits
     ):
         raise Refused(f"{tid}: waits_on needs task:<id> or person:<name> items")
-    for key in ("business_owner", "priority", "created_at", "mission", "next", "summary"):
+    for key in ("business_owner", "priority", "created_at", "mission", "next", "summary", "test"):
         if key in fields and not isinstance(fields[key], str):
             raise Refused(f"{tid}: {key} must be text")
+    if fields.get("test", "").strip():
+        try:
+            shlex.split(fields["test"])
+        except ValueError as error:
+            raise Refused(f"{tid}: test is not a valid command line ({error})") from None
     if fields.get("created_at"):
         try:
             dt.datetime.fromisoformat(fields["created_at"].replace("Z", "+00:00"))
@@ -343,18 +360,22 @@ def task_text(tid, data, template):
         return ("---\n" + "".join(f"{k}: {packed(v)}\n" for k, v in data.items())
                 + f"---\n\n# {tid}\n\nWrite the original ask here.\n")
     today = dt.datetime.now(dt.timezone.utc).date().isoformat()
-    extended = dict(business_owner="", priority="", created_at=today, mission="", depends_on=[],
-                    blocks=[], next="", summary="", **data)
+    extended = {**dict(business_owner="", priority="", created_at=today, mission="", depends_on=[],
+                       blocks=[], next="", summary="", test=""), **data}
     return ("---\n" + "".join(f"{k}: {packed(extended[k])}\n" for k in EXTENDED_ORDER)
             + f"---\n\n# {tid}\n" + EXTENDED_BODY)
 
 
-def new(root, title, owner, ships="repo", prefix="TASK", template="extended"):
+def new(root, title, owner, ships="repo", prefix="TASK", template="extended", test=""):
     repository(root)
     if template not in {"simple", "extended"}:
         raise Refused("template must be simple or extended")
     if not re.fullmatch(r"[A-Z][A-Z0-9]*", prefix) or not title.strip() or not owner.strip():
         raise Refused("use an uppercase prefix, nonempty title and owner")
+    try:
+        shlex.split(test)
+    except ValueError as error:
+        raise Refused(f"--test is not a valid command line ({error})") from None
     directory = local_path(root, "tasks")
     directory.mkdir(exist_ok=True)
     # Without an origin remote, ids are numbered locally and not coordinated with other clones.
@@ -369,7 +390,7 @@ def new(root, title, owner, ships="repo", prefix="TASK", template="extended"):
                     if ID.fullmatch(p.stem)]
         tid = f"{prefix}-{max(numbers, default=0) + 1}"
         data = dict(id=tid, title=title, owner=owner, status="IN_PROGRESS", ships=ships,
-                    waits_on=[], contract="none")
+                    waits_on=[], contract="none", **({"test": test} if test else {}))
         if local or reserve(root, NAMESPACE + f"ids/{tid}", {**data, "at": now(), "who": who(root)}):
             path = directory / f"{tid}.md"
             with path.open("x", encoding="utf-8", newline="\n") as stream:
@@ -384,15 +405,22 @@ def active_claims(root):
     stem = NAMESPACE + "claims/"
     for ref, oid in refs.items():
         if ref.startswith(stem):
-            tid, generation = ref[len(stem):].split("/")
-            task_id(tid)
+            parts = ref[len(stem):].split("/")
+            if len(parts) != 2 or not ID.fullmatch(parts[0]) or not parts[1].isdigit():
+                continue  # not a claim this tool wrote; ignore it rather than fail for everyone
+            tid, generation = parts
             if int(generation) > latest.get(tid, (0, "", ""))[0]:
                 latest[tid] = (int(generation), ref, oid)
     result = {}
     for tid, (generation, ref, oid) in latest.items():
         released = NAMESPACE + f"releases/{tid}/{oid}" in refs
-        result[tid] = {**remote_value(root, ref, oid), "generation": generation,
-                       "oid": oid, "released": released}
+        try:
+            value = remote_value(root, ref, oid)
+        except (Refused, ValueError):
+            continue
+        if not isinstance(value, dict):
+            continue
+        result[tid] = {**value, "generation": generation, "oid": oid, "released": released}
     return result
 
 
@@ -472,7 +500,10 @@ def entries(root, tid, staged=False):
                 or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("code", "")))):
             raise Refused(f"{tid}: invalid receipt fields")
         dt.datetime.fromisoformat(item["at"])
-        if code_digest(root, item["commit"]) != item["code"]:
+        # A commit can vanish after a squash merge, a rebase or an amend, or be absent from a shallow
+        # clone. Such a receipt is kept but never counts; it does not block the rest of the repository.
+        present = has_commit(root, item["commit"])
+        if present and code_digest(root, item["commit"]) != item["code"]:
             raise Refused(f"{tid}: receipt code does not match its commit")
         if item["kind"] in {"test", "deployed", "live"}:
             if (type(item.get("exit_code")) is not int or type(item.get("valid")) is not bool
@@ -480,6 +511,7 @@ def entries(root, tid, staged=False):
                     or any(not isinstance(a, str) for a in item["command"])):
                 raise Refused(f"{tid}: command receipt needs its arguments, exit code and validity")
         item["hash"] = checksum
+        item["missing"] = not present  # read-only marker, never written or hashed
         result.append(item)
         previous = checksum
     return result
@@ -504,7 +536,35 @@ LEGACY_DIR = ".notquite/"
 CODE_PATHS = (".", ":(exclude)tasks", ":(exclude).workorder", ":(exclude).notquite")
 
 
+# Commits never change, so their fingerprints are worked out once per run.
+_DIGESTS = {}
+_PRESENT = {}
+
+
+def has_commit(root, commit):
+    key = (str(root), commit)
+    if key not in _PRESENT:
+        _PRESENT[key] = git(root, "cat-file", "-e", f"{commit}^{{commit}}", required=False).returncode == 0
+    return _PRESENT[key]
+
+
+def contains(root, ancestor, commit):
+    """True when commit's history includes ancestor (both must be in this clone)."""
+    return (has_commit(root, ancestor) and has_commit(root, commit)
+            and git(root, "merge-base", "--is-ancestor", ancestor, commit, required=False).returncode == 0)
+
+
 def code_digest(root, commit):
+    key = (str(root), commit)
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit) and key in _DIGESTS:
+        return _DIGESTS[key]
+    result = _code_digest(root, commit)
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+        _DIGESTS[key] = result
+    return result
+
+
+def _code_digest(root, commit):
     listing = git(root, "ls-tree", "-r", "-z", commit, required=False)
     if listing.returncode:
         raise Refused(f"commit {commit[:7]} is not in this clone; fetch the full history"
