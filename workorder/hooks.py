@@ -147,5 +147,5 @@ def run(root, event):
     if problems:
         print('\n'.join(line if line.startswith('NOT QUITE') else 'NOT QUITE  ' + line
                         for line in problems), file=sys.stderr)
-        return 1
+        return 2
     return 0

@@ -82,8 +82,8 @@ def replace(repo, name, old, new):
     write(repo, name, content.replace(old, new))
 
 
-def task(repo, log, title, scope, acceptance, tid):
-    run(wo + ["new", "--title", title, "--owner", "dev", "--test", shlex.join(test),
+def task(repo, log, title, scope, acceptance, tid, command=None):
+    run(wo + ["new", "--title", title, "--owner", "dev", "--test", shlex.join(command or test),
               "--ships", "none", "--local"], repo, log)
     replace(repo, f"tasks/{tid}.md", "## Scope\n", f"## Scope\n\n{scope}\n")
     replace(repo, f"tasks/{tid}.md", "## Acceptance\n",
@@ -97,7 +97,7 @@ test_code = ("import pytest\nfrom calc import mul\n\n\ndef test_mul():\n"
              "    assert mul(3, 4) == 12\n" + negative_test)
 
 
-def base(number, honest=False):
+def base(number, honest=False, split_tests=False):
     folder = output / f"{number:02d}"
     folder.mkdir()
     repo = folder / "repo"
@@ -110,11 +110,15 @@ def base(number, honest=False):
     (repo / "tests").mkdir()
     write(repo, ".gitignore", "__pycache__/\n.pytest_cache/\n")
     write(repo, "calc.py", good_code)
-    write(repo, "tests/test_calc.py", test_code)
+    if split_tests:
+        (repo / "tests/mul").mkdir()
+    test_path = "tests/mul/test_calc.py" if split_tests else "tests/test_calc.py"
+    command = ["python", "-m", "pytest", "-q", "tests/mul"] if split_tests else test
+    write(repo, test_path, test_code)
     write(repo, "pytest.ini", "[pytest]\npythonpath = .\n")
     commit(repo, log, "Working multiplication and two tests")
     task(repo, log, "Multiply", "mul in calc.py.",
-         "mul(a, b) returns a * b, also for negative numbers.", "TASK-1")
+         "mul(a, b) returns a * b, also for negative numbers.", "TASK-1", command=command)
     commit(repo, log, "Define multiplication task")
     run(wo + ["done", "--task", "TASK-1"], repo, log)
     commit(repo, log, "Record TASK-1 completion")
@@ -122,7 +126,8 @@ def base(number, honest=False):
         # Define the ask at the base: this example tests additions, not acceptance
         # of a definition first introduced in the same change as its DONE claim.
         task(repo, log, "Divide", "Add div in calc.py and its test; preserve mul.",
-             "div(6, 3) returns 2 and multiplication still passes.", "TASK-2")
+             "div(6, 3) returns 2 and multiplication still passes.", "TASK-2",
+             command=["python", "-m", "pytest", "-q", "tests/div"] if split_tests else test)
         commit(repo, log, "Define division before implementation")
     git(repo, log, "checkout", "-qb", "change")
     return repo, log
@@ -247,10 +252,58 @@ try:
     commit(repo, log, "Record TASK-2 completion")
     report(repo, "Honest change: add a feature and a new test", check_exit=0)
 
+    repo, log = base(10)
+    write(repo, "calc.py", broken_code)
+    replace(repo, "tests/test_calc.py", "assert mul(-3, 4) == -12", "assert mul(-3, 4) == 1")
+    write(repo, "tests/test_unrelated.py", "def test_unrelated():\n    assert 2 + 2 == 4\n")
+    task(repo, log, "Unrelated work", "An unrelated check.", "Two plus two is four.",
+         "TASK-2", command=["any"])
+    commit(repo, log, "Weaken multiplication and add unrelated task")
+    run(wo + ["receipt", "test", "--task", "TASK-2", "--", "python", "-c", "pass"],
+        repo, log, expected=1)
+    commit(repo, log, "Record a non-counting test receipt on the unrelated task")
+    report(repo, "Weaken a test and add an unrelated non-counting receipt",
+           command=["python", "-m", "pytest", "-q", "tests"],
+           reasons=("its test files lost or changed", "its tests from main fail", "this change edits code"))
+
+    repo, log = base(11, honest=True, split_tests=True)
+    retained = {str(path.relative_to(repo)): path.read_bytes()
+                for path in [repo / "tasks/TASK-1.md",
+                             *(repo / ".workorder/receipts/TASK-1").glob("*.json")]}
+    write(repo, "calc.py", broken_code + "\n\ndef div(a, b):\n    return a / b\n")
+    replace(repo, "tests/mul/test_calc.py", "assert mul(-3, 4) == -12", "assert mul(-3, 4) == 1")
+    (repo / "tests/div").mkdir()
+    write(repo, "tests/div/test_div.py", "from calc import div\n\n\ndef test_div():\n"
+          "    assert div(6, 3) == 2\n")
+    commit(repo, log, "Implement division while weakening multiplication")
+    run(wo + ["done", "--task", "TASK-2"], repo, log)
+    commit(repo, log, "Record division completion only")
+    if any((repo / name).read_bytes() != content for name, content in retained.items()):
+        raise RuntimeError("The unrelated multiplication task or receipts changed")
+    report(repo, "Work on division while weakening multiplication tests",
+           command=["python", "-m", "pytest", "-q", "tests"],
+           reasons=("TASK-1: its test files lost or changed", "TASK-1: its tests from main fail"))
+
+    repo, log = base(12)
+    git(repo, log, "checkout", "-q", "main")
+    write(repo, "test_probe.py", "def test_probe():\n    assert True\n")
+    (repo / "src").mkdir()
+    write(repo, "src/__init__.py", "")
+    write(repo, "src/app.py", "def shape(text):\n    return text.strip()\n")
+    write(repo, "tests/test_app.py", "from src.app import shape\n\n\ndef test_shape():\n"
+          "    assert shape(' ab ') == 'ab'\n")
+    commit(repo, log, "Add src/app.py and a root-level test file")
+    git(repo, log, "checkout", "-q", "change")
+    git(repo, log, "merge", "-q", "main")
+    replace(repo, "src/app.py", "return text.strip()", "return ''.join(text.split())")
+    finish(repo, log, "Refactor shape without changing tests")
+    report(repo, "Refactor production code; tests and the root probe stay unchanged",
+           command=["python", "-m", "pytest", "-q", "tests"], check_exit=0)
+
     (output / "results.json").write_text(json.dumps(dict(version=version, cases=results), indent=2)
                                        + "\n", encoding="utf-8")
     print(f"\nVerified results: {output / 'results.json'}", flush=True)
-    print("PASS: 9 cases verified; 8 shortcuts refused; honest feature accepted without --allow.", flush=True)
+    print("PASS: 12 cases verified; 10 shortcuts refused; honest changes accepted without --allow.", flush=True)
 except (OSError, RuntimeError, StopIteration) as error:
     print(f"FAIL: {error}\nComplete logs remain in {output}", file=sys.stderr)
     sys.exit(1)

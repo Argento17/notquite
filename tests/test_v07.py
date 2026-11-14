@@ -105,10 +105,17 @@ def test_show_next_step_uses_done(local_repo, work):
 
 
 def test_agent_block_updates_origin_explicitly():
-    assert ('if the repository has an origin remote, update first: `git pull --rebase origin main` '
-            "(or your branch's upstream)") in bootstrap.AGENT_BLOCK
+    assert 'if the repository has an origin remote, run `git fetch origin`' in bootstrap.AGENT_BLOCK
+    assert 'On main, update with `git pull --rebase origin main`' in bootstrap.AGENT_BLOCK
+    assert ('On a feature branch, merge or rebase main as needed, then run '
+            '`workorder renew --task <id>` if the tested code changed') in bootstrap.AGENT_BLOCK
     assert '`git pull`' not in bootstrap.AGENT_BLOCK
     assert bootstrap.AGENT_BLOCK.strip() in (PACKAGE / 'README.md').read_text()
+    readme = ' '.join((PACKAGE / 'README.md').read_text().split())
+    assert len((PACKAGE / 'README.md').read_text().splitlines()) <= 250
+    assert ('A conflicted squash can leave main with code that differs from the tested code, '
+            'so the check on main can fail.') in readme
+    assert 'Run `workorder renew --task <id>` on main and test again.' in readme
 
 
 @pytest.mark.parametrize('check', [False, True])
@@ -211,15 +218,20 @@ def test_skipped_only_rerun_does_not_also_say_passed(local_repo, all_tests):
     assert strict.returncode == 1 and 'no test passed (1 skipped)' in strict.stdout
 
 
-def test_release_versions_and_readme_pin():
+def test_release_versions_and_reference_pin():
     from workorder import __version__
-    assert __version__ == '0.8.0'
-    assert 'version = "0.8.0"' in (PACKAGE / 'pyproject.toml').read_text()
-    assert 'workorder==0.8.0' in (PACKAGE / 'README.md').read_text()
+    assert __version__ == '0.9.0'
+    assert 'version = "0.9.0"' in (PACKAGE / 'pyproject.toml').read_text()
+    assert 'workorder==0.9.0' in (PACKAGE / 'docs/reference.md').read_text()
 
 
 def test_init_workflow_uses_running_version(local_repo, monkeypatch):
     # A future release must not leave a hard-coded older pin in init.
+    # A Git install records that commit instead of the version.
+    import shlex
     monkeypatch.setattr(bootstrap, '__version__', '7.8.9', raising=False)
     assert bootstrap.initialize(local_repo) == 0
-    assert 'workorder==7.8.9' in (local_repo / '.github/workflows/workorder.yml').read_text()
+    pin = bootstrap.workorder_install()
+    assert shlex.quote(pin) in (local_repo / '.github/workflows/workorder.yml').read_text()
+    if not pin.startswith('git+'):
+        assert pin == 'workorder==7.8.9'

@@ -531,10 +531,10 @@ def test_invented_examples_are_readable_and_false_done_is_explicit(clones):
     assert records["TASK-4"]["depends_on"] == ["TASK-1"] and records["TASK-4"]["priority"] == "P2"
 
 
-def test_readme_extended_example_is_a_valid_task(clones):
+def test_reference_extended_example_is_a_valid_task(clones):
     one, _ = clones
-    readme = (PACKAGE / "README.md").read_text(encoding="utf-8")
-    block = next(b for b in readme.split("```markdown\n")[1:] if "business_owner" in b).split("```")[0]
+    reference = (PACKAGE / "docs/reference.md").read_text(encoding="utf-8")
+    block = next(b for b in reference.split("```markdown\n")[1:] if "business_owner" in b).split("```")[0]
     (one / "tasks/TASK-4.md").write_text(block + "\n# TASK-4\n", encoding="utf-8")
     record = store.record(one, "TASK-4")
     assert list(record) == list(store.EXTENDED_ORDER)
@@ -1861,7 +1861,7 @@ def test_a_squash_onto_a_moved_main_is_renewed_in_one_command(clones, tmp_path):
     ok(fresh, "check")
 
 
-def test_check_base_can_run_the_declared_tests_itself(local_repo):
+def test_check_base_can_run_the_declared_tests_itself(local_repo, monkeypatch):
     git(local_repo, "commit", "-q", "--allow-empty", "-m", "Base")
     probe = f"{PYTHON} -c \"import os, sys; sys.exit(0 if os.environ.get('WO_AGENT_ONLY') else 3)\""
     task(local_repo, "TASK-1", ships="none", test=probe)
@@ -1877,6 +1877,7 @@ def test_check_base_can_run_the_declared_tests_itself(local_repo):
     git(local_repo, "add", "tasks", ".workorder")
     git(local_repo, "commit", "-qm", "Done")
     assert ok(local_repo, "check", "--base", base).splitlines()[0] == "check: OK"  # the receipts agree
+    monkeypatch.setenv('CI', 'true')  # another machine runs fresh, without the local result cache
     ran = cli(local_repo, "check", "--base", base, "--run-tests")
     assert ran.returncode == 1 and "its test failed when this check ran it (exit 3)" in ran.stdout
 

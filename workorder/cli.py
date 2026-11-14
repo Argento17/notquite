@@ -84,16 +84,16 @@ def parser():
     check.add_argument("--verbose", action="store_true", help="print every task note instead of grouping similar notes")
     check.add_argument("--allow", metavar="TASKS", default="",
                        help="with --base: accept definition/test edits, REF-test failures, reduced pytest outcomes or complete removal"
-                            " (comma-separated ids, for a reviewer to pass)")
+                            " (comma-separated ids; tests for unowned tests, no-task for changes without task work)")
     check.add_argument("--run-tests", action="store_true",
-                       help="with --base: run tests for tasks whose file or receipts changed, including REF tests on current code")
+                       help="run selected tasks' tests; with --base, include tasks with changed tests and REF comparisons")
     check.add_argument("--strict-tests", action="store_true",
                        help="with --base: require --allow for all test and pytest configuration changes;"
                             " with --run-tests, refuse pytest runs with no passed tests")
     check.add_argument("--all-tests", action="store_true",
-                       help="with --base --run-tests: also test every DONE/CLOSED task, once per command")
+                       help="with --run-tests: also test every DONE/CLOSED task, once per code, command and timeout")
     check.add_argument("--require-task", action="store_true",
-                       help="with --base: require a new implemented or test receipt for code changes")
+                       help="with --base: require a new counting receipt on a task with a concrete test command for code changes")
     check.add_argument("--base", metavar="REF",
                        help="check changes since REF: changed or removed receipts; requirement changes"
                             " (test, contract, evidence, dependencies, Scope and Acceptance lines);"
@@ -163,7 +163,7 @@ def finish_task(root, tid, note=None, timeout=None):
         if implemented is None or implemented["code"] != s.code_digest(root, s.head(root)):
             item = s.receipt(root, tid, "implemented")
             print(f"{tid} implemented {item['commit'][:7]} - recorded")
-        item = s.receipt(root, tid, "test", command, timeout=timeout)
+        item = s.receipt(root, tid, "test", command, timeout=timeout, use_cache=True)
         print(f"{tid} test {item['commit'][:7]} exit {item['exit_code']} - recorded")
         if item['exit_code'] == 0 and not item['valid']:
             print('recorded, but does not count: ' + invalid_reason(root, item))
@@ -229,11 +229,12 @@ def main(argv=None):
             if options.task and options.named_task:
                 raise s.Refused("give the task once, positionally or with --task")
             options.task = options.task or options.named_task
-            if (options.allow or options.run_tests or options.strict_tests or options.all_tests
-                    or options.require_task) and not options.base:
-                raise s.Refused("--allow, --run-tests, --strict-tests, --all-tests and --require-task go with --base")
+            if (options.allow or options.strict_tests or options.require_task) and not options.base:
+                raise s.Refused("--allow, --strict-tests and --require-task go with --base")
             if options.all_tests and not options.run_tests:
-                raise s.Refused("--all-tests goes with --base --run-tests")
+                raise s.Refused("--all-tests goes with --run-tests")
+            if options.task and options.run_tests:
+                raise s.Refused("--run-tests checks every selected task; leave out the task")
             if options.timeout is not None and not options.run_tests:
                 raise s.Refused("--timeout goes with --run-tests")
         if options.action == "receipt" and options.timeout is not None and options.kind != "test":

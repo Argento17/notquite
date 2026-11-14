@@ -42,7 +42,7 @@ def test_stop_blocks_task_file_changes_against_target(local_repo, monkeypatch, c
         git(local_repo, 'add', 'tasks')
     if change == 'committed':
         commit_all(local_repo)
-    assert stop(local_repo, monkeypatch) == 1
+    assert stop(local_repo, monkeypatch) == 2
     assert 'NOT QUITE  TASK-1' in capsys.readouterr().err
 
 
@@ -50,7 +50,7 @@ def test_stop_checks_held_task_even_when_unchanged(local_repo, monkeypatch, caps
     task(local_repo, status='DONE', ships='none')
     commit_all(local_repo)
     local_claim(local_repo, 'TASK-1')
-    assert stop(local_repo, monkeypatch) == 1
+    assert stop(local_repo, monkeypatch) == 2
     assert 'NOT QUITE  TASK-1' in capsys.readouterr().err
 
 
@@ -63,7 +63,7 @@ def test_stop_respects_task_merge_target(local_repo, monkeypatch, capsys):
     path.write_bytes(path.read_bytes() + b'\nA local task change.\n')
     commit_all(local_repo)
     git(local_repo, 'update-ref', 'refs/heads/main', 'HEAD')
-    assert stop(local_repo, monkeypatch) == 1
+    assert stop(local_repo, monkeypatch) == 2
     assert 'NOT QUITE  TASK-1' in capsys.readouterr().err
 
 

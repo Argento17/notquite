@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.9.0 (unreleased)
+
+- Review all repository test roots and every task whose tests changed, including
+  untouched task records. Existing test edits need the owning task's acceptance,
+  or --allow tests for unowned tests. Pure additions still pass by default.
+- Replay changed tasks' REF tests and check failures on REF code before blaming
+  the change. Require explicit test_paths for wrappers and diagnose repository
+  module removals separately from missing external dependencies.
+- Keep failing or missing current tests for unfinished tasks as progress notes.
+  Allow reopening a finished task with a new counting failed receipt in the same
+  commit; unsupported DONE claims still refuse.
+- Require a new counting receipt on a task with a concrete command for code
+  changes under --require-task. --allow no-task accepts only this requirement.
+- Cache local test results by code, command and timeout. Explicit receipt test
+  and renew runs stay fresh; CI runs bypass the persistent cache. Keep successful
+  comparison output quiet and show diagnostic output when needed.
+- Make Stop refusals exit 2 on stderr and keep the stop-loop guard at exit 0.
+  Explain ships:none claims as supported with nothing to ship, and distinguish
+  implemented code from current code in successful results.
+- Generate pull request and default-branch push workflows, using local refs to
+  choose the push branch. Accept tests and no-task reviewer labels. Push checks
+  run --run-tests --all-tests without a base.
+- Start agent instructions with fetch; pull --rebase only on main, and merge or
+  rebase main into a feature branch as needed before renewing changed evidence.
+- Shorten the README, preserve its introduction, and move detailed rules to the
+  reference. Add two shortcut cases covering unrelated receipts and task work.
+- Update package versions and install pins to 0.9.0.
+- Infer test files from folders named tests or test, folders a command names,
+  test_*.py, *_test.py, conftest.py and pytest configuration. A root-level test
+  file does not make production code a test file, and an import does not make
+  a package a test file.
+- Document task-first development: define the task, commit a failing test with
+  a handover note, implement, run done, then let the generated check and the
+  check on the default branch pass without skipping the hook.
+
 ## 0.8.0 (unreleased)
 
 - Refuse test-change problems in done, pre-commit and Stop when the target is

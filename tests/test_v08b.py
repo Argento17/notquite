@@ -71,7 +71,7 @@ def test_local_commands_refuse_test_changes(local_repo, monkeypatch, capsys, act
             captured = capsys.readouterr()
             output = captured.out + captured.err
         assert store.record(root, 'TASK-1')['status'] == 'DONE'
-    assert code == 1, output
+    assert code == (2 if action == 'stop' else 1), output
     assert reason in output
     assert 'a reviewer can accept it in the pull request with the workorder-allow:TASK-1 label' in output
 
@@ -130,23 +130,30 @@ def test_implicit_test_tree_guards_all_files(local_repo, selection, helper):
     path.write_text('new = 2\n')
     store.add_note(root, 'TASK-1', 'Working')
     result = cli(root, 'check', '--base', base)
-    assert result.returncode == 1 and str(path.relative_to(root)) in result.stdout
+    assert result.returncode == 1 and path.relative_to(root).as_posix() in result.stdout
     assert '--allow TASK-1' in result.stdout
 
 
-def test_imported_helper_in_another_test_root_is_guarded(local_repo):
+def test_import_outside_test_roots_does_not_make_a_package_a_test_file(local_repo):
     root = local_repo
     setup_tests(root, 'from checks import helper\ndef test_one():\n    assert helper.value\n',
                 f'{PYTHON} -m pytest -q tests/test_app.py')
     (root / 'checks').mkdir()
-    (root / 'checks/helper.py').write_text('value = 1\n')
+    helper = root / 'checks/helper.py'
+    helper.write_text('value = 1\n')
     (root / 'checks/__init__.py').write_text('')
-    (root / 'checks/test_other.py').write_text('def test_other():\n    pass\n')
+    other = root / 'checks/test_other.py'
+    other.write_text('def test_other():\n    pass\n')
     base = commit_all(root)
-    (root / 'checks/helper.py').write_text('value = 2\n')
+    helper.write_text('value = 2\n')
     store.add_note(root, 'TASK-1', 'Working')
     result = cli(root, 'check', '--base', base)
-    assert result.returncode == 1 and 'checks/helper.py' in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'checks/helper.py' not in result.stdout
+    helper.write_text('value = 1\n')
+    other.write_text('def test_other():\n    assert True\n')
+    refused = cli(root, 'check', '--base', base)
+    assert refused.returncode == 1 and 'checks/test_other.py' in refused.stdout
 
 
 @pytest.mark.parametrize('command,script', [('sh run.sh', 'run.sh'), ('bash run.sh', 'run.sh'),
@@ -160,18 +167,22 @@ def test_wrapper_note_and_script_protection(local_repo, command, script):
     store.add_note(root, 'TASK-1', 'Working')
     result = cli(root, 'check', '--base', base)
     assert result.returncode == 1 and script in result.stdout
-    assert 'TASK-1 runs a wrapper script; set test_paths so changes to its tests are checked' in result.stdout
+    assert 'TASK-1 runs a wrapper script; set test_paths so changes to its tests are reviewed' in result.stdout
 
 
 @pytest.mark.parametrize('before,after', [('DONE', 'IN_PROGRESS'), ('DONE', 'BLOCKED'),
     ('CLOSED', 'IN_PROGRESS'), ('CLOSED', 'BLOCKED'), ('DONE', 'CANCELLED'),
     ('CLOSED', 'CANCELLED'), ('IN_PROGRESS', 'CANCELLED'), ('BLOCKED', 'CANCELLED')])
-def test_status_reversal_needs_reviewer(local_repo, before, after):
+def test_cancellation_needs_review_but_reopening_is_honest_work(local_repo, before, after):
     root = local_repo
     task(root, ships='none', status=before)
     base = commit_all(root)
     store.set_task_field(root, 'TASK-1', 'status', after)
     result = cli(root, 'check', '--base', base)
+    if after != 'CANCELLED':
+        assert result.returncode == 0, result.stdout
+        assert 'status changed:' not in result.stdout
+        return
     assert result.returncode == 1 and '--allow TASK-1' in result.stdout
     assert f'status changed: {before} -> {after}' in result.stdout
     if after == 'CANCELLED':
@@ -191,7 +202,7 @@ def test_stop_refuses_new_cancellation_of_held_task(local_repo, monkeypatch, cap
         commit_all(root)
     refuse_network(monkeypatch)
     monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
-    assert hooks.run(root, 'stop') == 1
+    assert hooks.run(root, 'stop') == 2
     output = capsys.readouterr().err
     assert 'CANCELLED' in output and 'workorder-allow:TASK-1' in output
 
@@ -233,7 +244,9 @@ def test_missing_test_dependencies_are_named(local_repo, action, command, missin
     store.add_note(root, 'TASK-1', 'Working')
     args = ['done', '--task', 'TASK-1'] if action == 'done' else ['check', '--base', base, '--run-tests']
     result = cli(root, *args)
-    assert result.returncode == 1
+    assert result.returncode == (1 if action == 'done' else 0)
+    if action == 'check':
+        assert 'Note:' in result.stdout and 'not claimed finished' in result.stdout
     assert f'{missing} is not installed in this environment' in result.stdout + result.stderr
     assert 'weakened or broke' not in result.stdout
 
@@ -308,7 +321,7 @@ def test_wrapper_advice_without_local_base(local_repo, action):
     commit_all(root)
     result = cli(root, *(['done', '--task', 'TASK-1'] if action == 'done' else ['check']))
     assert result.returncode == 0
-    assert 'TASK-1 runs a wrapper script; set test_paths so changes to its tests are checked' in result.stdout
+    assert 'TASK-1 runs a wrapper script; set test_paths so changes to its tests are reviewed' in result.stdout
 
 
 @pytest.mark.parametrize('config', ['pytest.ini', 'pyproject.toml'])

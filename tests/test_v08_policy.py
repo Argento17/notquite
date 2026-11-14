@@ -38,7 +38,10 @@ def test_reviewed_intended_change_accepts_ref_failure_for_each_worked_task(local
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert 'fail on this code' in accepted.stdout and '(allowed)' in accepted.stdout
     probe.write_text('from app import rate\ndef test_rate():\n    assert rate == .30\n')
-    assert check(root, base, '--allow', 'TASK-1,TASK-2', *flags).returncode == 1
+    unfinished = check(root, base, '--allow', 'TASK-1,TASK-2', *flags)
+    assert unfinished.returncode == 0
+    assert 'Note:' in unfinished.stdout and 'not claimed finished' in unfinished.stdout
+    assert ('no test passed' if strict else 'its test failed') in unfinished.stdout
 
 
 def test_changed_test_lines_need_review_even_when_both_runs_pass(local_repo):
@@ -86,7 +89,7 @@ def test_reviewed_test_rename_runs_ref_command_on_restored_file(local_repo):
 
 
 @pytest.mark.parametrize('status', ['IN_PROGRESS', 'DONE'])
-def test_untouched_tasks_do_not_review_shared_test_changes(local_repo, status):
+def test_untouched_tasks_review_shared_test_changes(local_repo, status):
     root = local_repo
     probe, base = setup_tests(root, 'def test_one():\n    assert True\n')
     if status == 'DONE':
@@ -94,7 +97,8 @@ def test_untouched_tasks_do_not_review_shared_test_changes(local_repo, status):
         base = commit_all(root)
     probe.write_text('def test_one():\n    assert False\n')
     result = check(root, base, '--strict-tests')
-    assert result.returncode == 0 and 'ran 0 declared tests' in result.stdout
+    assert result.returncode == 1 and '--allow TASK-1' in result.stdout
+    assert 'its test' in result.stdout
     if status == 'DONE':
         result = check(root, base, '--all-tests', '--allow', 'TASK-1')
         assert result.returncode == 1 and "regression: TASK-1's test fails" in result.stdout
@@ -115,13 +119,13 @@ def test_allow_does_not_disable_other_tasks_all_tests(local_repo):
     assert not any(line.startswith('TASK-1:') for line in result.stdout.splitlines())
 
 
-def test_worked_task_runs_ref_tests_even_without_test_file_edits(local_repo):
+def test_worked_task_reuses_identical_ref_tests_without_test_file_edits(local_repo):
     root = local_repo
     _, base = setup_tests(root, 'def test_one():\n    assert True\n')
     touch(root)
     result = check(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'ran 2 declared tests' in result.stdout
+    assert 'ran 1 declared test' in result.stdout
 
 
 @pytest.mark.parametrize('explicit', [False, True])
@@ -134,7 +138,7 @@ def test_missing_named_test_never_falls_back_to_unrelated_discovery(local_repo, 
     touch(root)
     notes = []
     problems = gate.check(root, base=base, strict_tests=True, notes=notes)
-    assert not problems, problems
+    assert problems and all('--allow tests' in p for p in problems), problems
     assert any('tests/test_tax.py' in note and 'no test files' in note for note in notes)
 
 
@@ -259,7 +263,7 @@ def test_pytest_option_directory_does_not_widen_missing_named_test(local_repo, o
     touch(root)
     notes = []
     problems = gate.check(root, base=base, strict_tests=True, notes=notes)
-    assert not problems, problems
+    assert problems and all('--allow tests' in p for p in problems), problems
     assert any('test_missing.py' in note and 'no test files' in note for note in notes)
 
 

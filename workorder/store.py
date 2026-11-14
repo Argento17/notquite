@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -1293,12 +1294,110 @@ def run_test(command, root, timeout=None, capture_output=True):
             return subprocess.CompletedProcess(command, 124, output, errors)
 
 
-def missing_test_dependency(command, code, output):
+def _test_state(root):
+    """Fingerprint the files actually executed, including dirty snapshot overlays.
+
+    HEAD alone cannot identify a staged copy or current code with REF tests overlaid.
+    Ignore only Git-ignored files and Workorder metadata, as with ordinary code checks.
+    Read Git afresh because a declared command can change files or refs in this process.
+    """
+    commit = _git_run(root, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
+    listing = _git_run(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard',
+                       '--', *CODE_PATHS).stdout
+    fingerprint = hashlib.sha256()
+    for relative in sorted(set(listing.split('\0')) - {''}):
+        path = root / relative
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            continue  # tracked deletion in the working tree or a snapshot overlay
+        if stat.S_ISLNK(mode):
+            content, kind = os.fsencode(os.readlink(path)), 'symlink'
+        elif stat.S_ISREG(mode):
+            content, kind = path.read_bytes(), 'executable' if mode & 0o111 else 'file'
+        else:
+            # A gitlink or special file needs more than its own bytes to identify
+            # executable code. Run fresh rather than reuse an incomplete fingerprint.
+            return None
+        fingerprint.update(packed([relative, kind, digest(content)]).encode('ascii') + b'\n')
+    return commit, fingerprint.hexdigest()
+
+
+def cached_test(command, root, timeout=None, *, cache_root=None, logical_command=None, fresh=False):
+    """Reuse a stable test result within this clone; CI and explicit reruns run fresh.
+
+    Snapshot callers name their original repository and command so a temporary
+    path does not defeat sharing. Results remain local in Git's private directory,
+    never in receipts or cloned files. A fresh run replaces any earlier result.
+    """
+    owner = cache_root if cache_root is not None else root
+    logical = list(command if logical_command is None else logical_command)
+    timeout = positive_seconds(timeout) if timeout is not None else None
+    ci = any(os.environ.get(name, '').lower() not in {'', '0', 'false', 'no'}
+             for name in ('CI', 'GITHUB_ACTIONS'))
+    cached_path = None
+    before = owner_head = None
+    if not ci:
+        try:
+            before = _test_state(root)
+            owner_head = (_git_run(owner, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
+                          if owner != root else before[0] if before else None)
+            if before:
+                folder = owner / git(owner, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
+                key = digest(packed([1, before[1], logical, timeout]).encode('ascii'))
+                cached_path = folder / (key + '.json')
+                if not fresh:
+                    value = json.loads(cached_path.read_text(encoding='utf-8'))
+                    if (isinstance(value, dict) and type(value.get('returncode')) is int
+                            and isinstance(value.get('stdout'), str) and isinstance(value.get('stderr'), str)):
+                        run = subprocess.CompletedProcess(command, value['returncode'], value['stdout'], value['stderr'])
+                        run.cached = True
+                        return run
+        except (OSError, Refused, ValueError):
+            pass  # an absent, malformed or unwritable cache must never prevent a run
+    if cached_path is not None:
+        try:
+            cached_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
+        run = run_test(command, root, timeout, capture_output=True)
+    finally:
+        invalidate_reads()
+    run.cached = False
+    if cached_path is not None:
+        temporary = cached_path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
+        try:
+            if (_test_state(root) == before
+                    and _git_run(owner, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip() == owner_head):
+                cached_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary.write_text(packed(dict(returncode=run.returncode, stdout=run.stdout or '',
+                                                 stderr=run.stderr or '')), encoding='utf-8')
+                os.replace(temporary, cached_path)
+        except (OSError, Refused, ValueError):
+            pass
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return run
+
+
+def missing_test_dependency(command, code, output, root=None):
     """Name a missing executable or Python module without attributing it to the code."""
     if code == 0:
         return None
     module = re.search(r"No module named\s+['\"]?([\w.]+)", output)
     if module:
+        if root is not None:
+            name = module[1].split('.')[0]
+            for base in (root, root / 'src'):
+                package = base / name
+                if ((base / (name + '.py')).is_file()
+                        or package.is_dir() and any(package.rglob('*.py'))):
+                    return (f"cannot import this repository's own module '{module[1]}'; "
+                            'check the working directory and PYTHONPATH')
         return f"{module[1]} is not installed in this environment"
     if code == 127 or (isinstance(code, str) and 'No such file or directory' in code):
         name = Path(command[0]).name
@@ -1309,7 +1408,7 @@ def missing_test_dependency(command, code, output):
     return None
 
 
-def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None):
+def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None, *, use_cache=False):
     repository(root)
     definition = record(root, tid)
     commit = head(root)
@@ -1334,7 +1433,7 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
             raise Refused("read-backs need --target")
         try:
             if kind == "test":
-                run = run_test(command, root, test_timeout(definition, timeout), capture_output=True)
+                run = cached_test(command, root, test_timeout(definition, timeout), fresh=not use_cache)
                 print(run.stdout or '', end='')
                 print(run.stderr or '', end='', file=sys.stderr)
             else:
@@ -1346,7 +1445,8 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
             exit_code, output = 127, str(error)
         if kind == 'test':
             missing = missing_test_dependency(command, exit_code,
-                                              output + (run.stderr or '') if exit_code != 127 else output)
+                                              output + (run.stderr or '') if exit_code != 127 else output,
+                                              root=root)
             if missing:
                 print(f'{tid}: {missing}')
         valid = exit_code == 0

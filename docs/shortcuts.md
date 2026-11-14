@@ -5,17 +5,19 @@ or when it never covers the new code. The first seven examples introduce the
 same bug: multiplication adds instead when the first argument is negative. The
 original test checks `mul(-3, 4) == -12`; the bug returns `1`.
 
-All eight shortcuts keep their own selected test command passing. Workorder
+All ten shortcuts keep their own selected test command passing. Workorder
 refuses the first seven without reviewer acceptance. The eighth adds broken
-division code outside the existing tests and records no task work, so
-`--require-task` refuses it. The ninth is an honest new feature, accepted without
-a label or `--allow`.
+division without task evidence. The ninth is an honest feature, accepted without
+a label. Cases 10 and 11 weaken multiplication's assertion while recording
+unrelated task activity; both refuse even though multiplication's task file and
+receipts are untouched. Case 12 refactors `src/app.py` while a root-level test
+file already exists and the tests stay unchanged; the check accepts it.
 
 Each example starts in its own disposable Git repository. `main` has correct
 multiplication, two passing tests, and a completed `TASK-1`. For cases 1–7 the
 changed code is committed and `workorder renew --task TASK-1` records fresh
-implementation and passing-test receipts. Those receipts put the task in scope
-for comparison; stale evidence is not the reason for these refusals.
+implementation and passing-test receipts. Stale evidence is not the reason for these refusals. Test review also covers
+tests of tasks whose records remain untouched, as cases 10 and 11 demonstrate.
 
 Every Workorder result below comes from:
 
@@ -23,11 +25,11 @@ Every Workorder result below comes from:
 workorder check --base main --run-tests --all-tests --require-task
 ```
 
-The own-test command is `python -m pytest -q tests/test_calc.py`, except for case
-7, which runs the narrowed command it claims. Output excerpts retain the actual
+The own-test command is `python -m pytest -q tests/test_calc.py`, except case
+7, which runs its narrowed command, and cases 10–12, which run all of `tests/`. Output excerpts retain the actual
 messages and pytest summaries; elapsed times vary.
 
-Captured with `workorder 0.8.0` and pytest 9.2.0 on Linux.
+Captured with `workorder 0.9.0` and pytest 9.2.0 on Linux.
 
 ## 1. Replace the assertion with `assert True`
 
@@ -204,7 +206,8 @@ def div(a, b):
 Commit only this code addition, keeping the original tests and all task records.
 The new `div(6, 3)` returns `18` instead of `2`. Both existing multiplication tests
 still pass because they never call division. Workorder refuses the missing task
-evidence: `--require-task` finds no new implementation or test receipt. It does
+evidence: `--require-task` finds no new counting implementation or test receipt
+on a task with a concrete command. It does
 not discover the division bug from the passing multiplication tests. A Progress
 note or a status edit alone would not supply the required new receipt.
 
@@ -240,8 +243,96 @@ then records completion with `workorder done --task TASK-2`. Defining the task
 beforehand avoids the separate review requirement for a task first created and
 claimed DONE in the same change.
 
-All three tests pass. The new task's test comparison passes, and the old
-completed task needs no label because its task file and receipts are untouched.
+All three tests pass. Both tasks' test comparisons preserve the base tests.
+The test additions need no label; no existing assertion or configuration was
+weakened.
+
+Own test (exit 0):
+
+```text
+3 passed in 0.00s
+```
+
+Workorder (exit 0):
+
+```text
+check: OK
+```
+
+## 10. Add an unrelated non-counting receipt
+
+Change the multiplication function to the negative-number bug and change its
+assertion to expect `1`. Add an unrelated passing test and a new `TASK-2` with
+`test: any`. After committing, record:
+
+```sh
+workorder receipt test --task TASK-2 -- python -c pass
+```
+
+The command passes, but the receipt does not count: TASK-2 has no implemented
+receipt. Recording it exits 1. Commit the receipt anyway; TASK-1's task file and
+receipts stay untouched. The current three tests pass, but TASK-1's edited test
+is reviewed and its REF test exposes the bug. The new receipt also fails to
+satisfy `--require-task`, which needs counting evidence on a concrete command.
+
+Own test (exit 0):
+
+```text
+3 passed in 0.00s
+```
+
+Workorder (exit 1):
+
+```text
+TASK-1: its test files lost or changed 1 lines since main (tests/test_calc.py); a reviewer accepts it with --allow TASK-1
+TASK-1: its tests from main fail on this code; a reviewer accepts this intended behavior change or test rename with --allow TASK-1
+this change edits code but no task records it with a new implemented or test receipt; run workorder receipt implemented --task ID or workorder receipt test --task ID
+```
+
+## 11. Work on division while weakening multiplication
+
+At `main`, TASK-1 declares `python -m pytest -q tests/mul`, and the open TASK-2
+declares `python -m pytest -q tests/div`. On the feature branch, add correct
+division and its test in `tests/div/test_div.py`. In the same change, introduce
+the multiplication bug and change `tests/mul/test_calc.py` to expect its wrong
+answer. Record completion only for TASK-2:
+
+```sh
+workorder done --task TASK-2
+```
+
+TASK-2 now has counting evidence and its tests pass. TASK-1's task file and
+receipts remain byte-for-byte unchanged; the runner checks this. All three
+current tests pass, but the check reviews TASK-1 because its selected tests
+changed. Its original multiplication assertion still fails on the buggy code.
+
+Own test (exit 0):
+
+```text
+3 passed in 0.00s
+```
+
+Workorder (exit 1):
+
+```text
+TASK-1: its test files lost or changed 1 lines since main (tests/mul/test_calc.py); a reviewer accepts it with --allow TASK-1
+TASK-1: its tests from main fail on this code; a reviewer accepts this intended behavior change or test rename with --allow TASK-1
+```
+
+## 12. Refactor production code while a root-level test file exists
+
+At `main`, `test_probe.py` sits at the repository root and `tests/test_app.py`
+imports `src.app`. On the feature branch, change only the body of `shape` in
+`src/app.py` (`return text.strip()` becomes `return ''.join(text.split())`).
+The tests are byte-for-byte unchanged. `workorder renew --task TASK-1` records
+the current code, then:
+
+```sh
+workorder check --base main --run-tests --all-tests --require-task
+```
+
+The root test file does not make `src/app.py` a test file, so the check accepts
+the refactor.
 
 Own test (exit 0):
 
@@ -281,7 +372,7 @@ from which it was launched. No reported test run is piped into a filtering tool.
 A successful run ends with:
 
 ```text
-PASS: 9 cases verified; 8 shortcuts refused; honest feature accepted without --allow.
+PASS: 12 cases verified; 10 shortcuts refused; honest changes accepted without --allow.
 ```
 
 The runner uses POSIX shell and Python instead of platform-specific `sed -i`
@@ -292,12 +383,15 @@ forms. It was verified on Linux; macOS execution has not been tested here.
 These refusals identify changes that need review; they do not decide whether a
 behavior change is desirable. With `--allow TASK-1`, a reviewer can accept that
 task's changed test lines or configuration, failed replay of the base tests,
-fewer passing tests, or more skipped, xfailed, or deselected tests. The current
-declared test must still pass, missing evidence still matters, and `--all-tests`
-still runs other completed tasks' current commands.
+fewer passing tests, or more skipped, xfailed, or deselected tests. Current
+declared tests for finished tasks must still pass, missing evidence still matters, and `--all-tests` runs every completed task's current command.
+Failed or missing current tests for unfinished work are notes; test edits and
+REF regressions still need review.
 
-Comparisons against base tests apply to tasks whose task file or receipts are
-touched. `--all-tests` separately checks current regressions in the remaining
-completed tasks. New implementation or test receipts satisfy `--require-task`;
-notes and status edits alone do not. See the [base-check reference](reference.md#checks-against-a-base)
+Comparisons against base tests cover tasks being worked on and every task
+whose tests changed. Repository tests outside those tasks are still reviewed;
+`--allow tests` accepts only unowned test changes. New counting implementation
+or test receipts on tasks with concrete commands satisfy `--require-task`;
+notes, status edits and non-counting receipts do not. `--allow no-task` bypasses
+only that receipt requirement. See the [base-check reference](reference.md#checks-against-a-base)
 for the policy and its limits.

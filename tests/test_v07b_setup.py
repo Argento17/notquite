@@ -288,7 +288,7 @@ def test_session_start_does_not_hold_a_task_after_losing_a_claim_race(clones, mo
     assert 'workorder show --task TASK-1' not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize('status,expected', [('IN_PROGRESS', 0), ('DONE', 1), ('CLOSED', 1)])
+@pytest.mark.parametrize('status,expected', [('IN_PROGRESS', 0), ('DONE', 2), ('CLOSED', 2)])
 def test_stop_blocks_only_unsupported_completion_claims(local_repo, monkeypatch, capsys, status, expected):
     hooks = importlib.import_module('workorder.hooks')
     task(local_repo, status=status, ships='none')
@@ -326,7 +326,7 @@ def test_stop_active_guard_prevents_a_loop(local_repo, monkeypatch, capsys):
     assert output.out == output.err == ''
 
 
-@pytest.mark.parametrize('status,expected', [('IN_PROGRESS', 0), ('DONE', 1), ('CLOSED', 1)])
+@pytest.mark.parametrize('status,expected', [('IN_PROGRESS', 0), ('DONE', 2), ('CLOSED', 2)])
 def test_stop_handles_malformed_tasks_according_to_their_claim(local_repo, monkeypatch, capsys,
                                                              status, expected):
     hooks = importlib.import_module('workorder.hooks')
@@ -349,3 +349,26 @@ def test_workflow_invalid_git_metadata_falls_back_to_running_version(local_repo,
     installs = [shlex.split(command) for command in workflow_commands(local_repo)
                 if command.startswith('python -m pip install')]
     assert installs == [['python', '-m', 'pip', 'install', 'workorder==7.8.9']]
+
+
+def test_git_install_pin_follows_metadata_not_the_readme_text(local_repo, published_install):
+    from test_workorder import PACKAGE
+    direct = {'url': 'https://example.com/team/workorder.git',
+              'vcs_info': {'vcs': 'git', 'commit_id': 'b' * 40}}
+    (published_install / 'direct_url.json').write_text(json.dumps(direct))
+    bootstrap.initialize(local_repo)
+    text = (local_repo / '.github/workflows/workorder.yml').read_text()
+    pin = bootstrap.workorder_install()
+    assert pin == 'git+https://example.com/team/workorder.git@' + 'b' * 40
+    assert shlex.quote(pin) in text
+    assert 'workorder==7.8.9' not in text
+    reference = (PACKAGE / 'docs/reference.md').read_text()
+    example_dependencies = ("      - name: Install project test dependencies\n"
+                            "        run: python -m pip install -e '.[test]'\n")
+    placeholder = ("      # Replace this step with your test dependency installation.\n"
+                   "      - name: Add your test dependencies here\n"
+                   "        run: |\n"
+                   '          echo "add your test dependencies here" >&2\n'
+                   "          exit 1\n")
+    assert text.strip().replace(shlex.quote(pin), 'workorder==0.9.0') in reference.replace(
+        example_dependencies, placeholder)

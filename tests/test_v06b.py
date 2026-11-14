@@ -1,10 +1,12 @@
 """Round-8 regressions. All Git remotes are disposable filesystem paths."""
 
 import os
+import shlex
 import subprocess
 
 import pytest
 
+from workorder import bootstrap
 from workorder import cli as command, gate, store
 from test_workorder import PACKAGE, PYTHON, cli, clones, git, local_repo, ok, task, unmerged_feature
 from test_v05 import commit_all
@@ -52,9 +54,10 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
     ok(root, 'init', '--check')
     assert snapshot == [p.read_bytes() for p in paths]
     readme = (PACKAGE / 'README.md').read_text()
-    for content in snapshot[1:3]:
-        assert content.decode().strip() in readme
-    # The README example has a test extra; this fixture has no test dependencies.
+    assert snapshot[1].decode().strip() in readme
+    reference = (PACKAGE / 'docs/reference.md').read_text()
+    assert snapshot[2].decode().strip() in reference
+    # The reference example has a test extra; this fixture has no test dependencies.
     example_dependencies = ("      - name: Install project test dependencies\n"
                             "        run: python -m pip install -e '.[test]'\n")
     placeholder = ("      # Replace this step with your test dependency installation.\n"
@@ -62,7 +65,13 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
                    "        run: |\n"
                    '          echo "add your test dependencies here" >&2\n'
                    "          exit 1\n")
-    assert snapshot[3].decode().strip() in readme.replace(example_dependencies, placeholder)
+    # Compare the workflow shape with the documented example. A Git install
+    # writes its commit pin; the example shows the release pin.
+    pin = shlex.quote(bootstrap.workorder_install())
+    generated = snapshot[3].decode()
+    assert pin in generated
+    assert generated.strip().replace(pin, 'workorder==0.9.0') in reference.replace(
+        example_dependencies, placeholder)
 
 
 def test_init_preserves_existing_hook_and_workflow(local_repo):
@@ -198,10 +207,10 @@ def test_strict_pyproject_ignores_other_sections(local_repo):
 @pytest.mark.parametrize('status', ['DONE', 'CLOSED'])
 def test_all_tests_runs_untouched_claims_once_without_history_change(local_repo, status):
     root = local_repo
-    (root / 'probe.py').write_text('from pathlib import Path\nprint("REGRESSION_RUN")\nassert Path("app.py").read_text() != "broken\\n"\n')
+    (root / 'test_probe.py').write_text('from pathlib import Path\nprint("REGRESSION_RUN")\nassert Path("app.py").read_text() != "broken\\n"\n')
     commit_all(root)
     for tid in ('TASK-1', 'TASK-2'):
-        supported(root, tid=tid, status=status, test=f'{PYTHON} probe.py')
+        supported(root, tid=tid, status=status, test=f'{PYTHON} test_probe.py')
     base = commit_all(root)
     (root / 'app.py').write_text('broken\n')
     commit_all(root)
@@ -401,7 +410,9 @@ def test_pytest_no_pass_note_and_strict_refusal(local_repo, summary, monkeypatch
     task(root, ships='none', test=test)
     base = commit_all(root)
     supported(root, test=test)
-    # Real pytest supplies the summary. Empty collection fails with exit 5; still report why.
+    # Real pytest supplies the summary; CI runs fresh after the environment changes.
+    monkeypatch.setenv('CI', 'true')
+    # Empty collection fails with exit 5; still report why.
     if summary == 'no tests ran':
         monkeypatch.setenv('WO_EMPTY', '1')
     before = {p: p.read_bytes() for p in (root / '.workorder').rglob('*.json')}
@@ -500,11 +511,13 @@ def test_acceptance_summary_counts_only_supported_contractless_claims(local_repo
 
 
 def test_docs_state_review_rights_and_opt_in_policies():
-    for name in ('README.md', 'docs/reference.md'):
-        text = (PACKAGE / name).read_text()
-        for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
-                       'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.8.0'):
-            assert phrase in text
+    text = (PACKAGE / 'docs/reference.md').read_text()
+    for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
+                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.9.0'):
+        assert phrase in text
+    readme = (PACKAGE / 'README.md').read_text()
+    for target in ('docs/reference.md', 'docs/guarantees.md', 'docs/shortcuts.md'):
+        assert target in readme
 
 
 @pytest.mark.parametrize('quiet,outcome', [('-qq', 'skip'), ('-q', 'xfail'), ('-qq', 'xfail'), ('-qq', 'mixed'),

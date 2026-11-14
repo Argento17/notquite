@@ -22,8 +22,7 @@ def setup_tests(root, body, command=None, paths=None):
 
 
 def checked(root, base, *flags):
-    # Test review belongs to tasks this change works on. Finished, untouched
-    # tasks deliberately remain outside this helper's selection.
+    # Exercise metadata-selected unfinished tasks as well as selection by changed tests.
     for tid, record in gate.records(root).items():
         if record['status'] not in gate.FINISHED:
             store.add_note(root, tid, 'Working on these tests')
@@ -64,7 +63,7 @@ def test_passing_additions_are_free_but_edits_require_acceptance(local_repo, cha
         assert '--allow TASK-1' in result.stdout
         assert checked(root, base, '--allow', 'TASK-1').returncode == 0
     assert 'no declared test ran' not in result.stdout
-    assert '1 passed' in result.stdout
+    assert ('1 passed' if change == 'rewrite' else '2 passed') in result.stdout
 
 
 @pytest.mark.parametrize('allowed', [False, True])
@@ -134,7 +133,7 @@ def test_pytest_configuration_needs_acceptance_without_strict(local_repo, config
 
 @pytest.mark.parametrize('status', ['DONE', 'CLOSED'])
 @pytest.mark.parametrize('all_tests', [False, True])
-def test_finished_untouched_shared_test_users_need_no_acceptance(local_repo, status, all_tests):
+def test_finished_shared_test_users_need_acceptance_in_strict_mode(local_repo, status, all_tests):
     root = local_repo
     probe, _ = setup_tests(root, 'def test_one():\n    assert True\n')
     for tid in ('TASK-1', 'TASK-2'):
@@ -142,13 +141,15 @@ def test_finished_untouched_shared_test_users_need_no_acceptance(local_repo, sta
     base = commit_all(root, 'Finished shared test users')
     probe.write_text(probe.read_text() + '\ndef test_two():\n    assert True\n')
     result = checked(root, base, '--strict-tests', *(['--all-tests'] if all_tests else []))
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert '--allow TASK-' not in result.stdout
-    assert '1 passed' not in result.stdout
-    assert ('2 passed' in result.stdout) == all_tests
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert '--allow TASK-1' in result.stdout and '--allow TASK-2' in result.stdout
+    assert '1 passed' not in result.stdout  # successful REF output stays quiet
+    assert '2 passed' in result.stdout
+    accepted = checked(root, base, '--strict-tests', '--allow', 'TASK-1,TASK-2')
+    assert accepted.returncode == 0, accepted.stdout
 
 
-def test_finished_untouched_shared_test_users_only_run_with_all_tests(local_repo):
+def test_finished_shared_test_users_run_when_their_tests_change(local_repo):
     root = local_repo
     (root / 'app.py').write_text('value = 1\n')
     probe, _ = setup_tests(root, 'from app import value\ndef test_one():\n    assert value == 1\n')
@@ -157,10 +158,10 @@ def test_finished_untouched_shared_test_users_only_run_with_all_tests(local_repo
     (root / 'app.py').write_text('value = 2\n# Changed code invalidates the previous import cache.\n')
     probe.write_text('from app import value\ndef test_one():\n    assert value == 2\n')
     result = checked(root, base, '--strict-tests')
-    assert result.returncode == 0
-    assert 'ran 0 declared tests' in result.stdout
-    assert checked(root, base, '--all-tests').returncode == 0
-    assert '--allow TASK-1' not in result.stdout
+    assert result.returncode == 1
+    assert 'fail on this code' in result.stdout
+    assert checked(root, base, '--all-tests', '--allow', 'TASK-1').returncode == 0
+    assert '--allow TASK-1' in result.stdout
 
 
 def test_touching_finished_task_restores_strict_acceptance_requirement(local_repo):
@@ -180,7 +181,8 @@ def test_pytest_default_discovery_compares_changed_tests(local_repo):
     probe.write_text('def test_one():\n    assert True\ndef test_two():\n    assert True\n')
     result = checked(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '2 passed' in result.stdout and '1 passed' in result.stdout
+    assert '2 passed' in result.stdout and '1 passed' not in result.stdout
+    assert 'ran 2 declared tests' in result.stdout
 
 
 @pytest.mark.parametrize('kind', ['script', 'binary'])
@@ -389,4 +391,5 @@ def test_alternate_pytest_configs_supply_custom_discovery_patterns(local_repo, c
     base = commit_all(root)
     (root / 'check_added.py').write_text('def test_new():\n    assert False\n')
     result = checked(root, base)
-    assert result.returncode == 1 and 'its test failed' in result.stdout
+    assert result.returncode == 0 and 'its test failed' in result.stdout
+    assert 'Note:' in result.stdout and 'not claimed finished' in result.stdout

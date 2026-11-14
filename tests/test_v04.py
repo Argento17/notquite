@@ -424,7 +424,7 @@ def test_staged_file_receipt_failure_selects_its_task(local_repo):
     ok(root, "check")
     failure = raw_receipt(root, "test", parents=[tested["hash"]], at=2, exit_code=9, valid=False)
     path = receipt_file(root, failure)
-    git(root, "add", str(path.relative_to(root)))
+    git(root, "add", path.relative_to(root).as_posix())
     path.unlink()  # index content must decide, not the checkout's passing test
     refused = cli(root, "check", "--staged")
     assert refused.returncode == 1 and "passing test on" in refused.stdout

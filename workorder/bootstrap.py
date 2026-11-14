@@ -1,4 +1,4 @@
-"""Repository setup text, also shown verbatim in the README."""
+"""Repository setup text, also shown in the README and reference."""
 
 from importlib import metadata
 import difflib
@@ -12,7 +12,7 @@ from . import store as s
 
 
 AGENT_BLOCK = r"""## Tasks
-- Start every session from the task: if the repository has an origin remote, update first: `git pull --rebase origin main` (or your branch's upstream). Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
+- Start every session from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed, then run `workorder renew --task <id>` if the tested code changed. Use the repository's default branch name if it is not main. Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - Work on a branch and open a pull request for review.
 - After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
@@ -32,6 +32,8 @@ WORKFLOW = r"""name: Workorder
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: @DEFAULT_BRANCH@
 permissions: {contents: read}
 jobs:
   check:
@@ -42,14 +44,32 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
 @DEPENDENCIES@      - run: python -m pip install @WORKORDER@
+      - name: Check tasks after merge
+        if: github.event_name == 'push'
+        run: workorder check --run-tests --all-tests
       - name: Check tasks and run their tests
+        if: github.event_name == 'pull_request'
         env:
           BASE: origin/${{ github.base_ref }}
         run: |
-          # task ids from pull request labels named workorder-allow:<ID>
-          allow=$(jq -r '[.pull_request.labels[].name | select(test("^workorder-allow:[A-Z][A-Z0-9]*-[1-9][0-9]*$")) | sub("^workorder-allow:"; "")] | join(",")' "$GITHUB_EVENT_PATH")
+          # Reviewed task ids, unowned tests, or the code-to-task requirement.
+          allow=$(jq -r '[.pull_request.labels[].name | select(test("^workorder-allow:([A-Z][A-Z0-9]*-[1-9][0-9]*|tests|no-task)$")) | sub("^workorder-allow:"; "")] | join(",")' "$GITHUB_EVENT_PATH")
           workorder check --base "$BASE" --run-tests --all-tests --require-task ${allow:+--allow "$allow"}
 """
+
+
+def default_branch(root):
+    """Choose the push trigger from local refs without fetching during setup."""
+    remote_head = s.git(root, 'symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD',
+                        required=False).stdout.strip()
+    prefix = 'refs/remotes/origin/'
+    if remote_head.startswith(prefix):
+        return remote_head[len(prefix):]
+    for branch in ('main', 'master'):
+        if any(s.git(root, 'show-ref', '--verify', '--quiet', ref, required=False).returncode == 0
+               for ref in (f'refs/remotes/origin/{branch}', f'refs/heads/{branch}')):
+            return branch
+    return 'main'
 
 
 def has_test_extra(path):
@@ -192,7 +212,8 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
                                '          echo "add your test dependencies here" >&2\n'
                                '          exit 1\n')
         workflow = WORKFLOW.replace('@DEPENDENCIES@', dependency_step).replace(
-            '@WORKORDER@', shlex.quote(workorder_install()))
+            '@WORKORDER@', shlex.quote(workorder_install())).replace(
+            '@DEFAULT_BRANCH@', json.dumps([default_branch(root)]))
         original = path.read_text(encoding='utf-8') if path.exists() else ''
         if update_workflow:
             print(''.join(difflib.unified_diff(original.splitlines(keepends=True),
