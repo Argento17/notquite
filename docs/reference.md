@@ -15,7 +15,7 @@ code in `workorder/`; if the two disagree, the code wins and this file has a bug
 | `workorder receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
 | `workorder check [ID or tasks/ID.md]` | No argument: one line per refused claim in the repository, or `check: OK`; use this in hooks and CI. With a task: an explanation of that task alone |
 | `workorder check --staged` | Checks the staged versions of task files and receipts (for pre-commit); also refuses a commit that newly claims DONE or CLOSED on code other than the implemented code |
-| `workorder check --base REF` | Also refuses if receipts committed on `REF` were removed or changed (for CI: the pull request's base branch) |
+| `workorder check --base REF` | Also refuses if receipts committed on `REF` were removed or changed, or if a commit since `REF` newly claimed DONE or CLOSED on code other than the implementation it relied on (for CI: the pull request's base branch) |
 | `workorder show --task ID` | Recorded status, computed status, what is still owed |
 | `workorder claim --task ID` / `release --task ID` | Takes or gives up a task with a pushed tag |
 | `workorder claims` | Active claims |
@@ -27,7 +27,9 @@ why). Run commands from the repository root.
 
 ## Task files
 
-`tasks/<id>.md` starts with front matter between two `---` lines, one
+Only files named `tasks/<id>.md` are task records; other files in `tasks/`
+(a README, notes, subfolders) are ignored. A task file starts with front
+matter between two `---` lines, one
 `key: value` per line, each key once. These seven fields are required: `id`,
 `title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
 
@@ -101,7 +103,9 @@ may be used; any other field is refused, so typos are caught.
 `waits_on` and `depends_on` form one dependency list: `waits_on` items plus
 `task:<id>` for each `depends_on` id, without repeats. Listing a task in both
 is allowed. A DONE or CLOSED claim is refused until every task dependency
-computes DONE or CLOSED and no `person:` wait remains. A task may not both
+is finished and no `person:` wait remains. A task dependency is finished when
+its evidence computes DONE or CLOSED and its own dependencies are finished,
+all the way down; `ready` lists such open dependencies as blocked. A task may not both
 wait for and block the same task. Missing task dependencies and dependency
 cycles, across both fields, make `check` fail.
 
@@ -120,7 +124,8 @@ add requirements.
 - **CLOSED** when DONE and delivery is complete:
   - `ships: none`: nothing more.
   - `ships: repo`: a `merged` receipt, after the implementation, whose code
-    matches the implemented code.
+    matches the implemented code. Any such receipt counts; a later one that
+    cannot count does not undo it.
   - `ships: live`: also a valid `deployed` receipt after that merge, with the
     implemented code, then a valid `live` receipt for the same commit and
     target. "Valid" means the read-back command exited 0 and returned the
@@ -139,13 +144,17 @@ can be committed after the evidence is recorded, and later runs on the same
 code, on any commit, still count.
 
 The verdict looks only at the newest `implemented` receipt, never at HEAD.
-Two checks cover the gap: `check --staged` (the pre-commit hook) refuses a
+Three checks cover the gap. `check --staged` (the pre-commit hook) refuses a
 commit that changes a task's status to DONE or CLOSED when the code in that
-commit differs from the implemented code, and `check <id>` adds a note when
-HEAD's code differs. Code that lands after a task is DONE is not re-tested.
+commit differs from the implemented code. `check --base REF` applies the same
+rule in CI to every commit since `REF` that made such a change, unless a newer
+`implemented` receipt was recorded after it. `check <id>` adds a note when
+HEAD's code differs, and a `Command:` line naming the command behind the
+deciding test run. Code that lands after a task is DONE is not re-tested.
 
-Receipts name commits. If those commits disappear (a squash or rebase merge
-whose branch is then deleted), `check` refuses in any clone that lacks them.
+Receipts name commits. If those commits disappear (a squash merge, a rebase
+or an amend, once the originals are gone), `check` refuses in any clone that
+lacks them.
 Use merge commits for branches that carry receipts.
 
 ## Receipts

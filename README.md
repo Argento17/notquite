@@ -78,11 +78,13 @@ Out: changing how dates are entered.
 
 - **For people and agents:** `mission`, `summary`, `next`, the owners, `priority` and the five sections say what the work is, what is in and out, who does what, and how it will be accepted. Workorder keeps them in the file and never treats them as evidence.
 - **`status`** is the claim: `IN_PROGRESS`, `BLOCKED`, `DONE` or `CLOSED`. You or the agent edit it. Workorder never edits it and never trusts it.
-- **`depends_on`** lists tasks this one needs. `waits_on` takes `task:TASK-2` or `person:alex` items (remove a person wait when it is answered). Both form one dependency list, and a task cannot be DONE while one is open. `blocks` is informational: it is checked against the other tasks but never enforced.
+- **`depends_on`** lists tasks this one needs. `waits_on` takes `task:TASK-2` or `person:alex` items (remove a person wait when it is answered). Both form one dependency list, and a task cannot be DONE while one is open. A task dependency counts as finished only when its own dependencies are finished too. `blocks` is informational: it is checked against the other tasks but never enforced.
 - **`ships`** sets what CLOSED needs beyond DONE: `none`, `repo` (the default) or `live`.
 - **`contract`** is `none` or a path to a contract that maps each acceptance criterion to evidence Workorder can check ([see below](#contracts-and-evidence)). Without one, the Acceptance list is for the agent and the reviewer; Workorder does not read it.
 
 Front matter is a small, documented subset: single-line text, JSON strings and lists, `>` and `|` blocks for `mission`, `next` and `summary`, and indented `- TASK-1` lists. Other YAML, and unknown fields, are refused, so a typo cannot quietly drop a dependency. The [reference](https://github.com/Argento17/workorder/blob/main/docs/reference.md#what-yaml-is-read) lists exactly what is read.
+
+Files in `tasks/` whose names are not task ids, such as a README or a notes folder, are ignored.
 
 For small work, `workorder new --template simple` writes the seven required fields only (`id`, `title`, `owner`, `status`, `ships`, `waits_on`, `contract`), the format of version 0.1.0. Both formats can sit in the same repository. Version 0.1.0 refuses task files that use the other fields, so upgrade every clone and CI pin before using them.
 
@@ -179,13 +181,13 @@ Claims always need `origin`. Without a remote there are no claims at all: Workor
 3. Every critical contract criterion met, if there is a contract.
 4. Nothing left in `waits_on` or `depends_on`: each task dependency computes DONE or CLOSED, and no `person:` wait remains.
 
-"Code" is every tracked file outside `tasks/` and `.workorder/`, so committing the task file and receipts does not change it: a later run on the same code still counts, pass or fail. A test recorded before the latest implementation, on different code, or while files or HEAD changed does not count. Each `receipt test` runs the command itself and records the real exit code. Workorder does not choose the command; use the project's real tests.
+"Code" is every tracked file outside `tasks/` and `.workorder/`, so committing the task file and receipts does not change it: a later run on the same code still counts, pass or fail. A test recorded before the latest implementation, on different code, or while files or HEAD changed does not count. Each `receipt test` runs the command itself and records the real exit code. Workorder does not choose the command; use the project's real tests. `workorder check <id>` shows the command behind the deciding run.
 
 A receipt that is recorded but cannot count, such as a test on code that changed since `receipt implemented`, says why and exits 1.
 
 A DONE is about the last recorded implementation:
 
-- The pre-commit hook refuses a commit that newly marks a task DONE or CLOSED when the code in that commit differs from the implemented code.
+- The pre-commit hook, and `workorder check --base` in CI, refuse a commit that newly marks a task DONE or CLOSED when the code in that commit differs from the implemented code.
 - `workorder check <id>` adds a note when the code has changed since the implementation.
 - Code that lands after a task is DONE does not reopen it.
 
@@ -199,7 +201,7 @@ DONE, plus what the task ships:
 | `repo` | `receipt merged`: the tested code is on `origin`'s `main` (`--ref refs/heads/<branch>` to change) |
 | `live` | the merge, then `receipt deployed --target <name> -- <command>`, then a later `receipt live --target <name> -- <command>` |
 
-`receipt merged` and `receipt deployed` count only when that commit's code is exactly the implemented code: a fast-forward merge with nothing else landed on the branch. Once other work has landed, the receipt is recorded but does not count, so on a busy branch a `repo` or `live` task may not reach CLOSED.
+`receipt merged` and `receipt deployed` count only when that commit's code is exactly the implemented code: a fast-forward merge with nothing else landed on the branch. Once other work has landed, a new receipt is recorded but does not count, so on a busy branch a `repo` or `live` task may not reach CLOSED. A merge receipt that did count stays counted.
 
 A deployment or live read-back counts when its command exits 0 and its output contains the expected full commit ID. Workorder reads back; it does not deploy. A passing read-back shows that the command returned that commit ID, nothing more. `receipt merged` reads from `origin`, so `repo` and `live` tasks need a remote.
 
@@ -228,7 +230,7 @@ A contract maps each acceptance criterion to the evidence that counts for it:
 | `TEST` | `receipt:<hash>` of a passing test on the implemented code | `REAL_OR_TEST` only |
 | `MOCK`, `SYNTHETIC`, `UNKNOWN` | recorded for honesty | nothing |
 
-Critical criteria must be met before DONE. This contract fails: a mock result cannot satisfy a request for real output. `REAL` is a label the author declares, so the file and its hash prove which file was meant, not where it came from, and the contract itself can be edited like any task file: review changes to it. See [examples/](https://github.com/Argento17/workorder/tree/main/examples) for sample tasks and this contract.
+Critical criteria must be met before DONE. This contract fails: a mock result cannot satisfy a request for real output. `REAL` is a label the author declares, so the file and its hash prove which file was meant, not where it came from, and the contract itself can be edited like any task file: review changes to it. Keep contracts and evidence files under `.workorder/` (for example `.workorder/evidence/`): files there are outside the code fingerprint, so adding one does not change the implemented code. See [examples/](https://github.com/Argento17/workorder/tree/main/examples) for sample tasks and this contract.
 
 ## Hooks and CI
 
@@ -259,14 +261,14 @@ jobs:
       - run: workorder check --base origin/${{ github.base_ref }}
 ```
 
-`--base` also refuses if receipts already on the base branch were removed or changed. The pre-commit hook alone cannot promise that, because `git commit --no-verify` skips it.
+`--base` adds two checks the pre-commit hook alone cannot promise, because `git commit --no-verify` skips the hook: receipts already on the base branch must still be there, unchanged, and a commit since the base that marked a task DONE or CLOSED must carry its implemented code.
 
 Use merge commits for branches that carry receipts. Receipts name the commits they were recorded on. A squash merge, a rebase or an amend replaces those commits; once the originals are gone (the branch deleted, or never pushed), a fresh clone does not have them, and `workorder check` there refuses.
 
 ## Limitations
 
 - Receipts are hash-chained, not signed. Anyone who can write files can forge one, and rewriting Git history rewrites the proof. Workorder catches missing and stale evidence, not deliberate forgery.
-- The test is whatever command is recorded. A passing test is only as good as its assertions, and a later passing run of a different command clears an earlier failure.
+- The test is whatever command is recorded. A passing test is only as good as its assertions, and a later passing run of a different command clears an earlier failure; `workorder check <id>` shows which command decided.
 - Receipts already committed can only be appended to. The pre-commit hook enforces this against the previous commit, and `workorder check --base <branch>` against the base branch. Without `--base`, a commit made with `git commit --no-verify` can remove receipts unnoticed.
 - Squash merges, rebases and amends of commits that receipts name are not supported yet (see [Hooks and CI](#hooks-and-ci)).
 - Only task files are checked. Claims made in chat, issues or pull request text are not.

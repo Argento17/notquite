@@ -14,8 +14,19 @@ refuses a claim.
 - `workorder new` writes the extended task by default; `--template simple`
   writes the 0.1.0 seven-field format. The README leads with the task format.
 
-Fixes for what an independent review found; every finding below is now a
+Fixes for what five independent reviews found; every finding below is now a
 regression test.
+
+- A task dependency counts as finished only when its own dependencies are
+  finished too. A task waiting on a person no longer lets the tasks that
+  depend on it pass as DONE, and `ready` lists it as blocked.
+- `check --base REF` also refuses a commit since `REF` that newly claimed DONE
+  or CLOSED on code other than the implementation it relied on: the CI form of
+  the pre-commit rule.
+- A merge receipt that counted stays counted when a later one cannot count.
+- `check <id>` shows the command behind the deciding test run.
+- Only `tasks/<id>.md` files are task records; a README or notes in `tasks/`
+  no longer break every check. A broken contract file is named in the error.
 
 - A test run counts when its code matches the implemented code, on any commit.
   Committing the task file and receipts no longer hides later runs: a later

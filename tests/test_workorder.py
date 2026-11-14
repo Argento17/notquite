@@ -1299,7 +1299,7 @@ def test_receipts_and_claims_no_longer_carry_the_hostname(clones):
 @pytest.mark.parametrize("ships, kind, message", [
     ("none", "merged", "has ships: none, so a merged receipt is not part of its evidence"),
     ("repo", "deployed", "has ships: repo, so a deployed receipt is not part of its evidence"),
-    ("live", "deployed", "no merge is recorded since the implementation"),
+    ("live", "deployed", "no merge of the tested code is recorded since the implementation"),
 ])
 def test_delivery_receipts_that_cannot_count_exit_1_with_a_reason(clones, ships, kind, message):
     one, _ = clones
@@ -1324,3 +1324,95 @@ def test_a_legacy_notquite_folder_stays_outside_the_code_fingerprint(local_repo)
     git(local_repo, "commit", "-qm", "Receipts from NotQuite")
     assert store.code_digest(local_repo, store.head(local_repo)) == before
     assert store.clean_code(local_repo)
+
+
+# 0.3.0: the four-reviewer round, kept as regression tests.
+
+def finish_with_evidence(root, tid):
+    ok(root, "receipt", "implemented", "--task", tid)
+    ok(root, "receipt", "test", "--task", tid, "--", PYTHON, "-c", "pass")
+
+
+def test_a_dependency_waiting_on_a_person_holds_back_its_dependents(local_repo):
+    task(local_repo, "TASK-1", ships="none", waits=["person:alex"])
+    task(local_repo, "TASK-2", ships="none", waits=["task:TASK-1"])
+    task(local_repo, "TASK-3", ships="none", waits=["task:TASK-2"])
+    for tid in ("TASK-1", "TASK-2", "TASK-3"):
+        finish_with_evidence(local_repo, tid)
+    assert "computed CLOSED" in ok(local_repo, "show", "--task", "TASK-1")
+    task(local_repo, "TASK-2", status="DONE", ships="none", waits=["task:TASK-1"])
+    task(local_repo, "TASK-3", status="DONE", ships="none", waits=["task:TASK-2"])
+    refused = cli(local_repo, "check")
+    assert refused.returncode == 1
+    assert "TASK-2 says DONE but owes: task:TASK-1" in refused.stdout
+    assert "TASK-3 says DONE but owes: task:TASK-2" in refused.stdout
+    task(local_repo, "TASK-2", ships="none", waits=["task:TASK-1"])
+    task(local_repo, "TASK-3", ships="none", waits=["task:TASK-2"])
+    assert ok(local_repo, "ready").splitlines() == [
+        "TASK-1 blocked: person:alex", "TASK-2 blocked: task:TASK-1", "TASK-3 blocked: task:TASK-2"]
+
+
+def test_a_later_merge_receipt_that_cannot_count_does_not_undo_an_earlier_one(clones):
+    one, two = clones
+    implement(one)
+    passed(one)
+    merge(one)
+    task(one, status="CLOSED")
+    ok(one, "check")
+    (two / "other.py").write_text("x = 1\n", encoding="utf-8")
+    git(two, "add", "other.py")
+    git(two, "commit", "-qm", "Other work")
+    git(two, "pull", "-q", "--no-rebase", "origin", "main")
+    git(two, "push", "-q", "origin", "HEAD:refs/heads/main")
+    late = cli(one, "receipt", "merged", "--task", "TASK-1")
+    assert late.returncode == 1 and "does not count" in late.stdout
+    ok(one, "check")
+    assert "computed CLOSED" in ok(one, "show", "--task", "TASK-1")
+
+
+def test_files_in_tasks_that_are_not_task_ids_are_ignored(local_repo):
+    task(local_repo, "TASK-1", ships="none")
+    (local_repo / "tasks" / "README.md").write_text("# How we write tasks\n", encoding="utf-8")
+    (local_repo / "tasks" / "notes").mkdir()
+    (local_repo / "tasks" / "notes" / "TASK-1.md").write_text("draft\n", encoding="utf-8")
+    assert ok(local_repo, "check").strip() == "check: OK"
+    assert ok(local_repo, "ready").strip() == "TASK-1 free"
+
+
+def test_a_broken_contract_file_is_named(local_repo):
+    task(local_repo, "TASK-1", ships="none", contract=".workorder/contracts/broken.json")
+    path = local_repo / ".workorder" / "contracts" / "broken.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+    result = cli(local_repo, "check")
+    assert result.returncode == 1
+    assert "TASK-1: contract .workorder/contracts/broken.json is not valid JSON" in result.stderr
+
+
+def test_explain_shows_the_command_that_decided_the_test_line(local_repo):
+    task(local_repo, "TASK-1", ships="none", status="DONE")
+    ok(local_repo, "receipt", "implemented", "--task", "TASK-1")
+    ok(local_repo, "receipt", "test", "--task", "TASK-1", "--", "git", "--version")
+    explained = ok(local_repo, "check", "TASK-1")
+    assert "  Command:  git --version\n" in explained
+
+
+def test_check_base_refuses_a_done_claimed_since_the_base_on_untested_code(local_repo):
+    task(local_repo, "TASK-1", ships="none")
+    finish_with_evidence(local_repo, "TASK-1")
+    git(local_repo, "add", "tasks", ".workorder")
+    git(local_repo, "commit", "-qm", "Tested")
+    base = store.head(local_repo)
+    (local_repo / "app.py").write_text("items = ['untested']\n", encoding="utf-8")
+    task(local_repo, "TASK-1", ships="none", status="DONE")
+    git(local_repo, "add", "app.py", "tasks")
+    git(local_repo, "commit", "-qm", "Done, without testing the change")  # hooks skipped, like --no-verify
+    claim = store.head(local_repo)[:7]
+    ok(local_repo, "check")  # the verdict is about the implemented code
+    refused = cli(local_repo, "check", "--base", base)
+    assert refused.returncode == 1
+    assert f"TASK-1 was marked DONE in {claim} on code other than the implemented commit" in refused.stdout
+    finish_with_evidence(local_repo, "TASK-1")  # evidence renewed on the claimed code
+    git(local_repo, "add", ".workorder")
+    git(local_repo, "commit", "-qm", "Tested again")
+    ok(local_repo, "check", "--base", base)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 
 from . import store as s
 
@@ -11,7 +12,11 @@ def contract_debt(root, record, history, implemented, staged=False):
     path = record["contract"]
     if path == "none":
         return []
-    contract = json.loads(s.read_text(root, path, staged))
+    try:
+        contract = json.loads(s.read_text(root, path, staged))
+    except json.JSONDecodeError as error:
+        raise s.Refused(f"{record['id']}: contract {path} is not valid JSON"
+                        f" ({error.msg}, line {error.lineno})") from None
     if not isinstance(contract, dict) or contract.get("task") != record["id"]:
         raise s.Refused("contract must name its task")
     criteria = contract.get("criteria")
@@ -68,9 +73,13 @@ def verdict(root, record, staged=False):
     done += contract_debt(root, record, current, implemented, staged)
     delivery = []
     if record["ships"] != "none":
-        merge_index = max((i for i, e in enumerate(current) if e["kind"] == "merged"), default=-1)
-        merged = current[merge_index] if merge_index >= 0 else None
-        if not merged or not implemented or merged["code"] != implemented["code"]:
+        # Any merge receipt of the tested code counts. A later one, taken after other work landed on the
+        # branch, cannot count and does not undo it.
+        merges = [i for i, e in enumerate(current) if e["kind"] == "merged"
+                  and implemented and e["code"] == implemented["code"]]
+        merge_index = merges[-1] if merges else -1
+        merged = current[merge_index] if merges else None
+        if not merged:
             delivery.append("merge of the tested code")
         if record["ships"] == "live":
             after_merge = current[merge_index + 1:] if merged else []
@@ -89,26 +98,36 @@ def verdict(root, record, staged=False):
 
 
 def records(root, staged=False):
+    """Task records: tasks/<ID>.md. Other files there (a README, notes, subfolders) are not tasks."""
     result = {}
     for path in s.files(root, "tasks", staged):
-        if path.endswith(".md"):
-            tid = path.removeprefix("tasks/").removesuffix(".md")
-            result[tid] = s.record(root, tid, staged)
+        name = path.removeprefix("tasks/")
+        if name.endswith(".md") and "/" not in name and s.ID.fullmatch(name[:-3]):
+            result[name[:-3]] = s.record(root, name[:-3], staged)
     return result
 
 
-def waits(record, all_records, views):
+def waits(record, all_records, views, seen=frozenset()):
+    """Open dependencies: person waits, and tasks that are not finished."""
     result = []
     for wait in s.dependencies(record):
         kind, value = wait.split(":", 1)
-        if kind == "person" or value not in all_records or views[value][0] not in {"DONE", "CLOSED"}:
+        if kind == "person" or not finished(value, all_records, views, seen):
             result.append(wait)
     return result
 
 
-def committed_status(root, tid):
-    """The status line of tasks/<tid>.md in HEAD, or None if HEAD has no readable record."""
-    shown = s.git(root, "show", f"HEAD:tasks/{tid}.md", required=False)
+def finished(tid, all_records, views, seen=frozenset()):
+    """A dependency is finished when its evidence computes DONE or CLOSED and its own dependencies are
+    finished, all the way down. A cycle never counts as finished."""
+    if tid not in all_records or tid in seen or views[tid][0] not in {"DONE", "CLOSED"}:
+        return False
+    return not waits(all_records[tid], all_records, views, seen | {tid})
+
+
+def committed_status(root, tid, rev="HEAD"):
+    """The status line of tasks/<tid>.md at a revision, or None if it has no readable record there."""
+    shown = s.git(root, "show", f"{rev}:tasks/{tid}.md", required=False)
     if shown.returncode:
         return None
     lines = shown.stdout.replace("\r\n", "\n").splitlines()
@@ -155,6 +174,46 @@ def base_problems(root, base, staged=False):
     return problems
 
 
+def implementation_at(root, rev, tid):
+    """The newest implemented receipt in tid's ledger as committed at rev, or None."""
+    shown = s.git(root, "show", f"{rev}:{s.ledger_path(tid)}", required=False)
+    found = None
+    for line in shown.stdout.splitlines() if shown.returncode == 0 else []:
+        try:
+            item = json.loads(line)
+        except ValueError:
+            return None
+        if isinstance(item, dict) and item.get("kind") == "implemented":
+            found = item
+    return found
+
+
+def claimed_since_on_changed_code(root, base, record, staged=False):
+    """The CI form of the pre-commit rule: a commit after base that newly claimed DONE or CLOSED must
+    carry exactly the code of the implementation it relied on, unless that evidence was renewed later."""
+    tid, finished_states = record["id"], {"DONE", "CLOSED"}
+    if record["status"] not in finished_states:
+        return None
+    commits = s.git(root, "log", "--format=%H", "--reverse", f"{base}..HEAD", "--",
+                    f"tasks/{tid}.md").stdout.split()
+    previous, claim = committed_status(root, tid, base), None
+    for commit in commits:
+        status = committed_status(root, tid, commit)
+        if status in finished_states and previous not in finished_states:
+            claim = commit
+        previous = status
+    if claim is None or previous not in finished_states:
+        return None
+    relied_on = implementation_at(root, claim, tid)
+    current = newest_implementation(s.entries(root, tid, staged))
+    if (relied_on is None or current is None or current["hash"] != relied_on.get("hash")
+            or s.code_digest(root, claim) == current["code"]):
+        return None
+    return (f"NOT QUITE  {tid} was marked {previous} in {claim[:7]} on code other than the implemented"
+            f" commit {current['commit'][:7]}. Record workorder receipt implemented --task {tid} on that"
+            f" code and test again.")
+
+
 def check(root, staged=False, base=None):
     all_records = records(root, staged)
     views = {tid: verdict(root, record, staged) for tid, record in all_records.items()}
@@ -197,8 +256,9 @@ def check(root, staged=False, base=None):
         if debt:
             problems.append(f"NOT QUITE  {tid} says {record['status']} but owes: {', '.join(debt)}."
                             f" Details: workorder check {tid}")
-        elif staged:
-            changed = fresh_claim_on_changed_code(root, record)
+        else:
+            changed = ((fresh_claim_on_changed_code(root, record) if staged else None)
+                       or (claimed_since_on_changed_code(root, base, record, staged) if base else None))
             if changed:
                 problems.append(changed)
     return problems
@@ -296,9 +356,10 @@ def uncounted(record, history):
                     f" {short}; other work may have landed there")
         return f"the deployed checkout's code differs from the implemented commit {short}"
     current = before[before.index(implemented) + 1:]
-    merges = [i for i, e in enumerate(current) if e["kind"] == "merged"]
+    merges = [i for i, e in enumerate(current) if e["kind"] == "merged" and e["code"] == implemented["code"]]
     if kind == "deployed" and not merges:
-        return f"no merge is recorded since the implementation; run workorder receipt merged --task {tid} first"
+        return (f"no merge of the tested code is recorded since the implementation;"
+                f" run workorder receipt merged --task {tid} first")
     if kind == "live":
         after_merge = current[merges[-1] + 1:] if merges else []
         deployed = [e for e in after_merge if e["kind"] == "deployed"]
@@ -324,11 +385,15 @@ def explain(root, tid):
     history = s.entries(root, tid)
     commit, test = test_line(history)
     implemented = newest_implementation(history)
+    runs = [e for e in history[history.index(implemented) + 1:] if e["kind"] == "test"
+            and e["code"] == implemented["code"]] if implemented else []
     code_changed = implemented is not None and s.code_digest(root, s.head(root)) != implemented["code"]
     claimed = record["status"]
     lines = [f"NOT QUITE  {tid}" if debt else f"{claimed}  {tid}", "",
              f"  Claimed:  {claimed}", f"  Computed: {computed}",
              f"  Commit:   {commit or 'none recorded'}", f"  Test:     {test}"]
+    if runs:
+        lines.append(f"  Command:  {shlex.join(runs[-1]['command'])}")
     if code_changed:
         lines.append(f"  Note:     the code has changed since {commit}; this verdict is about {commit}")
     if debt:
@@ -353,9 +418,9 @@ def ready(root):
     claims = s.active_claims(root) if s.has_origin(root) else {}
     lines = []
     for tid, record in sorted(all_records.items()):
-        if views[tid][0] == "CLOSED":
-            continue
         blocked = waits(record, all_records, views)
+        if views[tid][0] == "CLOSED" and not blocked:
+            continue
         held = claims.get(tid)
         if blocked:
             state = "blocked: " + ", ".join(blocked)
