@@ -22,6 +22,13 @@ def setup_tests(root, body, command=None, paths=None):
 
 
 def checked(root, base, *flags):
+    # Test review belongs to tasks this change works on. Finished, untouched
+    # tasks deliberately remain outside this helper's selection.
+    for tid, record in gate.records(root).items():
+        if record['status'] not in gate.FINISHED:
+            store.add_note(root, tid, 'Working on these tests')
+            if '--staged' in flags:
+                git(root, 'add', f'tasks/{tid}.md')
     return cli(root, 'check', '--base', base, '--run-tests', *flags)
 
 
@@ -34,14 +41,15 @@ def test_base_tests_run_on_dirty_current_code_even_for_unfinished_tasks(local_re
     probe.write_text('from app import value\ndef test_value():\n    assert value == 2\n')
     head, status = store.head(root), git(root, 'status', '--porcelain')
     result = checked(root, base, *(['--allow', 'TASK-1'] if allowed else []))
-    assert result.returncode == 1
-    assert f'TASK-1: its tests from {base} fail on this code; the change weakened or broke them' in result.stdout
-    assert store.head(root) == head and git(root, 'status', '--porcelain') == status
+    assert result.returncode == (0 if allowed else 1)
+    assert f'TASK-1: its tests from {base} fail on this code' in result.stdout
+    assert store.head(root) == head
+    assert git(root, 'status', '--porcelain', '--', 'app.py', 'tests') == status
     assert 'assert value == 2' in probe.read_text()
 
 
 @pytest.mark.parametrize('change', ['rewrite', 'add', 'add_file'])
-def test_passing_test_edits_do_not_require_acceptance(local_repo, change):
+def test_passing_additions_are_free_but_edits_require_acceptance(local_repo, change):
     root = local_repo
     probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n')
     if change == 'rewrite':
@@ -51,18 +59,21 @@ def test_passing_test_edits_do_not_require_acceptance(local_repo, change):
     else:
         (probe.parent / 'test_added.py').write_text('def test_added():\n    assert True\n')
     result = checked(root, base)
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == (1 if change == 'rewrite' else 0), result.stdout + result.stderr
+    if change == 'rewrite':
+        assert '--allow TASK-1' in result.stdout
+        assert checked(root, base, '--allow', 'TASK-1').returncode == 0
     assert 'no declared test ran' not in result.stdout
     assert '1 passed' in result.stdout
 
 
 @pytest.mark.parametrize('allowed', [False, True])
-def test_fewer_passes_refused_even_when_accepted(local_repo, allowed):
+def test_fewer_passes_require_acceptance(local_repo, allowed):
     root = local_repo
     probe, base = setup_tests(root, ''.join(f'def test_{i}():\n    assert True\n' for i in range(5)))
     probe.write_text(''.join(f'def test_{i}():\n    assert True\n' for i in range(3)))
     result = checked(root, base, *(['--allow', 'TASK-1'] if allowed else []))
-    assert result.returncode == 1
+    assert result.returncode == (0 if allowed else 1)
     assert f'TASK-1: fewer tests pass than at {base} (5 -> 3)' in result.stdout
 
 
@@ -70,23 +81,23 @@ def test_fewer_passes_refused_even_when_accepted(local_repo, allowed):
     ('skipped', 'import pytest\n@pytest.mark.skip(reason="later")\ndef test_extra():\n    assert True\n'),
     ('xfailed', 'import pytest\n@pytest.mark.xfail(reason="later")\ndef test_extra():\n    assert False\n'),
 ])
-def test_new_nonpassing_pytest_counts_are_not_waived(local_repo, outcome, body):
+def test_new_nonpassing_pytest_counts_can_be_accepted(local_repo, outcome, body):
     root = local_repo
     probe, base = setup_tests(root, 'def test_one():\n    assert True\n')
     probe.write_text(probe.read_text() + body)
     result = checked(root, base, '--allow', 'TASK-1')
-    assert result.returncode == 1
+    assert result.returncode == 0, result.stdout + result.stderr
     assert f'more tests are {outcome} than at {base} (0 -> 1)' in result.stdout
 
 
-def test_new_deselected_count_is_not_waived(local_repo):
+def test_new_deselected_count_can_be_accepted(local_repo):
     root = local_repo
     probe, base = setup_tests(root, 'def test_one():\n    assert True\n')
     probe.write_text(probe.read_text() + '\ndef test_extra():\n    assert True\n')
     path = root / 'tasks/TASK-1.md'
     path.write_text(path.read_text().replace('-q tests', '-q tests -k one'))
     result = checked(root, base, '--allow', 'TASK-1')
-    assert result.returncode == 1
+    assert result.returncode == 0, result.stdout + result.stderr
     assert f'more tests are deselected than at {base} (0 -> 1)' in result.stdout
 
 
@@ -133,20 +144,22 @@ def test_finished_untouched_shared_test_users_need_no_acceptance(local_repo, sta
     result = checked(root, base, '--strict-tests', *(['--all-tests'] if all_tests else []))
     assert result.returncode == 0, result.stdout + result.stderr
     assert '--allow TASK-' not in result.stdout
-    assert '1 passed' in result.stdout and '2 passed' in result.stdout
+    assert '1 passed' not in result.stdout
+    assert ('2 passed' in result.stdout) == all_tests
 
 
-def test_finished_untouched_shared_test_users_still_compare_base(local_repo):
+def test_finished_untouched_shared_test_users_only_run_with_all_tests(local_repo):
     root = local_repo
     (root / 'app.py').write_text('value = 1\n')
     probe, _ = setup_tests(root, 'from app import value\ndef test_one():\n    assert value == 1\n')
     supported(root, test=f'{PYTHON} -m pytest -q tests')
     base = commit_all(root, 'Finished task')
-    (root / 'app.py').write_text('value = 2\n')
+    (root / 'app.py').write_text('value = 2\n# Changed code invalidates the previous import cache.\n')
     probe.write_text('from app import value\ndef test_one():\n    assert value == 2\n')
     result = checked(root, base, '--strict-tests')
-    assert result.returncode == 1
-    assert f'its tests from {base} fail on this code' in result.stdout
+    assert result.returncode == 0
+    assert 'ran 0 declared tests' in result.stdout
+    assert checked(root, base, '--all-tests').returncode == 0
     assert '--allow TASK-1' not in result.stdout
 
 
@@ -188,7 +201,7 @@ def test_explicit_test_paths_restore_base_bytes(local_repo, kind):
     _, base = setup_tests(root, '', f'{PYTHON} runner.py', ['checks'])
     path.write_bytes(after)
     result = checked(root, base, '--allow', 'TASK-1')
-    assert result.returncode == 1
+    assert result.returncode == 0, result.stdout + result.stderr
     assert f'its tests from {base} fail on this code' in result.stdout
     assert path.read_bytes() == after
 
@@ -199,7 +212,7 @@ def test_deleted_test_files_are_restored_for_comparison(local_repo):
     probe.unlink()
     (probe.parent / 'test_new.py').write_text('def test_new():\n    assert True\n')
     result = checked(root, base, '--allow', 'TASK-1')
-    assert result.returncode == 1 and f'its tests from {base} fail on this code' in result.stdout
+    assert result.returncode == 0 and f'its tests from {base} fail on this code' in result.stdout
     assert not probe.exists()
 
 
@@ -209,7 +222,7 @@ def test_staged_comparison_uses_index_not_unstaged_test_content(local_repo):
     probe.write_text('def test_one():\n    assert 2 == 2\n')
     git(root, 'add', 'tests/test_app.py')
     probe.write_text('def test_one():\n    assert False\n')
-    result = checked(root, base, '--staged')
+    result = checked(root, base, '--staged', '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
     assert '1 passed' in result.stdout
     assert 'assert False' in probe.read_text()
@@ -232,8 +245,11 @@ def test_base_test_timeout_refuses_and_preserves_files(local_repo):
     root = local_repo
     probe, base = setup_tests(root, 'import time\ntime.sleep(10)\n', f'{PYTHON} tests/test_app.py')
     probe.write_text('print("current completed")\n')
-    problems = gate.check(root, base=base, run_tests=True, allow={'TASK-1'}, timeout=0.2)
-    assert any(f'its tests from {base} fail on this code' in line for line in problems)
+    store.add_note(root, 'TASK-1', 'Working on these tests')
+    notes = []
+    problems = gate.check(root, base=base, run_tests=True, allow={'TASK-1'}, timeout=0.2, notes=notes)
+    assert not problems
+    assert any(f'its tests from {base} fail on this code' in line for line in notes)
     assert probe.read_text() == 'print("current completed")\n'
 
 
@@ -265,7 +281,7 @@ def test_comparison_discovers_absolute_internal_command_paths(local_repo):
     probe, base = setup_tests(root, 'assert False\n', f'{PYTHON} {root / "tests/test_app.py"}')
     probe.write_text('assert True\n')
     result = checked(root, base, '--allow', 'TASK-1')
-    assert result.returncode == 1
+    assert result.returncode == 0, result.stdout + result.stderr
     assert f'its tests from {base} fail on this code' in result.stdout
 
 
@@ -290,7 +306,7 @@ def test_comparison_preserves_changed_symlink_test_files(local_repo, staged):
     probe.symlink_to('new.py')
     if staged:
         git(root, 'add', 'tests/test_app.py')
-    result = checked(root, base, *(['--staged'] if staged else []))
+    result = checked(root, base, '--allow', 'TASK-1', *(['--staged'] if staged else []))
     assert result.returncode == 0, result.stdout + result.stderr
     assert probe.is_symlink() and probe.readlink().as_posix() == 'new.py'
 
@@ -302,7 +318,7 @@ def test_staged_comparison_omits_untracked_tests(local_repo):
     git(root, 'add', 'tests/test_app.py')
     extra = probe.parent / 'test_untracked.py'
     extra.write_text('def test_untracked():\n    assert False\n')
-    result = checked(root, base, '--staged')
+    result = checked(root, base, '--staged', '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
     assert extra.exists()
 
@@ -314,7 +330,7 @@ def test_base_comparison_preserves_binary_line_endings_and_non_utf8(local_repo):
     (root / 'runner.py').write_text('from pathlib import Path\nvalue = Path("fixture.bin").read_bytes()\nassert b"\\r\\n" in value and value.startswith(b"\\x00\\xff")\n')
     _, base = setup_tests(root, '', f'{PYTHON} runner.py', ['fixture.bin'])
     fixture.write_bytes(b'\x00\xffa\r\nc')
-    result = checked(root, base)
+    result = checked(root, base, '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
     assert fixture.read_bytes() == b'\x00\xffa\r\nc'
 

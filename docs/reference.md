@@ -19,7 +19,7 @@ Install: `pipx install workorder`.
 | `workorder receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
 | `workorder check [ID or tasks/ID.md]` / `check --task ID` | No argument: reads every task; one line per problem, or `check: OK`. With a task: an explanation of that task alone |
 | `workorder check --staged` | For the pre-commit hook: checks the staged versions of the tasks this commit touches (task file, receipts, contract or its evidence) and the tasks that depend on them; refuses a commit that newly claims DONE or CLOSED on code other than the implemented code; notes changes to a task's requirements |
-| `workorder check --base REF [--allow IDS] [--run-tests] [--strict-tests] [--all-tests] [--require-task] [--timeout SECONDS]` | Checks changed tasks, including their test files, and their dependents. Refuses stale claims, changed receipts, changed requirements, weakened tests, new finished definitions, and removed tasks. `--allow` accepts definition changes and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
+| `workorder check --base REF [--allow IDS] [--run-tests] [--strict-tests] [--all-tests] [--require-task] [--timeout SECONDS]` | Checks changed task records and receipts, their test files, and their dependents. Refuses stale claims, changed receipts, changed requirements, weakened tests, new finished definitions, and removed tasks. `--allow` accepts reviewed definition/test changes, REF failures and outcome changes, and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
 | `workorder show --task ID` | The task as a record: Claimed and Evidence status, what is still owed, dependencies, title, owner and test; mission, summary and next when filled in; body sections, a dated receipt timeline, any computed merge and Progress notes. Prints a next step for outstanding evidence or unclaimed Acceptance work |
 | `workorder note --task ID [--next TEXT] [NOTE]` | Sets next when supplied; adds `- YYYY-MM-DD: NOTE` at the end of Progress when a note is supplied. Give either or both |
 | `workorder renew --task ID [--timeout SECONDS] [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded by `renew` |
@@ -213,6 +213,14 @@ DONE or CLOSED claim must therefore be made on the implemented code:
   Unrelated changes on main do not invalidate the claim. A changed patch
   still needs fresh evidence. Merging main into the branch also works.
 
+A task imported unchanged from the target branch or a merge parent is not a
+new claim: both its task file and all its receipts must match that source.
+The staged hook reads MERGE_HEAD during a pending merge; committed checks also
+inspect merge parents. This does not excuse reopening a task and making a new
+claim on changed code. If your own claim becomes stale after merging main,
+run `workorder renew --task ID` on the branch before pushing; the later squash
+can then match the code tested after that merge.
+
 `check <id>` adds a note when HEAD's code differs, and a `Command:` line naming
 the command behind the deciding test run. Code that lands after a task is DONE
 does not reopen it.
@@ -291,50 +299,55 @@ step says to push main instead.
 
 ## Checks against a base
 
-`check --base REF` selects tasks whose records, receipts, contracts, evidence
-or test files changed since REF, and their dependents. A folder in `test_paths`
-includes all its files. Otherwise it uses paths named in `test`; pytest without
-collection paths uses its discovery patterns. Base and current definitions both
-count, so removed or renamed tests cannot disappear from the comparison.
+`check --base REF` checks changed task records, receipts, contracts and evidence,
+and their dependents. Test review applies only to tasks this change works on:
+their task file or receipts differ from REF. Other tasks get current test runs
+through `--all-tests`; changes to shared tests alone do not select them for review.
 
-With `--run-tests`, each selected task whose tests changed runs on the current
-code, including unfinished tasks. A second run uses the REF versions of changed
-test files over the current code in a temporary copy. Added test files are absent
-in that copy; deleted files are restored. If all selected tests are new, only
-the current test runs because there is no base test to restore. The checkout is never overlaid. This
-checks the old assertions against the new code, not whether old code still passes.
-A failure refuses with:
+| Change or result for a task this change works on | Default | What `--allow ID` accepts |
+|---|---|---|
+| Only added test lines or new test files | Passes without a label | Not needed; with `--strict-tests`, accepts additions too |
+| Removed or changed test lines, including a rename | Needs review | The reviewer has read and accepted those edits |
+| REF tests fail on current code | Needs review | An intended behavior change or accepted test rename |
+| Fewer pytest passes, or more skips, xfails or deselections | Needs review | The changed test outcomes |
+| New skip/xfail markers or calls, `-k`/`--deselect`, conftest or pytest configuration changes | Needs review | Those changes to what runs |
+| Current declared tests fail | Refused | Nothing; current tests must still pass |
+| `--all-tests` finds another task's current test failing | Refused | Nothing; other tasks' checks stay active |
+
+With `--run-tests`, every task this change works on with a concrete command runs
+its current tests, including unfinished tasks. Its REF tests run over current
+code in a temporary copy, even if the test files did not change. Added files are
+absent in the REF copy; deleted files are restored, and it uses the REF command.
+The checkout is never overlaid. If the task or its selected tests did not exist
+at REF, there is no REF run. Every skipped comparison prints a note explaining
+why, including unavailable commands, copy failures and missing reference files.
+A comparison that cannot start or whose pytest outcomes cannot be read still
+refuses; `--allow` cannot supply missing results. A command that runs and fails,
+including a timeout, can be accepted as a REF-test failure. The current command
+must pass, including the strict-mode rule below.
+
+For example, an intentional change from 10% to 20% needs acceptance of the
+edited assertions and failing REF assertions for each task being worked on:
 
 ```text
-TASK-1: its tests from origin/main fail on this code; the change weakened or broke them
+TASK-1: its tests from origin/main fail on this code; a reviewer accepts this intended behavior change or test rename with --allow TASK-1
 ```
 
-For pytest, Workorder compares both runs' outcome summaries. Fewer passes refuse
-with `TASK-1: fewer tests pass than at origin/main (5 -> 3)`. More skipped,
-xfailed or deselected tests also refuse. These comparisons apply even with
-`--allow`; an accepted test edit cannot excuse failing old tests or lost passes.
-Pure passing additions and edits that preserve the old tests and outcome counts
-need no label. Missing pytest outcome output refuses a comparison; use the
-normal summary or supported quiet progress output. The comparison cannot judge whether an assertion expresses the
-right requirement; review the tests as well.
+`test_paths` selects files or folders; otherwise paths named in `test` are used.
+Pytest with no collection paths uses its discovery patterns. Both REF and current
+definitions count. A named file that does not exist in either version selects no
+files and prints a note; it never expands to unrelated repository tests.
+An explicit empty `test_paths` list also selects no test files.
 
-New skip/skipif/xfail markers, `pytest.skip(...)` or `pytest.xfail(...)` calls, selection through `-k`
-or `--deselect`, and new or changed conftest/pytest configuration need `--allow ID`.
-This covers pytest.ini, .pytest.ini, pytest.toml, .pytest.toml, tox.ini, setup.cfg
-and pytest sections of pyproject.toml,
-including custom configurations selected by the command. Unrelated TOML sections
-do not need acceptance. `--strict-tests` additionally requires acceptance for
-any test-file change, even a passing addition. Without `--run-tests`, the
-conservative removed/changed-line check remains; no execution has established
-that an edited assertion preserves the base tests.
+Pytest configuration covers conftest.py, pytest.ini, .pytest.ini, pytest.toml,
+.pytest.toml, tox.ini, setup.cfg and pytest sections of pyproject.toml, plus custom
+configurations selected by the command. Unrelated TOML sections need no review.
+Without `--run-tests`, the file, configuration and selection checks still apply;
+Workorder notes that it has not run the REF comparison. A passing test says
+nothing about whether its assertion expresses the right requirement.
 
-Acceptance for test-file or configuration changes belongs to the tasks this
-change works on. A task DONE/CLOSED at REF whose task file and receipts are
-untouched never needs its own label solely because shared tests changed, even
-with `--strict-tests`. It still receives the runtime comparisons when its tests
-change; `--all-tests` covers its current declared test even when they do not.
-Labels are for deliberate definition changes, new finished task definitions,
-complete removals, the static changes above, or strict-mode test edits.
+Scope or Acceptance removals and rewording need `--allow ID`. Additions need it
+too when the task was DONE or CLOSED at REF; filling in an open task does not.
 
 A task file absent at the base but claimed DONE or CLOSED in this change
 needs acceptance of its definition:
@@ -357,7 +370,7 @@ exception above also exempts that task's receipts from this history check.
 
 `--allow` takes comma-separated ids. It accepts definition changes and the
 complete removal described above. It does not excuse missing evidence,
-unfinished dependencies, failing tests, or worse pytest outcome counts.
+unfinished dependencies, changed receipts on a retained task, or current test failures.
 
 Every check mode prints a summary after its result and notes, except `--staged` with nothing in scope, which prints nothing:
 
@@ -368,18 +381,18 @@ checked 3 tasks (2 claimed DONE or CLOSED); ran 2 declared tests
 The test count appears only with `--run-tests`. It counts commands actually
 started, including failures and REF comparison runs. A command that could not start does not count.
 If none ran, another line says `no declared test ran in this check`. A task
-with `test: any` has no declared command to rerun. Selected tasks with changed tests get both runs; otherwise supported DONE/CLOSED claims in scope get their declared test run. With `--all-tests`, every DONE/CLOSED task has its declared test run on the current code, once per distinct command and effective timeout, including tasks outside the selected history checks. Counts describe the
+with `test: any` has no declared command to rerun. Tasks this change works on get both runs when REF tests exist. With `--all-tests`, every DONE/CLOSED task has its declared test run on the current code, once per distinct command and effective timeout, including tasks outside the selected history checks. Accepted edits and REF failures do not disable these runs. Counts describe the
 selected tasks, including unreadable or removed tasks; unreadable claims are
 not included in the claim count. A single-task check counts that task only;
 an unfinished task's summary says `checked 1 task (not claimed finished)`.
 Supported claims without a contract also print: `Acceptance lists are not checked; N supported claims rest on their declared tests only.` This counts supported DONE/CLOSED claims only, not unfinished tasks or refused claims.
 Exit codes are unchanged: 0 for acceptance, 1 for refusal.
 
-`--all-tests` costs the runtime of every distinct declared command, including work finished long ago; changed test files also need REF comparison runs. It catches current regressions that receipt history alone cannot reveal. New workflows enable it by default; large projects can choose narrower checks deliberately.
+`--all-tests` costs the runtime of every distinct declared command, including work finished long ago; tasks this change works on also need REF comparison runs. It catches current regressions that receipt history alone cannot reveal. New workflows enable it by default; large projects can choose narrower checks deliberately.
 
 `--run-tests` prints a note when pytest reports only skipped tests: `TASK-2: its test ran, but reported only skipped tests`. It does not also say the test passed. With `--strict-tests --run-tests`, pytest summaries with no passed tests fail: `TASK-3: its test ran but no test passed (2 skipped)` or `(no tests ran)`. Command failures still fail normally. Tests run without a shell and these checks write no receipts.
 
-`check --base REF --run-tests --all-tests` runs every DONE/CLOSED task's declared command once per distinct command on current code. Failures print `regression: TASK-1's test fails on this code` and exit 1; computed history is unchanged. `check --base REF --require-task` exits 1 if code paths outside `tasks/`, `.workorder/`, `.notquite/` changed but no task file or receipt did: `this change edits code but no task records it`. Both flags are enabled in newly generated workflows.
+`check --base REF --run-tests --all-tests` runs every DONE/CLOSED task's declared command once per distinct command on current code. Failures print `regression: TASK-1's test fails on this code` and exit 1; computed history is unchanged. `check --base REF --require-task` requires at least one new `implemented` or `test` receipt when code changes. A Progress note, status edit, new task definition, or a merge/deployment receipt alone is insufficient. It excludes `tasks/`, `.workorder/`, `.notquite/`, `docs/`, `.github/`, `*.md`, `*.rst`, `*.txt` and `LICENSE*` paths from this code-change rule. This does not change the code fingerprint used by receipts. Both flags are enabled in newly generated workflows.
 
 ### GitHub Actions
 
@@ -404,7 +417,7 @@ jobs:
         with: {python-version: '3.12'}
       - name: Install project test dependencies
         run: python -m pip install -e '.[test]'
-      - run: python -m pip install workorder==0.7.0
+      - run: python -m pip install workorder==0.8.0
       - name: Check tasks and run their tests
         env:
           BASE: origin/${{ github.base_ref }}
@@ -530,7 +543,8 @@ claim tags. They refresh it even when all tags are already cached, without
 changing the checkout or remote-tracking branches. `claim` first compares task text and receipts with the local copy and their common base. Upstream work absent locally refuses the claim, for example: `origin/main has newer work on TASK-1 (2 receipts, 1 note, by agent-b); pull first`. Local additions alone do not trigger it. A task already DONE, CLOSED or CANCELLED upstream is still refused even after pulling.
 The name is the author of the latest commit touching the task or its receipts. `show` refreshes the same private ref with a three-second deadline and warns at the top: `origin/main has newer work on this task: pull before you start`. Offline it prints a short local-view note; it never reuses a stale upstream ref.
 `ready` lists an outdated open task as
-`finished on origin/main; pull to update`, even after its claim was released.
+`finished on origin/main; pull to update`, even after its claim was released,
+only when its local status differs from the upstream status.
 When origin is unreachable, `ready` uses local records and its existing
 offline note; it never reuses an old upstream snapshot. `claim` still refuses
 when origin cannot be reached.
@@ -568,7 +582,7 @@ protect `workorder/*` tags if it matters.
 
 ## Line endings
 
-New task files, receipts and claim tokens use LF. Updates to status and next preserve the task file's existing line endings and byte order mark; adding a Progress note writes LF. Files read
+New task files, receipts and claim tokens use LF. Updates to status, next and Progress preserve the task file's existing line endings and byte order mark using byte writes. Files read
 back with CRLF, as Git on Windows may check them out, are treated the same.
 
 ## Reading show and check results
@@ -592,7 +606,7 @@ test dependencies first, choosing and reporting the first match:
 It then installs Workorder at exactly the running version. For a Git installation,
 PEP 610 direct_url.json supplies the URL and resolved commit:
 `python -m pip install 'git+<url>@<commit>'`. A recorded subdirectory is retained.
-Other installations use `workorder==0.7.0` for this release.
+Other installations use `workorder==0.8.0` for this release.
 It runs `workorder check --base "origin/<base>" --run-tests --all-tests --require-task`,
 passing task ids from `workorder-allow:<ID>` labels to `--allow`. See the runtime
 trade-off above. Install additional non-Python dependencies in the workflow as
@@ -617,14 +631,14 @@ settings or hooks. It installs command hooks for SessionStart and Stop:
 }
 ```
 
-SessionStart prints `workorder ready` and local readiness, then the `show` record
-for tasks held by this clone. It reads local claim tags and private claim tokens;
+SessionStart lists tasks held by this clone and their `show` records, plus one
+line pointing to `workorder ready`. It does not run the full readiness scan. It reads local claim tags and private claim tokens;
 successful claims and releases cache their tags locally for these hooks. A token
 left by a failed claim is not ownership. It does not fetch, so another clone's
 release or reassignment becomes visible after the local tags are refreshed. Stop reads the hook JSON from stdin. When `stop_hook_active`
-is true it exits 0 to prevent a stop loop. Otherwise it checks this checkout and
-exits 2 with the NOT QUITE refusal lines on stderr if a DONE/CLOSED claim lacks
-support. A valid claim or unfinished work exits 0. This checks task records;
+is true it exits 0 to prevent a stop loop. Otherwise it checks DONE/CLOSED claims only for tasks held by this clone or
+whose task file differs from the selected target branch. With no target, it compares task files with HEAD. Other tasks never block Stop. It exits 2
+with the NOT QUITE refusal lines on stderr if one of those claims lacks support. A valid claim or unfinished work exits 0. This checks task records;
 it cannot detect a completion claim made only in chat.
 
 `init --claude --check` reports missing hook setup without writing it. Codex users

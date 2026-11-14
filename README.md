@@ -103,7 +103,7 @@ Workorder reads task files and recorded evidence. It does not watch conversation
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 ```
 
-`workorder init --claude` merges SessionStart and Stop hooks into `.claude/settings.json`, preserving other settings. Sessions show local readiness and held tasks; Stop refuses unsupported DONE/CLOSED claims, with a guard against repeated stop calls. Codex users keep the AGENTS.md block. [Agent hook details](docs/reference.md#agent-hooks).
+`workorder init --claude` merges SessionStart and Stop hooks into `.claude/settings.json`, preserving other settings. Sessions show held tasks; Stop checks held tasks and tasks whose file differs from the target branch for unsupported DONE/CLOSED claims, with a guard against repeated stop calls. Codex users keep the AGENTS.md block. [Agent hook details](docs/reference.md#agent-hooks).
 
 For long tests, set `test_timeout: 60` in a task or pass `--timeout 60` to `done`, `receipt test`, `renew`, or `check --base REF --run-tests`. A timeout records a failed run with exit 124. [Timeout details](docs/reference.md#extended-fields).
 
@@ -318,11 +318,13 @@ Critical criteria must be met before DONE. This contract fails: a mock result ca
 
 ## Hooks and workflows
 
+[Shortcuts Workorder refuses](docs/shortcuts.md): runnable examples and their actual output.
+
 The hook and a local `workorder check` judge recorded evidence. Plain `check`
 reads every task. The hook checks staged task files, receipts, contracts and
 evidence, plus their dependents. The generated workflow runs
 `check --base origin/<base> --run-tests --all-tests --require-task`.
-`--base` also includes tasks whose test files changed. A reviewer can accept
+Test review covers tasks whose file or receipts changed. A reviewer can accept
 changes to a task's requirements with a `workorder-allow:<ID>` pull request
 label, passed as `--allow` in the example below.
 
@@ -360,7 +362,7 @@ jobs:
         with: {python-version: '3.12'}
       - name: Install project test dependencies
         run: python -m pip install -e '.[test]'
-      - run: python -m pip install workorder==0.7.0
+      - run: python -m pip install workorder==0.8.0
       - name: Check tasks and run their tests
         env:
           BASE: origin/${{ github.base_ref }}
@@ -374,8 +376,8 @@ What `--base` adds, beyond what the pre-commit hook can promise (`git commit --n
 
 - Receipts already on the base branch must stay unchanged. Receipt files deleted or modified in any commit since the base are refused with their paths, even if absent at the base or restored at HEAD. With `--allow ID`, a task that was DONE, CLOSED or CANCELLED at the base may be removed with all its receipts.
 - A commit since the base that marked a task DONE or CLOSED must carry its implemented code.
-- A change to what a task requires (its `test`, its contract or its evidence, a removed dependency, or a removed or reworded line of its Scope or Acceptance) fails the check until a reviewer accepts it: `--allow TASK-4` (comma-separated ids) for a re-run started by a maintainer. Adding lines is not a change of requirement.
-- With `--run-tests`, changed tests run twice on current code: once as they are, once with their base versions in a temporary copy. Old-test failures, fewer pytest passes, or more skipped/xfailed/deselected tests refuse the change. Passing additions and edits that preserve those tests need no label. `--strict-tests` still requires acceptance for every test edit. Set `test_paths`, or use paths in the test command. [Comparison details](docs/reference.md#checks-against-a-base).
+- A change to what a task requires (its `test`, its contract or its evidence, a removed dependency, or a removed or reworded line of its Scope or Acceptance) fails the check until a reviewer accepts it: `--allow TASK-4` (comma-separated ids) for a re-run started by a maintainer. Adding Scope or Acceptance lines also needs acceptance if the task was DONE or CLOSED at the base.
+- With `--run-tests`, tasks this change works on run current tests and their REF tests on current code in a temporary copy. Pure additions need no label; edited or removed test lines, REF failures and reduced pytest outcomes need `--allow ID`. Current tests must still pass. `--strict-tests` requires acceptance for additions too. [The test-change rule](docs/reference.md#checks-against-a-base).
 - A task created and claimed DONE or CLOSED in the same change needs `--allow ID` to accept its definition.
 - Changed tests are checked even for unfinished tasks in scope. `--all-tests` also runs every DONE/CLOSED task's declared command, once per command and timeout. Counts say what ran, including base comparisons.
 
@@ -394,13 +396,14 @@ Anyone with triage rights can apply a `workorder-allow:<ID>` label. Protect acce
 
 Add other test and nested configuration paths your tasks use. Enable required code owner review in branch protection; CODEOWNERS alone does not require approval.
 
-`--allow` accepts the named definition changes or complete task removal; it
-does not waive missing evidence, changed receipts on a retained task, or a
-failing test or worse pytest outcome counts.
+`--allow` accepts reviewed definition/test changes, REF-test failures and reduced
+pytest outcomes for the named task, or its complete removal. It never waives
+missing evidence, changes to retained receipts, or failing current tests.
+New skips/xfails, `pytest.skip(...)`, `-k`/`--deselect`, and conftest or pytest
+configuration changes also need acceptance. Other tasks are covered by
+`--all-tests` only; their checks remain active with any labels.
 
-New skips/xfails, `pytest.skip(...)`, `-k`/`--deselect`, and conftest or pytest configuration changes require reviewer acceptance. An untouched task already DONE/CLOSED at the base never needs its own label just because shared tests changed; runtime comparisons still cover it. Labels are for intentional definition changes, new finished definitions, removals, these static test changes, and strict-mode edits. They cannot excuse failed tests or worse outcome counts.
-
-The workflow enables `--all-tests` and `--require-task`. Running every distinct test command costs more time as completed tasks accumulate, but catches current regressions outside the changed tasks. `--require-task` refuses code changes with no changed task file or receipt. [Options and trade-offs](docs/reference.md#checks-against-a-base).
+The workflow enables `--all-tests` and `--require-task`. Running every distinct test command costs more time as completed tasks accumulate, but catches current regressions outside the changed tasks. Code changes need a new implemented or test receipt; notes and status edits alone are insufficient. Documentation paths are exempt. [Options and exclusions](docs/reference.md#checks-against-a-base).
 
 ## Limitations
 

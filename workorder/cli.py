@@ -81,17 +81,17 @@ def parser():
     check.add_argument("--task", dest="named_task", help="explain one task (also accepts a positional id)")
     check.add_argument("--staged", action="store_true", help="check the staged files (pre-commit)")
     check.add_argument("--allow", metavar="TASKS", default="",
-                       help="with --base: accept task definition or test file changes, or complete removal"
+                       help="with --base: accept definition/test edits, REF-test failures, reduced pytest outcomes or complete removal"
                             " (comma-separated ids, for a reviewer to pass)")
     check.add_argument("--run-tests", action="store_true",
-                       help="with --base: run claimed tasks' tests and compare changed tests with their base versions")
+                       help="with --base: run tests for tasks whose file or receipts changed, including REF tests on current code")
     check.add_argument("--strict-tests", action="store_true",
                        help="with --base: require --allow for all test and pytest configuration changes;"
                             " with --run-tests, refuse pytest runs with no passed tests")
     check.add_argument("--all-tests", action="store_true",
                        help="with --base --run-tests: also test every DONE/CLOSED task, once per command")
     check.add_argument("--require-task", action="store_true",
-                       help="with --base: refuse code changes without a changed task file or receipt")
+                       help="with --base: require a new implemented or test receipt for code changes")
     check.add_argument("--base", metavar="REF",
                        help="check changes since REF: changed or removed receipts; requirement changes"
                             " (test, contract, evidence, dependencies, Scope and Acceptance lines);"
@@ -171,9 +171,14 @@ def finish_task(root, tid, note=None, timeout=None):
             base = f'origin/{branch}'
             if not s.git(root, 'rev-parse', '--verify', '--quiet', f'refs/remotes/{base}^{{commit}}',
                          required=False).returncode:
-                for problem in gate.test_change_problems(root, base, record, timeout=timeout):
+                notes = []
+                for problem in gate.test_change_problems(root, base, record, timeout=timeout, notes=notes):
                     print(f"Warning: {problem}")
+                for note in notes:
+                    print(f"Note: {note}")
                 break
+        else:
+            print('Note: REF comparison skipped: origin/main and origin/master are not available locally')
         path = s.local_path(root, f"tasks/{tid}.md")
         before = path.read_bytes()
         supported = False

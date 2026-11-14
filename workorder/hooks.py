@@ -45,11 +45,13 @@ def local_claims(root):
     return claims, owned
 
 
-def completion_claims(root):
+def completion_claims(root, names):
     """Keep a malformed task's DONE/CLOSED claim visible when its other fields cannot be read."""
     claimed = set()
-    for tid in gate.task_names(root):
-        lines = s.read_text(root, f'tasks/{tid}.md').splitlines()
+    for tid in names:
+        # A bad byte elsewhere in the task must not hide an otherwise readable finished claim.
+        lines = s.read_bytes(root, f'tasks/{tid}.md').decode(
+            'utf-8', errors='surrogateescape').removeprefix('\ufeff').splitlines()
         if not lines or lines[0] != '---' or '---' not in lines[1:]:
             continue
         for line in lines[1:lines.index('---', 1)]:
@@ -64,12 +66,41 @@ def completion_claims(root):
     return claimed
 
 
+def relevant_tasks(root):
+    """Tasks held here, or whose task file differs from its locally available target branch."""
+    _, owned = local_claims(root)
+    names = gate.task_names(root)
+    selected = set(owned) & set(names)
+    for tid in names:
+        if tid in selected:
+            continue
+        path = f'tasks/{tid}.md'
+        current = s.read_bytes(root, path).decode('utf-8', errors='surrogateescape')
+        current = current.removeprefix('\ufeff').replace('\r\n', '\n')
+        lines = current.splitlines()
+        try:
+            record = s.front_matter(tid, lines[1:lines.index('---', 1)]) if lines[0] == '---' else {}
+        except (s.Refused, ValueError, IndexError):
+            record = {}
+        override = record.get('merge_ref')
+        if not isinstance(override, str) or not override.startswith(('refs/heads/', 'refs/remotes/')):
+            record.pop('merge_ref', None)
+        target = gate.merge_target(root, record)
+        revision = target[1] if target else 'HEAD'
+        before = s.metadata_texts(root, revision).get(path)
+        if before != current:
+            selected.add(tid)
+    return selected
+
+
+@s.read_session()
 def run(root, event):
     if event == 'session-start':
         claims, owned = local_claims(root)
-        print('workorder ready (local view; no fetch)')
-        print('\n'.join(gate.ready(root, local_claims=claims)) or 'no open work')
+        print('Run workorder ready to see available work.')
         for tid in owned:
+            held = claims[tid]
+            print(f"{tid} held by {held['who']} since {held['at']}")
             print(f'\nworkorder show --task {tid}')
             try:
                 print('\n'.join(gate.record_lines(root, tid)))
@@ -86,7 +117,9 @@ def run(root, event):
         raise s.Refused('Stop hook input must be a JSON object')
     if payload.get('stop_hook_active') is True:
         return 0
-    claimed = completion_claims(root)
+    claimed = completion_claims(root, relevant_tasks(root))
+    if not claimed:
+        return 0
     problems = []
     for line in gate.check(root):
         owner = re.match(r'(?:NOT QUITE\s+)?([A-Z][A-Z0-9]*-[1-9][0-9]*)\b', line)

@@ -150,8 +150,18 @@ def read_text(root, relative, staged=False):
         text = metadata_texts(root, None, None, True).get(relative)
         if text is None:
             raise Refused(f"missing staged file: {relative}")
-        return text
-    return read_bytes(root, relative, staged).decode("utf-8").removeprefix("\ufeff").replace("\r\n", "\n")
+        return checked_text(text, relative)
+    text = read_bytes(root, relative, staged).decode("utf-8", errors="surrogateescape")
+    return checked_text(text, relative).removeprefix("\ufeff").replace("\r\n", "\n")
+
+
+def checked_text(text, relative):
+    """Reject undecodable bytes only when their owning file is consumed."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        raise Refused(f"{relative}: cannot be read as UTF-8") from None
+    return text
 
 
 @cached_read
@@ -519,8 +529,8 @@ def active_claims(root, upstream=None, snapshot=None):
             tid = path[6:-3]
             if not ID.fullmatch(tid):
                 continue
-            lines = text.splitlines()
             try:
+                lines = checked_text(text, path).splitlines()
                 fields = front_matter(tid, lines[1:lines.index("---", 1)])
             except (Refused, ValueError):
                 continue
@@ -716,19 +726,27 @@ def add_note(root, tid, text):
     if not text:
         raise Refused("a note needs some text")
     path = local_path(root, f"tasks/{tid}.md")
-    lines = read_text(root, f"tasks/{tid}.md").split("\n")
+    lines = path.read_bytes().splitlines(keepends=True)
+    newline = b'\r\n' if lines[0].endswith(b'\r\n') else b'\n'
     line = f"- {dt.datetime.now(dt.timezone.utc).date().isoformat()}: {text}"
-    starts = [i for i, value in enumerate(lines) if value.strip() == "## Progress"]
+    encoded = line.encode('utf-8') + newline
+    starts = [i for i, value in enumerate(lines) if value.strip() == b"## Progress"]
     if starts:
-        end = next((i for i in range(starts[-1] + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+        end = next((i for i in range(starts[-1] + 1, len(lines)) if lines[i].startswith(b"## ")), len(lines))
         while end > starts[-1] + 1 and not lines[end - 1].strip():
             end -= 1
-        lines[end:end] = [line] if lines[end - 1].strip() and not lines[end - 1].startswith("## ") else ["", line]
+        if not lines[end - 1].endswith(b'\n'):
+            lines[end - 1] += newline
+        lines[end:end] = ([encoded] if lines[end - 1].strip() and not lines[end - 1].startswith(b"## ")
+                          else [newline, encoded])
     else:
-        while lines and not lines[-1].strip():
-            lines.pop()
-        lines += ["", "## Progress", "", line]
-    path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8", newline="\n")
+        if not lines[-1].endswith(b'\n'):
+            lines[-1] += newline
+        if lines[-1].strip():
+            lines.append(newline)
+        lines += [b"## Progress" + newline, newline, encoded]
+    path.write_bytes(b''.join(lines))
+    invalidate_reads()
     return line
 
 
@@ -780,6 +798,8 @@ def metadata_texts(root, rev=None, tid=None, staged=False):
 
 
 def read_blobs(root, oids):
+    # Preserve undecodable bytes in the shared batch. read_text/receipt_texts validate only the
+    # selected file, so an unrelated task's bad encoding cannot poison every cached metadata read.
     cache = _READS.get()
     blobs = cache.setdefault(("blobs", root), {}) if cache is not None else {}
     wanted = sorted(set(oids) - blobs.keys())
@@ -795,7 +815,7 @@ def read_blobs(root, oids):
                 raise Refused("Git could not read a task or receipt blob")
             size = int(header[2])
             raw = result.stdout[end + 1:end + 1 + size]
-            blobs[oid] = raw.decode("utf-8").removeprefix("\ufeff").replace("\r\n", "\n")
+            blobs[oid] = raw.decode("utf-8", errors="surrogateescape").removeprefix("\ufeff").replace("\r\n", "\n")
             offset = end + 2 + size
     return blobs
 
@@ -824,7 +844,7 @@ def receipt_paths(root, staged=False, rev=None, tid=None):
 @cached_read
 def receipt_texts(root, tid, staged=False, rev=None):
     if rev or staged:
-        return {p: text for p, text in metadata_texts(
+        return {p: checked_text(text, p) for p, text in metadata_texts(
             root, rev, tid if rev and rev != "HEAD" else None, staged).items() if receipt_task(p) == tid}
     return {p: read_text(root, p)
             for p in receipt_paths(root, staged, rev, tid) if receipt_task(p) == tid}

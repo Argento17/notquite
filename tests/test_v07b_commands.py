@@ -66,7 +66,7 @@ def test_done_warns_about_ref_tests_before_writing_done(local_repo):
     path = filled_task(root)
     probe = root / 'probe.py'
     probe.write_text('from pathlib import Path\nassert Path("app.py").read_text() == "items = []\\n"\n')
-    path.write_text(path.read_text().replace(PASS, f'{PYTHON} probe.py'))
+    path.write_text(path.read_text().replace(json.dumps(PASS), json.dumps(f'{PYTHON} probe.py')))
     base = commit_all(root)
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
     git(root, 'checkout', '-q', '-b', 'feature')
@@ -74,8 +74,8 @@ def test_done_warns_about_ref_tests_before_writing_done(local_repo):
     probe.write_text('assert True\n')
     commit_all(root)
     output = ok(root, 'done', '--task', 'TASK-1')
-    warning = ('Warning: TASK-1: its tests from origin/main fail on this code; '
-               'the change weakened or broke them')
+    warning = 'Warning: TASK-1: its tests from origin/main fail on this code;'
+    assert '--allow TASK-1' in output
     assert warning in output
     assert output.index(warning) < output.index('TASK-1 DONE:')
     assert store.record(root, 'TASK-1')['status'] == 'DONE'
@@ -113,7 +113,7 @@ def test_note_sets_next_with_optional_progress(local_repo, old, note):
 def test_note_next_preserves_bom_crlf_and_can_clear_field(local_repo):
     path = filled_task(local_repo)
     field(path, 'next', '"old"')
-    before = b'\xef\xbb\xbf' + path.read_bytes().replace(b'\n', b'\r\n')
+    before = b'\xef\xbb\xbf' + path.read_text().replace('\n', '\r\n').encode('utf-8')
     path.write_bytes(before)
     ok(local_repo, 'note', '--task', 'TASK-1', '--next', '')
     assert path.read_bytes() == before.replace(b'next: "old"', b'next: ""')

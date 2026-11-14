@@ -1,6 +1,27 @@
 # Changelog
 
-## 0.7.0 (unreleased)
+## 0.8.0 (unreleased)
+
+- Use one test-change rule for tasks whose file or receipts change: additions
+  need no label; removed or changed lines need reviewer acceptance. Accept
+  intended REF-test failures and reduced pytest outcomes with --allow ID,
+  while current tests and other tasks' --all-tests checks stay active.
+- Keep missing named tests from widening to repository-wide discovery, and
+  explain every skipped REF comparison. Handle Windows snapshot paths and
+  preserve task line endings and byte order marks during updates.
+- Recognise task files and receipts imported unchanged from a target or merge
+  parent as existing claims. Give branch renewal advice for stale own claims.
+- Require a new implemented or test receipt for code changes under
+  --require-task; exclude documentation and non-code paths.
+- Require acceptance for Scope and Acceptance additions to finished tasks.
+- Limit Stop checks to held or locally changed task files. SessionStart shows
+  held tasks and points to ready without scanning all readiness.
+- Report undecodable task files individually; only suggest pulling finished
+  upstream work when the local status differs.
+- Add the portable shortcut catalogue and its actual 0.8 output.
+- Update package versions and install pins to 0.8.0.
+
+## 0.7.0
 
 - Compare changed tests with their base versions on current code in a temporary
   copy. Passing additions and edits preserving those tests need no label;

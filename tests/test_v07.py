@@ -213,9 +213,9 @@ def test_skipped_only_rerun_does_not_also_say_passed(local_repo, all_tests):
 
 def test_release_versions_and_readme_pin():
     from workorder import __version__
-    assert __version__ == '0.7.0'
-    assert 'version = "0.7.0"' in (PACKAGE / 'pyproject.toml').read_text()
-    assert 'workorder==0.7.0' in (PACKAGE / 'README.md').read_text()
+    assert __version__ == '0.8.0'
+    assert 'version = "0.8.0"' in (PACKAGE / 'pyproject.toml').read_text()
+    assert 'workorder==0.8.0' in (PACKAGE / 'README.md').read_text()
 
 
 def test_init_workflow_uses_running_version(local_repo, monkeypatch):

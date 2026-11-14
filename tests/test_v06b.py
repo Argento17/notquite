@@ -143,6 +143,7 @@ def test_strict_tests_requires_allow_for_additions(local_repo, change):
     probe.write_text('assert True\n')
     task(root, ships='none', test=f'{PYTHON} -m pytest tests')
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     if change == 'prepend':
         probe.write_text('import sys; sys.exit(0)\n' + probe.read_text())
     else:
@@ -166,6 +167,8 @@ def test_strict_pytest_config_requires_each_pytest_task(local_repo, config):
     task(root, 'TASK-2', ships='none', test='pytest other')
     task(root, 'TASK-3', ships='none', test=f'{PYTHON} test_plain.py')
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
+    store.add_note(root, "TASK-2", "Working on pytest configuration")
     path = root / config
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('[tool.pytest.ini_options]\naddopts = "--ignore=tests"\n' if config.endswith('.toml') else '# skip tests\n')
@@ -220,7 +223,8 @@ def test_require_task_records_code_changes(local_repo):
     result = cli(root, 'check', '--base', base, '--require-task')
     assert result.returncode == 1 and 'this change edits code but no task records it' in result.stdout
     store.add_note(root, 'TASK-1', 'Records the change')
-    ok(root, 'check', '--base', base, '--require-task')
+    refused = cli(root, 'check', '--base', base, '--require-task')
+    assert refused.returncode == 1 and 'implemented or test receipt' in refused.stdout
     git(root, 'restore', 'tasks/TASK-1.md')
     store.receipt(root, 'TASK-1', 'implemented')
     ok(root, 'check', '--base', base, '--require-task')
@@ -462,6 +466,7 @@ def test_strict_pytest_default_discovery_protects_added_tests(local_repo):
     root = local_repo
     task(root, ships='none', test=f'{PYTHON} -m pytest')
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     (root / 'test_new.py').write_text('def test_new(): assert True\n')
     commit_all(root)
     result = cli(root, 'check', '--base', base, '--strict-tests')
@@ -493,7 +498,7 @@ def test_docs_state_review_rights_and_opt_in_policies():
     for name in ('README.md', 'docs/reference.md'):
         text = (PACKAGE / name).read_text()
         for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
-                       'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.7.0'):
+                       'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.8.0'):
             assert phrase in text
 
 
@@ -532,6 +537,7 @@ def test_strict_pytest_configuration_keeps_default_discovery(local_repo, config,
     probe = root / filename
     probe.write_text('def test_app(): assert True\n')
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     probe.write_text('import sys; sys.exit(0)\n' + probe.read_text())
     commit_all(root)
     result = cli(root, 'check', '--base', base, '--strict-tests')
@@ -558,6 +564,7 @@ def test_strict_pytest_custom_config_and_globs(local_repo, config, option):
     probe = root / 'check_a.py'
     probe.write_text('def test_app(): assert True\n')
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     probe.write_text('import sys; sys.exit(0)\n' + probe.read_text())
     commit_all(root)
     result = cli(root, 'check', '--base', base, '--strict-tests')

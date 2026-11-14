@@ -186,6 +186,7 @@ def test_base_guards_test_files(local_repo, explicit, change):
     if explicit:
         path.write_text(path.read_text().replace('test: "any"', 'test: "any"\ntest_paths: ["tests"]'))
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     if change == 'edit':
         probe.write_text('assert True\nassert 2 == 2\n')
     elif change == 'delete':
@@ -212,6 +213,7 @@ def test_test_file_change_selects_dependents(local_repo):
     task(root, ships='none', test='python test_app.py')
     task(root, 'TASK-2', ships='none', status='DONE', waits=['task:TASK-1'])
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     (root / 'test_app.py').write_text('assert True\nassert 1\n')
     commit_all(root)
     result = cli(root, 'check', '--base', base)
@@ -320,11 +322,13 @@ def test_binary_test_additions_pass_but_edits_need_allow(local_repo):
     path = task(root, ships='none', test='any')
     path.write_text(path.read_text().replace('test: "any"', 'test: "any"\ntest_paths: ["tests"]'))
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     binary = folder / 'fixture.bin'
     binary.write_bytes(b'\0original\xff')
     commit_all(root)
     ok(root, 'check', '--base', base)
     base = store.head(root)
+    store.add_note(root, "TASK-1", "Updating the fixture")
     binary.write_bytes(b'\0changed\xff')
     commit_all(root)
     result = cli(root, 'check', '--base', base)
@@ -338,6 +342,7 @@ def test_empty_test_rename_needs_allow(local_repo):
     test.touch()
     task(root, ships='none', test='python test_empty.py')
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     test.rename(root / 'test_renamed.py')
     commit_all(root)
     result = cli(root, 'check', '--base', base)
@@ -372,6 +377,7 @@ def test_test_paths_normalise_parent_components(local_repo, explicit):
     if explicit:
         path.write_text(path.read_text().replace('test: "any"', 'test: "any"\ntest_paths: ["tests/../tests"]'))
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     probe.write_text('pass\n')
     commit_all(root)
     result = cli(root, 'check', '--base', base)
