@@ -153,7 +153,7 @@ def patch_ids(root, revision, commits=None):
 def merge_match(root, implemented, target):
     """Evidence from immutable commits, cached independently of branch names and HEAD."""
     original = implemented["commit"]
-    key = s.digest(s.packed(["merge-v4", original, s.has_commit(root, original), implemented["code"],
+    key = s.digest(s.packed(["merge-v5", original, s.has_commit(root, original), implemented["code"],
                             target, MERGE_SEARCH_LIMIT]).encode())
     folder = s._cache_dir(root)
     cached = folder / ("merge-" + key + ".json") if folder else None
@@ -206,6 +206,16 @@ def _merge_match(root, implemented, target):
     if combined_id:
         for commit, patch in reversed(list(target_patches.items())):
             if patch == combined_id[0]:
+                # One replayed code commit also matches the combined diff. Call that a
+                # rebase; squash describes a landing that combines several code commits.
+                feature = s.git(root, "rev-list", f"--max-count={MERGE_SEARCH_LIMIT + 1}",
+                                f"{base}..{original}").stdout.split()
+                if len(feature) <= MERGE_SEARCH_LIMIT:
+                    feature_patches = patch_ids(root, f"{base}..{original}")
+                    merges = s.git(root, "rev-list", "--merges", f"{base}..{original}",
+                                   "--", *s.CODE_PATHS).stdout.split()
+                    if feature_patches == {original: patch} and not merges:
+                        return {"method": "rebase", "commit": commit}
                 return {"method": "squash", "commit": commit}
     # Count all commits (including merges and metadata) so truncation cannot look complete.
     feature = s.git(root, "rev-list", f"--max-count={MERGE_SEARCH_LIMIT + 1}", f"{base}..{original}").stdout.split()
@@ -412,6 +422,12 @@ def owes(record, owed, delivery=()):
     if not items and record["status"] not in FINISHED | {"CANCELLED"}:
         items.append(UNCLAIMED_OWES)
     return ", ".join(items + list(delivery)) or "nothing"
+
+
+def unfinished_headline(record, done, delivery, open_waits):
+    debt = done + delivery + open_waits
+    detail = 'owes: ' + ', '.join(debt) if debt else 'its test evidence is in place'
+    return f"{record['id']} {record['status']} (not claimed finished); {detail}"
 
 
 @s.cached_read
@@ -960,6 +976,8 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
         elif empty == 'no tests ran':
             notes.append(f"{tid}: its test ran, but reported no tests ran")
     if code == 0:
+        if notes is not None and not empty:
+            notes.append(f"{tid}: its test passed when this check ran it")
         return None
     if regression:
         return f"regression: {tid}'s test fails on this code"
@@ -1031,8 +1049,9 @@ def _count(n, word):
     return f"{n} {word}" + ("" if n == 1 else "s")
 
 
-def check_summary(counts, run_tests=False):
-    line = f"checked {_count(counts['tasks'], 'task')} ({counts['claimed']} claimed DONE or CLOSED)"
+def check_summary(counts, run_tests=False, single_unclaimed=False):
+    claims = "not claimed finished" if single_unclaimed else f"{counts['claimed']} claimed DONE or CLOSED"
+    line = f"checked {_count(counts['tasks'], 'task')} ({claims})"
     if run_tests:
         line += f"; ran {_count(counts['tests'], 'declared test')}"
     if counts.get('tests_only'):
@@ -1180,8 +1199,6 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
             failed = run_declared_test(root, record, counts, notes, strict_tests)
             if failed:
                 problems.append(failed)
-            else:
-                notes.append(f"{tid}: its test passed when this check ran it")
     if all_tests:
         results = {}
         for record in all_records.values():
@@ -1189,8 +1206,6 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
                 failed = run_declared_test(root, record, counts, notes, strict_tests, results, regression=True)
                 if failed:
                     problems.append(failed)
-                else:
-                    notes.append(f"{record['id']}: its test passed when this check ran it")
     return problems
 
 
@@ -1203,9 +1218,39 @@ def claim_debt(record, all_records, views):
     return done + (delivery if claimed == "CLOSED" else []) + waits(record, all_records, views)
 
 
-def next_step(item, record, code_changed=False, root=None):
+def claim_details(root, record, all_records, views):
+    """Keep claim problems separate from the recorded evidence verdict in both views."""
+    debt = claim_debt(record, all_records, views)
+    stale = None if debt else stale_claim(root, record)
+    if stale and "uncommitted code changes" in stale:
+        debt = ["evidence for the uncommitted code changes"]
+    elif stale:
+        implemented = newest_implementation(s.entries(root, record['id']))
+        debt = [f"a passing test on the code marked {record['status']} (it differs from {implemented['commit'][:7]})"]
+    return debt, stale
+
+
+def stale_result(record):
+    return (f"the {record['status']} claim is on code other than the tested code; "
+            f"run workorder renew --task {record['id']}")
+
+
+def done_step(record):
+    prerequisite = (f"set a concrete test: command in tasks/{record['id']}.md and "
+                    if record.get('test', '').strip() == ANY_TEST else "")
+    return prerequisite + f"run workorder done --task {record['id']}"
+
+
+def next_step(item, record, code_changed=False, root=None, finish=False):
     tid = record["id"]
     command = record.get("test", "").strip() or "<your test command>"
+    if finish:
+        if item == "a declared test":
+            return (f'add the command that proves it to tasks/{tid}.md, e.g. test: "python -m pytest",'
+                    f' then run workorder done --task {tid}')
+        if (item == "implementation" or item.startswith("a passing test on")
+                or item == "evidence for the uncommitted code changes"):
+            return "finish the Acceptance items and commit the code, then " + done_step(record)
     if item == "implementation":
         return f"commit the code, then: workorder receipt implemented --task {tid}"
     if item == "a declared test":
@@ -1410,18 +1455,16 @@ def record_lines(root, tid):
         computed = "BLOCKED"
     history = s.entries(root, tid)
     recognise_squashed(root, tid, history)
-    stale = [] if done or delivery else (["a passing test on the code marked " + record["status"]]
-                             if stale_claim(root, record) else [])
-    if stale and computed in FINISHED:
-        computed = "IN_PROGRESS"
+    debt, stale = claim_details(root, record, all_records, views)
+    stale_debt = debt if stale else []
     if record['status'] in FINISHED:
         headline = f"{tid} recorded {record['status']}; computed {computed}"
     else:
-        debt = done + delivery + open_waits
-        detail = 'owes: ' + ', '.join(debt) if debt else 'its test evidence is in place'
-        headline = f"{tid} {record['status']} (not claimed finished); {detail}"
+        headline = unfinished_headline(record, done, delivery, open_waits)
     lines = [headline,
-             "still owes: " + owes(record, stale + done + open_waits, delivery)]
+             "still owes: " + owes(record, stale_debt + done + open_waits, delivery)]
+    if stale:
+        lines.append("Result: " + stale_result(record))
     if record["status"] not in FINISHED and computed in FINISHED:
         # Found in the handoff trial: "computed CLOSED, owes nothing" on a half-done task misleads.
         lines.append("note:     " + ACCEPTANCE_NOTE)
@@ -1448,12 +1491,13 @@ def record_lines(root, tid):
     progress = [line.strip() for heading, body in sections
                 if heading == "Progress" for line in body if line.strip() and not line.strip().startswith("<!--")]
     lines += ["", "progress:"] + ([f"  {line}" for line in progress] or ["  (no notes yet)"])
-    owed = stale + done + delivery + open_waits
-    if owed:
-        lines += ["", f"next step: {next_step(owed[0], record, root=root)}"]
+    owed = stale_debt + done + delivery + open_waits
+    if stale:
+        lines += ["", f"next step: workorder renew --task {tid}"]
+    elif owed:
+        lines += ["", f"next step: {next_step(owed[0], record, root=root, finish=True)}"]
     elif record["status"] not in FINISHED | {"CANCELLED"}:
-        lines += ["", "next step: finish the Acceptance items, then set status DONE and run "
-                  f"workorder check {tid}"]
+        lines += ["", "next step: finish the Acceptance items, then " + done_step(record)]
     return lines
 
 
@@ -1471,29 +1515,28 @@ def explain(root, tid, claim=None):
     views = Views(root, all_records)
     record = all_records[tid]
     computed, done, delivery = views[tid]
-    debt = claim_debt(record, all_records, views)
+    debt, stale = claim_details(root, record, all_records, views)
     history = s.entries(root, tid)
     recognise_squashed(root, tid, history)
     commit, test = test_line(record, history)
     implemented = newest_implementation(history)
     runs = (counting_runs(record, history[history.index(implemented) + 1:], implemented)
             if implemented and not implemented["missing"] else [])
-    stale = None if debt else stale_claim(root, record)
-    if stale and "uncommitted code changes" in stale:
-        debt = ["evidence for the uncommitted code changes"]
-    elif stale:
-        debt = [f"a passing test on the code marked {record['status']} (it differs from {commit})"]
     code_changed = implemented is not None and s.code_digest(root, s.head(root)) != implemented["code"]
     claimed = record["status"]
-    if computed in FINISHED and waits(record, all_records, views):
+    open_waits = waits(record, all_records, views)
+    if computed in FINISHED and open_waits:
         computed = "BLOCKED"  # the evidence is in, but a dependency is still open
     if s.dirty_paths(root):
         code_note = "uncommitted code changes are not covered by any receipt"
     else:
         code_note = None
-    lines = [f"NOT QUITE  {tid}" if debt else f"{claimed}  {tid}", "",
-             f"  Claimed:  {claimed}", f"  Computed: {computed}",
-             f"  Commit:   {commit or 'none recorded'}", f"  Test:     {test}"]
+    if claimed in FINISHED:
+        lines = [f"NOT QUITE  {tid}" if debt else f"{claimed}  {tid}", "",
+                 f"  Claimed:  {claimed}", f"  Computed: {computed}"]
+    else:
+        lines = [unfinished_headline(record, done, delivery, open_waits), ""]
+    lines += [f"  Commit:   {commit or 'none recorded'}", f"  Test:     {test}"]
     merged = computed_merge(root, record, implemented)
     if merged:
         lines.append("  Merge:    " + merge_line(merged))
@@ -1509,8 +1552,7 @@ def explain(root, tid, claim=None):
         lines += [f"  Missing:  {item}" for item in debt]
         lines += [f"  Next:     {next_step(item, record, code_changed, root)}" for item in debt]
         if stale:
-            result = (f"the {claimed} claim is on code other than the tested code; "
-                      f"run workorder renew --task {tid}")
+            result = stale_result(record)
         else:
             state = "NOT DONE" if done or claimed == "DONE" else "NOT CLOSED"
             result = f"{state}. The status says {claimed}; the evidence above does not support it."

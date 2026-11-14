@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+- When `done` refuses, say DONE was not written and name the unchanged status
+  before the Missing lines. Keep dated `--note` text on early refusals too,
+  including uncommitted code and missing test commands.
+- Ask for a push after `done` only when the repository has an origin remote.
+- Describe template-only Acceptance as not filled in; show the edit in the
+  quick start. Use `done` in `show` next steps for implementation, tests and
+  remaining Acceptance work.
+- Update the agent block to pull from origin with an explicit branch and
+  rebase choice, only when origin exists. Explain that every clone runs the
+  idempotent `init`, and remind clones with committed instructions but no hook.
+- Keep `show` and `check` evidence verdicts consistent for stale claims, with
+  the same explanation and renewal advice. Describe unclaimed tasks as
+  unfinished even when their test evidence is in place.
+- Name a single replayed implementation commit as rebase instead of squash.
+- Report skipped-only reruns without also saying the test passed; preserve
+  ordinary and strict exit codes.
+- Update package versions and install pins to 0.7.0. New workflows written
+  by `init` pin the running version.
+
 ## 0.6.0 (14 Nov 2026)
 
 - On Windows, receipt writers for one task no longer fail with "permission denied"

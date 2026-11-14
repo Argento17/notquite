@@ -1,11 +1,12 @@
 """Repository setup text, also shown verbatim in the README."""
 
 import os
+from . import __version__
 from . import store as s
 
 
 AGENT_BLOCK = r"""## Tasks
-- Start every session with `git pull`, then `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
+- Start every session from the task: if the repository has an origin remote, update first: `git pull --rebase origin main` (or your branch's upstream). Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If it refuses, report its Missing lines instead of saying the task is done. Acceptance lists are not checked by Workorder.
 - Before you stop, record where you are with `workorder note --task <id> "<what was done; what is next>"`, keep `next` current, then commit tasks/ and .workorder/ with your work and push.
@@ -31,7 +32,7 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install workorder==0.6.0
+      - run: python -m pip install workorder==@VERSION@
       - name: Check tasks and run their tests
         env:
           BASE: origin/${{ github.base_ref }}
@@ -50,6 +51,10 @@ def initialize(root, check=False, force=False):
     different = hook_exists and hook.read_text(encoding='utf-8') != HOOK
     if different and not check and not force:
         raise s.Refused(f'{hook_name} is different; refusing to overwrite it without --force')
+    if not hook_exists and any(
+            AGENT_BLOCK.strip() in s.git(root, 'show', f'HEAD:{name}', required=False).stdout
+            for name in ('AGENTS.md', 'CLAUDE.md')):
+        print('Hooks are not cloned; run workorder init in every clone.')
     missing = False
     for name in ('AGENTS.md', 'CLAUDE.md'):
         path = s.local_path(root, name)
@@ -84,6 +89,6 @@ def initialize(root, check=False, force=False):
         print('.github/workflows/workorder.yml: missing')
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(WORKFLOW, encoding='utf-8', newline='\n')
+        path.write_text(WORKFLOW.replace('@VERSION@', __version__), encoding='utf-8', newline='\n')
         print('.github/workflows/workorder.yml: written')
     return int(missing)

@@ -86,7 +86,7 @@ def test_done_records_only_changed_implementation_and_note(local_repo):
     output = ok(root, 'done', '--task', 'TASK-1', '--note', 'Ready for review')
     assert 'Acceptance is not checked by Workorder: confirm each item is met.' in output
     assert '- Adds correctly.' in output
-    success = 'TASK-1 DONE: claim supported; commit tasks/ and .workorder/ and push'
+    success = 'TASK-1 DONE: claim supported; commit tasks/ and .workorder/'
     assert success in output and output.index('Acceptance') < output.index(success)
     assert store.record(root, 'TASK-1')['status'] == 'DONE'
     assert ': Ready for review' in path.read_text()
@@ -482,7 +482,7 @@ def test_docs_state_review_rights_and_opt_in_policies():
     for name in ('README.md', 'docs/reference.md'):
         text = (PACKAGE / name).read_text()
         for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
-                       'WORKORDER_AGENT', 'import sys; sys.exit(0)', 'pipx install workorder', 'workorder==0.6.0'):
+                       'WORKORDER_AGENT', 'import sys; sys.exit(0)', 'pipx install workorder', 'workorder==0.7.0'):
             assert phrase in text
 
 

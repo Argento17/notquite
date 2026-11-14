@@ -24,7 +24,7 @@ def parser():
     init.add_argument("--force", action="store_true", help="replace a different pre-commit hook")
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
     done.add_argument("--task", required=True)
-    done.add_argument("--note", help="add a dated Progress line, including when the test or check refuses")
+    done.add_argument("--note", help="add a dated Progress line, including when done refuses")
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
     new.add_argument("--owner", required=True)
@@ -111,20 +111,27 @@ def invalid_reason(root, item):
     return "the code changed while the command ran"
 
 
+def done_refusal(tid, status, lines):
+    """Describe the refusal without presenting the proposed DONE as a written claim."""
+    if status is not None:
+        print(f"{tid}: DONE was not written; the status stays {status}")
+    print("\n".join(line for line in lines if line.startswith(("  Missing:", "  Next:"))))
+
+
 def finish_task(root, tid, note=None):
     """Use the same evidence and claim checks as the individual commands, restoring status on refusal."""
+    status = None
     try:
         record = s.record(root, tid)
+        status = record['status']
+        if note is not None:
+            print(f"{tid}: {s.add_note(root, tid, note)}")
         dirty = s.dirty_paths(root)
         if dirty:
             raise s.Refused("commit the code first; " + s.describe_dirty(dirty))
         command = gate.declared_test(record)
         if not command:
             raise s.Refused(f"{tid} needs a declared test command; add test: to tasks/{tid}.md")
-        if note is not None and not note.strip():
-            raise s.Refused("a note needs some text")
-        if note is not None:
-            print(f"{tid}: {s.add_note(root, tid, note)}")
         implemented = gate.newest_implementation(s.entries(root, tid))
         if implemented is None or implemented["code"] != s.code_digest(root, s.head(root)):
             item = s.receipt(root, tid, "implemented")
@@ -133,13 +140,13 @@ def finish_task(root, tid, note=None):
         print(f"{tid} test {item['commit'][:7]} exit {item['exit_code']} - recorded")
         lines, refused = gate.explain(root, tid, claim="DONE")
         if refused or item["exit_code"] or not item["valid"]:
-            print("\n".join(lines))
+            done_refusal(tid, status, lines)
             return 1
         print("Acceptance:")
         sections = s.task_body_sections(s.read_text(root, f"tasks/{tid}.md"))
         acceptance = [line for heading, body in sections if heading == "Acceptance"
                       for line in body if line.strip() and not line.strip().startswith("<!--")]
-        print("\n".join(acceptance) or "  (empty)")
+        print("\n".join(acceptance) or "  the Acceptance list is not filled in")
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         path = s.local_path(root, f"tasks/{tid}.md")
         before = path.read_bytes()
@@ -154,17 +161,19 @@ def finish_task(root, tid, note=None):
             if s.record(root, tid)['status'] != 'DONE':
                 raise s.Refused('could not set the task status to DONE')
             lines, refused = gate.explain(root, tid)
-            print("\n".join(lines))
-            if refused:
-                return 1
-            supported = True
+            supported = not refused
         finally:
             if not supported:
                 path.write_bytes(before)
-        print(f"{tid} DONE: claim supported; commit tasks/ and .workorder/ and push")
+        if refused:
+            done_refusal(tid, status, lines)
+            return 1
+        print("\n".join(lines))
+        push = " and push" if s.has_origin(root) else ""
+        print(f"{tid} DONE: claim supported; commit tasks/ and .workorder/{push}")
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
-        print(f"  Missing:  {error}")
+        done_refusal(tid, status, [f"  Missing:  {error}"])
         return 1
 
 
@@ -273,7 +282,8 @@ def main(argv=None):
             record = s.record(root, task_argument(options.task))
             claimed = record["status"] in gate.FINISHED
             print(gate.check_summary(dict(tasks=1, claimed=int(claimed),
-                                         tests_only=int(claimed and not refused and record['contract'] == 'none'))))
+                                         tests_only=int(claimed and not refused and record['contract'] == 'none')),
+                                     single_unclaimed=not claimed))
             return int(refused)
         else:
             notes = []

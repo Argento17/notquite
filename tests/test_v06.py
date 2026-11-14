@@ -152,8 +152,8 @@ def test_show_gives_next_step_for_unclaimed_acceptance(local_repo, status):
     before = path.read_bytes()
     shown = ok(local_repo, "show", "--task", "TASK-1")
     assert "still owes: its Acceptance items" in shown
-    assert ("next step: finish the Acceptance items, then set status DONE and run "
-            "workorder check TASK-1") in shown
+    assert ("next step: finish the Acceptance items, then run "
+            "workorder done --task TASK-1") in shown
     assert "mission:" not in shown and "next:" not in shown
     assert path.read_bytes() == before
     for ended in ("DONE", "CLOSED", "CANCELLED"):

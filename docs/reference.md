@@ -40,7 +40,7 @@ matter between two `---` lines, one
 `key: value` per line, each key once. These seven fields are required: `id`,
 `title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
 
-A value is plain single-line text, a JSON string, or a list. `note` appends a line under Progress. `done` changes the status line to DONE after checking the claim, and `done --note` also appends a dated line. Other task text is preserved. `done --note` keeps the handover line even if its test or check refuses. `done` needs a concrete declared command; use the individual receipts for `test: any`. A task
+A value is plain single-line text, a JSON string, or a list. `note` appends a line under Progress. `done` changes the status line to DONE after checking the claim, and `done --note` also appends a dated line. Other task text is preserved. `done --note` keeps the handover line on every refusal, including uncommitted code or a missing declared test. Refusal says `TASK-1: DONE was not written; the status stays IN_PROGRESS`, using the actual status, then the Missing lines. An Acceptance section containing only the template comment is described as `the Acceptance list is not filled in`. Success asks you to commit tasks/ and .workorder/, adding `and push` only with an origin remote. `done` needs a concrete declared command; use the individual receipts for `test: any`. A task
 file that cannot be read is reported as a problem of that task; the other tasks
 are still checked. Fields starting with `x-` (such as `x-issue`) are your own:
 they are kept and never checked.
@@ -230,7 +230,8 @@ shows one of these matches:
 1. The implemented commit is an ancestor of the target.
 2. A code-changing commit on the target holds exactly the implemented code.
 3. The code diff from the merge base to the implementation has the same
-   `git patch-id --stable` as a commit on the target after that base (squash).
+   `git patch-id --stable` as a commit on the target after that base (squash;
+   a single replayed implementation commit is reported as rebase).
 4. Every code commit from the merge base to the implementation has a patch
    equivalent on the target after that base (rebase, using `git cherry`
    semantics). At least one code patch must match. Merge resolutions in the
@@ -334,12 +335,14 @@ started, including failures. A command that could not start does not count.
 If none ran, another line says `no declared test ran in this check`. A task
 with `test: any` has no declared command to rerun. By default only selected tasks with supported DONE or CLOSED claims have their tests run. With `--all-tests`, every DONE/CLOSED task has its declared test run on the current code, once per distinct command, including tasks outside the selected history checks. Counts describe the
 selected tasks, including unreadable or removed tasks; unreadable claims are
-not included in the claim count. A single-task check counts that task only. Supported claims without a contract also print: `Acceptance lists are not checked; N supported claims rest on their declared tests only.` This counts supported DONE/CLOSED claims only, not unfinished tasks or refused claims.
+not included in the claim count. A single-task check counts that task only;
+an unfinished task's summary says `checked 1 task (not claimed finished)`.
+Supported claims without a contract also print: `Acceptance lists are not checked; N supported claims rest on their declared tests only.` This counts supported DONE/CLOSED claims only, not unfinished tasks or refused claims.
 Exit codes are unchanged: 0 for acceptance, 1 for refusal.
 
 With `--strict-tests`, pytest tasks also need acceptance for changes to `conftest.py` anywhere, `pytest.ini`, `tox.ini`, `setup.cfg`, and `[tool.pytest*]` sections of `pyproject.toml`. Every task using pytest needs its own `--allow`, even if its test files did not change. Unrelated TOML sections do not need acceptance under this rule.
 
-`--run-tests` prints a note when pytest reports only skipped tests: `TASK-2: its test ran, but reported only skipped tests`. With `--strict-tests --run-tests`, pytest summaries with no passed tests fail: `TASK-3: its test ran but no test passed (2 skipped)` or `(no tests ran)`. Command failures still fail normally. Tests run without a shell and these checks write no receipts.
+`--run-tests` prints a note when pytest reports only skipped tests: `TASK-2: its test ran, but reported only skipped tests`. It does not also say the test passed. With `--strict-tests --run-tests`, pytest summaries with no passed tests fail: `TASK-3: its test ran but no test passed (2 skipped)` or `(no tests ran)`. Command failures still fail normally. Tests run without a shell and these checks write no receipts.
 
 `check --base REF --run-tests --all-tests` runs every DONE/CLOSED task's declared command once per distinct command on current code. Failures print `regression: TASK-1's test fails on this code` and exit 1; computed history is unchanged. `check --base REF --require-task` exits 1 if code paths outside `tasks/`, `.workorder/`, `.notquite/` changed but no task file or receipt did: `this change edits code but no task records it`. Both flags are off by default in the workflow.
 
@@ -364,7 +367,7 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install workorder==0.6.0
+      - run: python -m pip install workorder==0.7.0
       - name: Check tasks and run their tests
         env:
           BASE: origin/${{ github.base_ref }}
@@ -533,8 +536,8 @@ back with CRLF, as Git on Windows may check them out, are treated the same.
 
 ## Reading show and check results
 
-Unclaimed tasks start with `TASK-1 IN_PROGRESS (not claimed finished); its test evidence is in place`, or `owes: ...`. They never headline computed DONE/CLOSED. Claimed tasks retain `recorded X; computed Y`. A timeline test that does not count includes `(does not count: <reason>)`, even if the command exited 0.
+In both `show` and `check ID`, unclaimed tasks start with `TASK-1 IN_PROGRESS (not claimed finished); its test evidence is in place`, or `owes: ...`. Their evidence is not labelled DONE or CLOSED. Claimed tasks retain their recorded and computed statuses. A timeline test that does not count includes `(does not count: <reason>)`, even if the command exited 0. For implementation, tests or Acceptance work, `show` suggests `workorder done --task ID`. With `test: any`, that advice asks for a concrete command first; individual receipts remain available for tasks keeping `any`.
 
 Before a merge, `merge of the tested code` is owed. Advice about differing merged code is used only if the target has commits since the merge base touching implementation paths. A stale claim does not change the recorded evidence's computed state; its Result names the mismatch, for example: `Result: the DONE claim is on code other than the tested code; run workorder renew --task TASK-1`.
 
-The pre-commit hook installed by `init` warns and exits 0 when Workorder is absent from PATH. When installed, `check --staged` exits silently if nothing is in scope. The README contains the exact installed agent block, hook and workflow.
+Run `workorder init` in every clone: hooks are not cloned. It is idempotent and prints a reminder when the agent block is committed but the hook is absent. New workflows pin the running Workorder version; existing workflows stay untouched. The pre-commit hook installed by `init` warns and exits 0 when Workorder is absent from PATH. When installed, `check --staged` exits silently if nothing is in scope. The README contains the exact installed agent block, hook and workflow.

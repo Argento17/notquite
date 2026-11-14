@@ -91,11 +91,11 @@ For small work, `workorder new --template simple` writes the seven required fiel
 
 ## Working with coding agents
 
-Workorder reads task files and recorded evidence. It does not watch conversations, so a claim made only in chat is not caught. Tell the agent how to work with tasks. Run `workorder init` to add this block to both `CLAUDE.md` (Claude Code) and `AGENTS.md` (Codex), install the hook, and write the workflow below. Existing instructions stay in place and the block is appended once. An existing workflow is skipped. A different hook is refused unless you pass `--force`. `workorder init --check` changes nothing and exits 1 if setup is missing. You can also add the block yourself:
+Workorder reads task files and recorded evidence. It does not watch conversations, so a claim made only in chat is not caught. Tell the agent how to work with tasks. Run `workorder init` in every clone: hooks are not cloned, even when the agent instructions are already committed. It is idempotent. It adds this block to both `CLAUDE.md` (Claude Code) and `AGENTS.md` (Codex), installs the hook, and writes the workflow below. Existing instructions stay in place and the block is appended once. An existing workflow is skipped. A different hook is refused unless you pass `--force`. `workorder init --check` changes nothing and exits 1 if setup is missing. You can also add the block yourself:
 
 ```markdown
 ## Tasks
-- Start every session with `git pull`, then `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
+- Start every session from the task: if the repository has an origin remote, update first: `git pull --rebase origin main` (or your branch's upstream). Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If it refuses, report its Missing lines instead of saying the task is done. Acceptance lists are not checked by Workorder.
 - Before you stop, record where you are with `workorder note --task <id> "<what was done; what is next>"`, keep `next` current, then commit tasks/ and .workorder/ with your work and push.
@@ -104,7 +104,7 @@ Workorder reads task files and recorded evidence. It does not watch conversation
 
 ## Quick start
 
-Requires Git and Python 3.10 or newer. This uses a throwaway folder and needs no remote. On Windows, use Git Bash and replace `python3` with `python`.
+Requires Git and Python 3.10 or newer. This uses a throwaway folder and needs no remote. On Windows, use Git Bash and replace `python3` with `python`. Run `workorder init` in every clone to install its hook; it is idempotent, and Git does not clone hooks.
 
 ```sh
 pipx install workorder
@@ -120,12 +120,29 @@ printf '__pycache__/\n' > .gitignore
 git add . && git commit -qm "Add calc and Workorder setup"
 
 workorder new --title "Add calc" --owner you --test "python3 test_calc.py"
-# Fill in the task's Scope and Acceptance list, then confirm every item is met.
+```
+
+Edit `tasks/TASK-1.md`: replace the template comments under Scope and Acceptance with:
+
+```markdown
+## Scope
+
+In: add two numbers with `add(a, b)` in calc.py.
+Out: subtraction and other operations.
+
+## Acceptance
+
+- `add(2, 2)` returns `4`.
+```
+
+Confirm every Acceptance item is met, then:
+
+```sh
 workorder done --task TASK-1 --note "add() works; next: subtraction"
 workorder show --task TASK-1
 ```
 
-`done` refuses uncommitted code, records implementation if the code changed since the last implemented receipt, and runs the declared test. Before setting DONE it prints the Acceptance list and reminds you to confirm it yourself. On success it prints `TASK-1 DONE: claim supported; commit tasks/ and .workorder/ and push`. It never commits or pushes. On a failed test or unsupported claim it leaves status unchanged and prints the Missing lines. `--note` keeps the dated handover line even if the test or check refuses. It needs a concrete `test` command; `test: any` still uses the individual receipt commands.
+`done` refuses uncommitted code, records implementation if the code changed since the last implemented receipt, and runs the declared test. Before setting DONE it prints the Acceptance list and reminds you to confirm it yourself. If only the template comment remains, it says `the Acceptance list is not filled in`. On success it prints `TASK-1 DONE: claim supported; commit tasks/ and .workorder/`, adding `and push` only when the repository has an origin remote. It never commits or pushes. On refusal it leaves status unchanged, says `TASK-1: DONE was not written; the status stays IN_PROGRESS` (using the task's actual status), then prints the Missing lines. `--note` keeps the dated handover line on every refusal, including uncommitted code or a missing declared test. It needs a concrete `test` command; `test: any` still uses the individual receipt commands.
 
 `show` prints the recorded status and computed evidence for claimed tasks. For an unfinished task it starts with, for example, `TASK-1 IN_PROGRESS (not claimed finished); its test evidence is in place`. Passing tests alone do not mean every Acceptance item is met. Without a contract, supported claims rest on declared tests only; Workorder does not check the Acceptance list.
 
@@ -165,7 +182,7 @@ TASK-1 still owes: a passing test on 75e3c96
 
 ## The record
 
-- **`workorder show --task TASK-1`** prints the task as a record: recorded and computed status, what is still owed, dependencies, title, owner and `test`, plus mission, summary and `next` when filled in. It prints every section of the task (Context, Scope, Lanes, Acceptance), a dated timeline of every receipt (implemented, each test run with its command and result, merges and read-backs, and who recorded them), any computed merge, and the Progress notes. When work is still owed it prints a next step. If only unclaimed Acceptance work remains, that step is to finish the Acceptance items, set status DONE and run `workorder check TASK-1`.
+- **`workorder show --task TASK-1`** prints the task as a record: recorded and computed status, what is still owed, dependencies, title, owner and `test`, plus mission, summary and `next` when filled in. It prints every section of the task (Context, Scope, Lanes, Acceptance), a dated timeline of every receipt (implemented, each test run with its command and result, merges and read-backs, and who recorded them), any computed merge, and the Progress notes. When implementation, tests or unclaimed Acceptance work remain, the next step uses `workorder done --task TASK-1`. With `test: any`, that advice asks for a concrete command first; individual receipts remain available for tasks keeping `any`. A stale claim needs `workorder renew --task TASK-1` on the claimed code.
 - **`workorder note --task TASK-1 "..."`** adds a dated line at the end of the task's Progress section. `done --note` also adds a Progress line; `done` can set status DONE after checking its evidence.
 - **Ids.** `workorder new` writes `tasks/TASK-<n>.md`. With an `origin` remote, it first reserves the id there, so two clones cannot take the same id. Without one, or with `--local`, it numbers tasks from the task files and says so; those ids are not coordinated with anyone else.
 - **Claims.** `workorder claim --task TASK-1` pushes a tag to `origin`. If another clone already holds the task, Git rejects the push and the claim fails. It also fetches origin's main branch (master when main is absent). If that branch has task text or receipts missing from your checkout, it refuses with the receipt count, note count and author: `origin/main has newer work on TASK-1 (2 receipts, 1 note, by alex); pull first`. It still refuses tasks already DONE, CLOSED or CANCELLED there. `show` makes a best-effort fetch with a three-second deadline and warns at the top when you need to pull. Offline it shows the local task with a short note and no stale upstream warning. `workorder claims` lists holders.
@@ -332,7 +349,7 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install workorder==0.6.0
+      - run: python -m pip install workorder==0.7.0
       - name: Check tasks and run their tests
         env:
           BASE: origin/${{ github.base_ref }}
