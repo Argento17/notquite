@@ -546,7 +546,7 @@ def test_workflow_installs_kit_runs_tests_and_checker():
              (PACKAGE / ".github/workflows/check.yml").read_text().splitlines()
              if line.strip().startswith("- run:")]
     assert steps == ["- run: python -m pip install -e '.[test]'",
-                     "- run: python -m pytest", "- run: workorder check"]
+                     "- run: python -m pytest -n auto", "- run: workorder check"]
 
 
 def test_test_before_implementation_does_not_complete_task(clones):
