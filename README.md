@@ -1,8 +1,21 @@
-# NotQuite
+# NotQuite: Checks whether DONE actually means done.
+
+![NotQuite rejecting a DONE task whose last passing test ran on an older commit](https://raw.githubusercontent.com/Argento17/notquite/main/docs/notquite-demo.gif)
+
+```sh
+python -m pip install git+https://github.com/Argento17/notquite@v0.1.0
+```
+
+- A task's status is a claim; its actual state is computed from recorded evidence.
+- DONE needs an implementation on a clean commit plus a passing latest test run on that exact commit. A later failing run revokes it.
+- CLOSED can also require merge and deploy read-back evidence.
+- Three lines in `CLAUDE.md` / `AGENTS.md` hook it into Claude Code or Codex ([see below](#using-it-with-coding-agents)).
+
+## Why
 
 A task says DONE. The tests ran on an older commit. The latest changes were never checked.
 
-Or the tests passed, the code was merged, and nobody verified that it reached production.
+Or the tests passed and the code was merged, then came a deploy nobody read back.
 
 **NotQuite checks the evidence behind task status.**
 
@@ -12,7 +25,7 @@ CLOSED can require more: a merge, a deployment check, and a live read-back comma
 
 You can also define acceptance criteria and specify what evidence counts. A mock result cannot satisfy a requirement for real evidence.
 
-It runs on Git and Python's standard library. No server or database.
+It runs on Git and Python's standard library. No server or database. Tested in CI on Linux and Windows (Python 3.10, 3.12, 3.13).
 
 Receipts catch missing or stale evidence, but they are not signed and cannot prevent deliberate forgery.
 
@@ -48,11 +61,11 @@ TASK-1 still owes: a passing test on cfd328a
 
 ## Quick start
 
-Requires Git and Python 3.10 or newer. CI runs the tests on Linux and Windows with Python 3.10, 3.12 and 3.13. This uses a throwaway folder and needs no remote. On Windows, run the commands in Git Bash and activate with `. .venv/Scripts/activate`.
+Requires Git and Python 3.10 or newer. This uses a throwaway folder and needs no remote. On Windows, run the commands in Git Bash and activate with `. .venv/Scripts/activate`.
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-python -m pip install git+https://github.com/Argento17/notquite
+python -m pip install git+https://github.com/Argento17/notquite@v0.1.0
 
 mkdir demo && cd demo
 git init -q -b main
@@ -69,6 +82,8 @@ notquite receipt implemented --task TASK-1
 notquite receipt test --task TASK-1 -- python test_calc.py
 notquite check TASK-1
 ```
+
+The last command ends with `Claimed: IN_PROGRESS` and `Computed: CLOSED`. That is expected: the `status` line in `tasks/TASK-1.md` is your claim, and NotQuite never edits it. The evidence already supports CLOSED (this task ships nothing), so setting `status: CLOSED` would now pass `notquite check`.
 
 To see it fail, change `calc.py`, commit, run `notquite receipt implemented --task TASK-1`, set `status: DONE` in `tasks/TASK-1.md`, and run `notquite check TASK-1` again.
 
@@ -210,6 +225,8 @@ chmod +x .git/hooks/pre-commit
 ## Contributing
 
 Bug reports and small pull requests are welcome. See [CONTRIBUTING.md](https://github.com/Argento17/notquite/blob/main/CONTRIBUTING.md).
+
+Feedback, issues and ideas welcome, and a star if you find it useful.
 
 ## License
 
