@@ -71,6 +71,11 @@ From the third four-reviewer round:
 - Stray files in `.workorder/receipts/` are ignored, a missing contract
   evidence file is unmet evidence rather than an error, quoted list items and
   person names with spaces are read, and an unknown status shows its value.
+- A problem counts as "already so on base" only when the check refuses that
+  task on the base revision itself (checked in a temporary worktree), so a
+  change to a contract or its evidence can no longer pass as an old problem.
+  An in-place contract edit is noted for review. Commands are shown the way
+  they are read, so Windows paths print without extra quoting.
 
 - A test run counts when its code matches the implemented code, on any commit.
   Committing the task file and receipts no longer hides later runs: a later

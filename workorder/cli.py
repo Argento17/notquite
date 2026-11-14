@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-import shlex
 import subprocess
 import sys
 
@@ -106,7 +105,7 @@ def main(argv=None):
             detail = f" exit {item['exit_code']}" if "exit_code" in item else ""
             print(f"{options.task} {options.kind} {item['commit'][:7]}{detail} - recorded")
             if command:
-                print("command: " + shlex.join(command))
+                print("command: " + s.join_command(command))
             record = s.record(root, options.task)
             reason = (invalid_reason(root, item) if item.get("exit_code") == 0 and not item["valid"]
                       else gate.uncounted(root, record, s.entries(root, options.task)))

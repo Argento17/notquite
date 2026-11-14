@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 
 from . import store as s
 
@@ -182,6 +181,15 @@ def base_notes(root, base):
                          f" -> {record.get('test', '') or '(none)'!r}")
         if before.get("contract") != record.get("contract"):
             notes.append(f"{tid}: contract changed since {base}: {before.get('contract')} -> {record.get('contract')}")
+        elif record.get("contract", "none") != "none":
+            path = record["contract"]
+            old = s.git(root, "show", f"{base}:{path}", required=False)
+            try:
+                now = s.read_text(root, path)
+            except (OSError, s.Refused):
+                now = None
+            if old.returncode == 0 and now is not None and now != old.stdout.replace("\r\n", "\n"):
+                notes.append(f"{tid}: contract {path} edited since {base}")
         try:
             dropped = sorted(set(s.dependencies({"waits_on": before.get("waits_on", []),
                                                  "depends_on": s.task_refs(tid, "depends_on",
@@ -296,10 +304,37 @@ def unchanged_since(root, base, tid, staged=False):
     return True
 
 
+def failing_at(root, rev):
+    """Task ids whose claim the check refuses at rev, found by checking rev itself in a temporary
+    worktree. Used to tell a problem the change introduced from one it found already there."""
+    import os
+    import tempfile
+    from pathlib import Path
+    # Inside a pre-commit hook Git points these at the commit being made; the worktree needs its own.
+    saved = {key: os.environ.pop(key) for key in ("GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_PREFIX")
+             if key in os.environ}
+    try:
+        with tempfile.TemporaryDirectory(prefix="workorder-base-") as folder:
+            tree = Path(folder) / "tree"
+            if s.git(root, "worktree", "add", "--detach", "--quiet", str(tree), rev, required=False).returncode:
+                return set()
+            try:
+                found = check(tree)
+            except (s.Refused, OSError, ValueError):
+                found = []
+            finally:
+                s.git(root, "worktree", "remove", "--force", str(tree), required=False)
+                s.git(root, "worktree", "prune", required=False)
+        return {problem.split()[2] for problem in found if problem.startswith("NOT QUITE  ")}
+    finally:
+        os.environ.update(saved)
+
+
 def check(root, staged=False, base=None, notes=None):
     """Problems that refuse the check. With base, a claim problem on a task whose file and receipts are
     unchanged since base was already there before this change: it goes to notes, not problems."""
     notes = [] if notes is None else notes
+    failing = None  # task ids already refused on the reference revision, worked out only when needed
     all_records = records(root, staged)
     views = {tid: verdict(root, record, staged) for tid, record in all_records.items()}
     problems = base_problems(root, base, staged) if base else []
@@ -344,8 +379,12 @@ def check(root, staged=False, base=None, notes=None):
                  f" Details: workorder check {tid}") if debt else stale_claim(root, record, staged, base)
         reference = base or ("HEAD" if staged else None)
         if found and reference and unchanged_since(root, reference, tid, staged):
-            notes.append(f"{found} (already so on {reference}; this change does not touch {tid})")
-        elif found:
+            if failing is None:
+                failing = failing_at(root, reference)
+            if tid in failing:
+                notes.append(f"{found} (already so on {reference}; this change does not touch {tid})")
+                continue
+        if found:
             problems.append(found)
     return problems
 
@@ -512,7 +551,7 @@ def explain(root, tid):
              f"  Claimed:  {claimed}", f"  Computed: {computed}",
              f"  Commit:   {commit or 'none recorded'}", f"  Test:     {test}"]
     if runs:
-        lines.append(f"  Command:  {shlex.join(runs[-1]['command'])}")
+        lines.append(f"  Command:  {s.join_command(runs[-1]['command'])}")
     if code_changed:
         lines.append(f"  Note:     the code has changed since {commit}; this verdict is about {commit}")
     if code_note:

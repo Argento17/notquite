@@ -596,6 +596,17 @@ def split_command(value, what="test"):
     return words
 
 
+def join_command(words):
+    """Show arguments the way split_command reads them: plain words as they are, others quoted."""
+    shown = []
+    for word in words:
+        if word and not any(ch.isspace() or ch in "\"'" for ch in word):
+            shown.append(word)
+        else:
+            shown.append(f"'{word}'" if '"' in word else f'"{word}"')
+    return " ".join(shown)
+
+
 def has_commit(root, commit):
     key = (str(root), commit)
     if key not in _PRESENT:

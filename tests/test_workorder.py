@@ -1662,3 +1662,72 @@ def test_a_cancelled_task_leaves_ready_and_never_counts_as_finished(local_repo):
     path.write_text(path.read_text(encoding="utf-8").replace('"CANCELLED"', '"DONE # finished"'),
                     encoding="utf-8")
     assert "unknown status 'DONE # finished'" in cli(local_repo, "check").stderr
+
+
+# 0.3.0: the adopt-or-pass round, kept as regression tests.
+
+def test_changed_evidence_on_a_valid_base_fails_the_hook_and_the_base_check(local_repo):
+    evidence = local_repo / ".workorder" / "evidence" / "run.txt"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("reload kept 3 items\n", encoding="utf-8")
+    contract = local_repo / ".workorder" / "contracts" / "c.json"
+    contract.parent.mkdir(parents=True)
+    contract.write_text(json.dumps({"task": "TASK-1", "criteria": [{
+        "id": "C1", "ask": "Items survive a reload", "critical": True, "requires": "REAL",
+        "evidence": [{"provenance": "REAL", "ref": ".workorder/evidence/run.txt",
+                      "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest()}]}]}), encoding="utf-8")
+    task(local_repo, "TASK-1", ships="none", contract=".workorder/contracts/c.json")
+    finish_with_evidence(local_repo, "TASK-1")
+    task(local_repo, "TASK-1", ships="none", status="DONE", contract=".workorder/contracts/c.json")
+    git(local_repo, "add", "tasks", ".workorder")
+    git(local_repo, "commit", "-qm", "Valid DONE")
+    base = store.head(local_repo)
+    ok(local_repo, "check", "--base", base)
+    evidence.write_text("reload lost everything\n", encoding="utf-8")
+    git(local_repo, "add", ".workorder")
+    staged = cli(local_repo, "check", "--staged")
+    assert staged.returncode == 1 and "contract C1: REAL evidence" in staged.stdout
+    git(local_repo, "commit", "-qm", "Evidence changed")
+    refused = cli(local_repo, "check", "--base", base)
+    assert refused.returncode == 1 and "already so" not in refused.stdout
+
+
+def test_an_in_place_contract_edit_is_noted_for_review(local_repo):
+    contract = local_repo / ".workorder" / "contracts" / "c.json"
+    contract.parent.mkdir(parents=True)
+    body = {"task": "TASK-1", "criteria": [{"id": "C1", "ask": "Works", "critical": True,
+                                            "requires": "REAL", "evidence": []}]}
+    contract.write_text(json.dumps(body), encoding="utf-8")
+    task(local_repo, "TASK-1", ships="none", contract=".workorder/contracts/c.json")
+    git(local_repo, "add", "tasks", ".workorder")
+    git(local_repo, "commit", "-qm", "Contract")
+    base = store.head(local_repo)
+    body["criteria"][0]["critical"] = False
+    contract.write_text(json.dumps(body), encoding="utf-8")
+    git(local_repo, "commit", "-qam", "Make it optional")
+    assert "contract .workorder/contracts/c.json edited since" in ok(local_repo, "check", "--base", base)
+
+
+def test_commands_are_shown_the_way_they_are_read():
+    words = [r"C:\Python\python.exe", "-m", "pytest", r"tests\a b.py"]
+    assert store.join_command(words) == r'C:\Python\python.exe -m pytest "tests\a b.py"'
+    assert store.split_command(store.join_command(words)) == words
+
+
+def test_an_unrelated_commit_passes_the_real_hook_while_an_old_problem_remains(local_repo):
+    task(local_repo, "TASK-1", ships="none", status="DONE")
+    git(local_repo, "add", "tasks")
+    git(local_repo, "commit", "-qm", "An old false claim")
+    git(local_repo, "config", "core.hooksPath", str(PACKAGE / "hooks"))
+    (local_repo / "docs.md").write_text("notes\n", encoding="utf-8")
+    env = dict(os.environ, PYTHONPATH=str(PACKAGE))
+    subprocess.run(["git", "add", "docs.md"], cwd=local_repo, env=env, check=True)
+    done = subprocess.run(["git", "commit", "-qm", "Docs only"], cwd=local_repo, env=env,
+                          capture_output=True, encoding="utf-8")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert git(local_repo, "worktree", "list").count("\n") == 0  # the temporary worktree is gone
+    task(local_repo, "TASK-2", ships="none", status="DONE")
+    subprocess.run(["git", "add", "tasks"], cwd=local_repo, env=env, check=True)
+    refused = subprocess.run(["git", "commit", "-qm", "A new false claim"], cwd=local_repo, env=env,
+                             capture_output=True, encoding="utf-8")
+    assert refused.returncode != 0 and "TASK-2 says DONE" in refused.stdout + refused.stderr
