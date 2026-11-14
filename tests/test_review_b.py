@@ -1,4 +1,5 @@
 """Independent 0.4 review reproductions, using only disposable local Git repos."""
+import sys
 import os
 import shutil
 import subprocess
@@ -218,6 +219,7 @@ def test_non_utf8_text_after_squash_does_not_crash_merge_search(local_repo):
     assert 'by squash' in ok(root, 'check', 'TASK-1')
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows file names cannot hold non-UTF-8 bytes")
 def test_non_utf8_code_path_can_be_fingerprinted(local_repo):
     root = local_repo
     (root / os.fsdecode(b'code-\xff.txt')).write_bytes(b'\xff')

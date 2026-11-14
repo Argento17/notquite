@@ -2,8 +2,6 @@
 
 **Every task recorded. A clear history. Agents always go back to it.**
 
-![Workorder demo: a task is marked DONE, workorder check says NOT QUITE because the last passing test belongs to an older commit.](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)
-
 ```sh
 pipx install workorder
 ```

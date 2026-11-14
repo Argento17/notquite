@@ -240,7 +240,7 @@ def move_main(root):
 def test_computed_merge_closes_without_post_merge_receipts(local_repo, method):
     root = local_repo
     base = feature(root, multi=True)
-    before = {p.name: p.read_bytes() for p in (root / ".workorder/receipts/TASK-1").glob("*.json")}
+    before = {p.name: p.read_bytes().replace(b"\r\n", b"\n") for p in (root / ".workorder/receipts/TASK-1").glob("*.json")}
     if method == "same code":
         git(root, "checkout", "-q", "main")
     else:
@@ -260,7 +260,9 @@ def test_computed_merge_closes_without_post_merge_receipts(local_repo, method):
     assert "computed" in ok(root, "check", "TASK-1").split("Merge:")[1]
     assert f"by {method}" in ok(root, "check")
     ok(root, "check", "--base", base)
-    assert {p.name: p.read_bytes() for p in (root / ".workorder/receipts/TASK-1").glob("*.json")} == before
+    # Git may check receipt files out with CRLF on Windows; the content is what must not change.
+    assert {p.name: p.read_bytes().replace(b"\r\n", b"\n")
+            for p in (root / ".workorder/receipts/TASK-1").glob("*.json")} == before
     assert not any(e["kind"] == "merged" for e in store.entries(root, "TASK-1"))
     assert not git(root, "status", "--porcelain")
 
