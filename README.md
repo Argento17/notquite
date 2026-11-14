@@ -1,6 +1,6 @@
 # NotQuite: Checks whether DONE actually means done.
 
-![NotQuite rejecting a DONE task whose last passing test ran on an older commit](https://raw.githubusercontent.com/Argento17/notquite/main/docs/notquite-demo.gif)
+![NotQuite demo: a task is marked DONE, notquite check says NOT QUITE because the last passing test belongs to an older commit.](https://raw.githubusercontent.com/Argento17/notquite/main/docs/notquite-demo.gif)
 
 ```sh
 pipx install notquite
