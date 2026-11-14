@@ -95,7 +95,7 @@ def _git_read(root, *args, data=None, required=True):
 def _git_run(root, *args, data=None, required=True):
     result = subprocess.run(
         ["git", *args], cwd=root, input=data, capture_output=True,
-        encoding="utf-8", errors="strict", timeout=30,
+        encoding="utf-8", errors="surrogateescape", timeout=30,
     )
     if required and result.returncode:
         raise Refused(result.stderr.strip() or "Git command failed")
@@ -339,6 +339,7 @@ def record(root, tid, staged=False):
     if "merge_ref" in fields:
         ref = fields["merge_ref"]
         if (not isinstance(ref, str) or not ref.startswith(("refs/heads/", "refs/remotes/"))
+                or (ref.startswith("refs/remotes/") and len(ref.split("/")) < 4)
                 or git(root, "check-ref-format", ref, required=False).returncode):
             raise Refused(f"{tid}: merge_ref must be a full branch ref")
     waits = fields["waits_on"]
@@ -383,11 +384,12 @@ def has_origin(root):
     return git(root, "remote", "get-url", "origin", required=False).returncode == 0
 
 
-def remote_refs(root):
+def remote_refs(root, upstream=False):
     if not has_origin(root):
         raise Refused("this needs an origin remote: only a shared remote can refuse a second"
                       " holder, so claims are never kept locally")
-    output = git(root, "ls-remote", "--refs", "origin", NAMESPACE + "*").stdout
+    branches = ["refs/heads/main", "refs/heads/master"] if upstream else []
+    output = git(root, "ls-remote", "--refs", "origin", NAMESPACE + "*", *branches).stdout
     return {ref: oid for oid, ref in (line.split() for line in output.splitlines())}
 
 
@@ -477,8 +479,8 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
     raise Refused("too much allocation contention; retry")
 
 
-def active_claims(root):
-    refs = remote_refs(root)
+def active_claims(root, upstream=None):
+    refs = remote_refs(root, upstream=upstream is not None)
     latest = {}
     stem = NAMESPACE + "claims/"
     for ref, oid in refs.items():
@@ -493,8 +495,31 @@ def active_claims(root):
     # One fetch for every claim that matters, instead of one network round trip per task.
     wanted = [ref for _, ref, oid in latest.values()
               if git(root, "cat-file", "-e", oid, required=False).returncode]
+    branch = next((ref for ref in ("refs/heads/main", "refs/heads/master") if ref in refs), None)
+    if upstream is not None and branch:
+        # Refresh even when every claim tag is cached. Do not move remote-tracking branches:
+        # ready/claim must not make the local task files appear to have been pulled.
+        wanted.insert(0, f"+{branch}:refs/workorder/upstream")
     for start in range(0, len(wanted), 200):
-        git(root, "fetch", "--no-tags", "origin", *wanted[start:start + 200], required=False)
+        git(root, "fetch", "--no-tags", "--refmap=", "origin", *wanted[start:start + 200],
+            required=upstream is not None)
+    if upstream is not None and branch:
+        invalidate_reads()
+        snapshot = git(root, "rev-parse", "refs/workorder/upstream^{commit}").stdout.strip()
+        for path, text in metadata_texts(root, snapshot).items():
+            if not path.startswith("tasks/") or not path.endswith(".md"):
+                continue
+            tid = path[6:-3]
+            if not ID.fullmatch(tid):
+                continue
+            lines = text.splitlines()
+            try:
+                fields = front_matter(tid, lines[1:lines.index("---", 1)])
+            except (Refused, ValueError):
+                continue
+            if fields.get("status") in {"DONE", "CLOSED", "CANCELLED"}:
+                upstream[tid] = {"status": fields["status"], "ref": "origin/" + branch[11:],
+                                 "commit": snapshot}
     for tid, (generation, ref, oid) in latest.items():
         released = NAMESPACE + f"releases/{tid}/{oid}" in refs
         try:
@@ -525,7 +550,12 @@ def holds(held, token):
 def claim(root, tid):
     repository(root)
     record(root, tid)
-    held = active_claims(root).get(tid)
+    upstream = {}
+    held = active_claims(root, upstream).get(tid)
+    if tid in upstream:
+        finished = upstream[tid]
+        author = git(root, "log", "-1", "--format=%an", finished["commit"], "--", f"tasks/{tid}.md").stdout.strip()
+        raise Refused(f"{tid} is already {finished['status']} on {finished['ref']} (by {author}); pull to update")
     token_path = claim_token_path(root, tid)
     token = token_path.read_text(encoding="utf-8") if token_path.exists() else uuid.uuid4().hex
     if held and not held["released"]:
@@ -1069,7 +1099,7 @@ def _code_digest(root, commit):
     tree = listing.stdout
     code = [entry for entry in tree.split("\0") if entry
             and not entry.partition("\t")[2].startswith(("tasks/", ".workorder/", LEGACY_DIR))]
-    return digest("\0".join(code).encode())
+    return digest("\0".join(code).encode("utf-8", errors="surrogateescape"))
 
 
 def index_code(root):

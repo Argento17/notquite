@@ -2,6 +2,19 @@
 
 ## 0.5.0 (unreleased)
 
+- Check claims after a matched landing against its implementation paths for
+  ancestry, same-code, squash and rebase merges. Refuse changed tested paths
+  with renewal advice, including a new CLOSED after DONE; preserve valid
+  earlier claims when later code changes.
+- Refuse receipt files deleted or modified in any commit since `--base`,
+  including receipts added and deleted within the range and restored edits.
+  Keep the whole finished-task removal exception with `--allow ID`.
+- Select merge targets from `merge_ref`, origin/main, origin/master, local
+  main, then local master. Ignore origin/HEAD and validate remote branch refs.
+- Read Git diffs losslessly so non-UTF-8 repository content can be checked.
+- Fetch upstream task status with claim tags. Refuse claims on tasks already
+  DONE, CLOSED or CANCELLED on origin/main, and show them in `ready` with
+  advice to pull, even after their previous holder released them.
 - Share receipt reads within a command, read committed metadata in batches,
   and walk linear task histories once. Keep CRLF receipt checks.
 - Compute target merges from feature branches and detached checkouts. Keep

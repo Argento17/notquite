@@ -171,8 +171,8 @@ TASK-1 still owes: a passing test on 75e3c96
 - **`workorder show --task TASK-1`** prints the task as a record: recorded and computed status, what is still owed, title, mission, `next` and `test`, every section of the task (Context, Scope, Lanes, Acceptance), a dated timeline of every receipt (implemented, each test run with its command and result, merges and read-backs, and who recorded them), the Progress notes, and the next step.
 - **`workorder note --task TASK-1 "..."`** adds a dated line at the end of the task's Progress section. It is the one change Workorder makes to a task file after `new`; every other byte is left alone.
 - **Ids.** `workorder new` writes `tasks/TASK-<n>.md`. With an `origin` remote, it first reserves the id there, so two clones cannot take the same id. Without one, or with `--local`, it numbers tasks from the task files and says so; those ids are not coordinated with anyone else.
-- **Claims.** `workorder claim --task TASK-1` pushes a tag to `origin`. If another clone already holds the task, Git rejects the push and the claim fails. `workorder claims` lists holders.
-- **Ready.** `workorder ready` lists open tasks as free, held, blocked (with what they wait for) or waiting for delivery. It still lists tasks when `origin` cannot be reached, without claims, and shows a task file that cannot be read as such.
+- **Claims.** `workorder claim --task TASK-1` pushes a tag to `origin`. If another clone already holds the task, Git rejects the push and the claim fails. It also fetches origin's main branch (master when main is absent) and refuses a task already DONE, CLOSED or CANCELLED there, even after its holder released it; pull to update your task files. `workorder claims` lists holders.
+- **Ready.** `workorder ready` lists open tasks as free, held, blocked (with what they wait for) or waiting for delivery. It fetches upstream task status too: an outdated local task says `finished on origin/main; pull to update`. It still lists local tasks when `origin` cannot be reached, with the existing note and without remote claims or status, and shows a task file that cannot be read as such.
 
 `workorder release` works in the clone that made the claim. That clone keeps a random token in its `.git` folder, and the claim tag stores only the token's SHA-256 hash. Release adds another tag, so the history stays on `origin`. If that clone or worktree is gone, `workorder release --task TASK-1 --force` releases the claim from anywhere and records that it was forced.
 
@@ -206,7 +206,7 @@ DONE, plus what the task ships:
 | `repo` | the tested change is on the target branch, or a qualifying `merged` receipt |
 | `live` | the merge, then `receipt deployed --target <name> -- <command>`, then a later `receipt live --target <name> -- <command>` |
 
-Workorder checks the pushed branch: the one `origin/HEAD` names, else `origin/main`; with no remote, local `main`. A commit only on your local `main` does not count as merged until it is pushed. Set `merge_ref: refs/heads/release` in the task to choose another target. It uses local refs and does not fetch. Checks on feature branches and detached checkouts use that same target.
+Workorder chooses `merge_ref` when set, otherwise `origin/main`, `origin/master`, local `main`, then local `master`, in that order. It ignores `origin/HEAD`. A commit only on your local `main` does not count as merged when `origin/main` exists until it is pushed. Set `merge_ref: refs/heads/release` in the task to choose another target. Checks use local refs and do not fetch. Checks on feature branches and detached checkouts use that same target.
 
 A recorded `merged` receipt still counts when its commit contains the implemented commit or holds exactly its code. A merge receipt that counted stays counted. Deployment read-backs can also name a commit containing the computed squash or rebase merge.
 
@@ -220,6 +220,15 @@ patch after a squash, or has a patch equivalent to every code commit after a
 rebase. Changes to task files and receipts do not count as code patches.
 `show` and `check` name the matching commit and how it matched, from any
 checkout. A feature branch is never used as its own merge target.
+
+A DONE or CLOSED claimed on a commit after the matched landing must preserve
+the content of every code path changed by the implementation at that landing.
+Reverting or overwriting those files before claiming completion is refused;
+run `workorder renew --task TASK-1` on the claimed code. This applies to
+ancestry, same-code, squash and rebase matches. Unrelated paths may change.
+A transition from DONE to CLOSED is a new claim and is checked again.
+A valid claim already made at or before the landing stays valid when later
+commits change those files: later work does not reopen a finished task.
 
 Rebasing a finished branch over unrelated changes keeps its DONE claim when
 the claim and implementation have the same code patch relative to their own
@@ -248,7 +257,11 @@ After the branches merge, the next receipt names both heads.
 Old `.workorder/receipts/<ID>.jsonl` and `.notquite/receipts/<ID>.jsonl` chains
 still verify. New receipts follow their last hash and leave the old file alone.
 Missing parents, changed hashes, wrong filenames, and changes or deletions to
-committed receipts are refused. `check --base REF` also checks against `REF`.
+committed receipts are refused. `check --base REF` also checks every commit
+in `REF..HEAD` for removed or modified receipt files, including a receipt
+added and then deleted, or changed and restored, after `REF`. It names each
+affected path. Complete removal of a finished task with `--allow ID` retains
+its exception for that task's receipts.
 For an old append conflict, run `workorder repair --task ID`. It verifies both
 sides, keeps the common prefix, and converts the extra lines into receipt files.
 See the [reference](docs/reference.md#receipts) for the repair rules.
@@ -330,7 +343,7 @@ jobs:
 
 What `--base` adds, beyond what the pre-commit hook can promise (`git commit --no-verify` skips the hook):
 
-- Receipts already on the base branch must stay unchanged. With `--allow ID`, a task that was DONE, CLOSED or CANCELLED at the base may be removed with all its receipts.
+- Receipts already on the base branch must stay unchanged. Receipt files deleted or modified in any commit since the base are refused with their paths, even if absent at the base or restored at HEAD. With `--allow ID`, a task that was DONE, CLOSED or CANCELLED at the base may be removed with all its receipts.
 - A commit since the base that marked a task DONE or CLOSED must carry its implemented code.
 - A change to what a task requires (its `test`, its contract or its evidence, a removed dependency, or a removed or reworded line of its Scope or Acceptance) fails the check until a reviewer accepts it: `--allow TASK-4` (comma-separated ids) for a re-run started by a maintainer. Adding lines is not a change of requirement.
 - Removing or changing lines in a task's test files needs `--allow ID`. Pure additions pass. Set `test_paths` to name files or folders; otherwise Workorder uses paths in the `test` command.
@@ -346,7 +359,7 @@ failing test.
 
 - Anyone who can write files and compute SHA-256 can create a receipt. Rewriting Git history also rewrites its record. `--run-tests` runs the declared tests during the check.
 - A passing test is only as good as its assertions, and the task's `test` is part of the task file: `workorder check --base` refuses a change to it until a reviewer allows it.
-- Committed receipt files stay unchanged; new files can be added. Legacy ledgers keep their committed prefix. The pre-commit hook enforces this against the previous commit, and `workorder check --base <branch>` against the base branch. Without `--base`, a commit made with `git commit --no-verify` can remove receipts unnoticed.
+- Committed receipt files stay unchanged; new files can be added. Legacy ledgers keep their committed prefix. The pre-commit hook enforces this against the previous commit, and `workorder check --base <branch>` also refuses receipt-file deletions and modifications anywhere in the intervening history. Without `--base`, a commit made with `git commit --no-verify` can remove receipts unnoticed.
 - A DONE is about the code that was implemented and tested. Code that lands after a task is DONE does not reopen it; `workorder check <id>` notes the change.
 - Only task files are checked. Claims made in chat, issues or pull request text are not.
 - Receipts and claims record your Git `user.name`, and it is pushed. Receipts written by 0.2.0 or earlier also carry the computer's hostname, and keep it.

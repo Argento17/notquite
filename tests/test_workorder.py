@@ -305,7 +305,12 @@ def test_a_merge_commit_with_other_work_beside_it_counts(clones):
     task(one, status="IN_PROGRESS")
     git(one, "add", "tasks")
     git(one, "commit", "-qm", "Reopen")
-    task(one, status="CLOSED")  # claimed straight from IN_PROGRESS on merged code the tests never saw
+    task(one, status="CLOSED")  # unrelated merged work leaves the implementation paths intact
+    ok(one, "check")
+    task(one, status="IN_PROGRESS")
+    (one / "app.py").write_text("items = ['untested replacement']\n", encoding="utf-8")
+    git(one, "commit", "-qam", "Change an implementation path")
+    task(one, status="CLOSED")
     assert "is being marked CLOSED, but the code now differs" in cli(one, "check").stdout
 
 

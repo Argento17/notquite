@@ -124,12 +124,8 @@ MERGE_SEARCH_LIMIT = 1000
 def merge_target(root, record):
     # The pushed branch first: a commit only on local main is not merged for anyone else yet.
     override = record.get("merge_ref")
-    refs = [override] if override else []
-    if not override:
-        symbolic = s.git(root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD", required=False)
-        if symbolic.returncode == 0:
-            refs.append(symbolic.stdout.strip())
-        refs += ["refs/remotes/origin/main", "refs/heads/main"]
+    refs = [override] if override else ["refs/remotes/origin/main", "refs/remotes/origin/master",
+                                      "refs/heads/main", "refs/heads/master"]
     for ref in refs:
         found = s.git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", required=False)
         if found.returncode == 0:
@@ -152,7 +148,7 @@ def patch_ids(root, revision, commits=None):
 def merge_match(root, implemented, target):
     """Evidence from immutable commits, cached independently of branch names and HEAD."""
     original = implemented["commit"]
-    key = s.digest(s.packed(["merge-v2", original, s.has_commit(root, original), implemented["code"],
+    key = s.digest(s.packed(["merge-v4", original, s.has_commit(root, original), implemented["code"],
                             target, MERGE_SEARCH_LIMIT]).encode())
     folder = s._cache_dir(root)
     cached = folder / ("merge-" + key + ".json") if folder else None
@@ -181,13 +177,20 @@ def _merge_match(root, implemented, target):
     original = implemented["commit"]
     present = s.has_commit(root, original)
     if present and s.contains(root, original, target):
-        return {"method": "ancestry", "commit": target}
+        # Name the landing, not a moving tip that may have undone the tested code.
+        mainline = s.git(root, "rev-list", "--first-parent", target).stdout.split()
+        if original in mainline:
+            landing = original
+        else:
+            descendants = set(s.git(root, "rev-list", "--ancestry-path", f"{original}..{target}").stdout.split())
+            landing = next(commit for commit in reversed(mainline) if commit in descendants)
+        return {"method": "ancestry", "commit": landing}
     base = s.git(root, "merge-base", original, target, required=False).stdout.strip() if present else ""
     revision = f"{base}..{target}" if base else target
     # Only code-changing commits can supply a same-code or patch match.
     candidates = s.git(root, "rev-list", f"--max-count={MERGE_SEARCH_LIMIT}", revision).stdout.split()
     target_patches = patch_ids(root, revision, candidates)
-    for commit in target_patches:
+    for commit in reversed(target_patches):
         if s.code_digest(root, commit) == implemented["code"]:
             return {"method": "same code", "commit": commit}
     if not base:
@@ -196,7 +199,7 @@ def _merge_match(root, implemented, target):
                      base, original, "--", *s.CODE_PATHS).stdout
     combined_id = s.git(root, "patch-id", "--stable", data=combined).stdout.split()
     if combined_id:
-        for commit, patch in target_patches.items():
+        for commit, patch in reversed(list(target_patches.items())):
             if patch == combined_id[0]:
                 return {"method": "squash", "commit": commit}
     # Count all commits (including merges and metadata) so truncation cannot look complete.
@@ -208,8 +211,9 @@ def _merge_match(root, implemented, target):
     merges = s.git(root, "rev-list", "--merges", f"{base}..{original}", "--", *s.CODE_PATHS).stdout.split()
     available = set(target_patches.values())
     if not merges and feature_patches and set(feature_patches.values()) <= available:
-        matched = next(commit for commit, patch in target_patches.items() if patch in set(feature_patches.values()))
-        representatives = {patch: commit for commit, patch in reversed(list(target_patches.items()))}
+        representatives = {patch: commit for commit, patch in target_patches.items()
+                           if patch in set(feature_patches.values())}
+        matched = next(commit for commit in target_patches if commit in set(representatives.values()))
         if not all(s.contains(root, representatives[patch], matched) for patch in feature_patches.values()):
             matched = target  # patches on separate merged branches must all be present in a deployment
         return {"method": "rebase", "commit": matched}
@@ -375,6 +379,14 @@ def base_problems(root, base, staged=False, retired=frozenset()):
             history = None
         if s.receipt_changes(root, tid, before, after, history):
             problems.append(f"{tid}: receipts recorded on {base} were removed or changed")
+    # Endpoints miss a receipt added and then hidden, or edited and restored, in this range.
+    changed = s.git(root, "log", "--format=", "--name-only", "-z", "--diff-filter=DMT",
+                    "--no-renames", "-m", "--full-history", f"{commit}..HEAD", "--",
+                    *s.RECEIPT_DIRS).stdout
+    for path in sorted(set(changed.split("\0")) - {""}):
+        tid = s.receipt_task(path)
+        if tid and tid not in retired:
+            problems.append(f"{tid}: committed receipt file removed or changed since {base}: {path}")
     return problems
 
 
@@ -444,13 +456,14 @@ def stale_claim(root, record, staged=False, base=None):
     if current is None or current["missing"]:
         return None  # the verdict already reports these
     short = current["commit"][:7]
-    if committed_status(root, tid) not in FINISHED:
+    if committed_status(root, tid) != status:
         dirty = [] if staged else s.dirty_paths(root)
         if dirty:
             return (f"NOT QUITE  {tid} is being marked {status} with uncommitted code changes; "
                     + s.describe_dirty(dirty) + f". Commit, record workorder receipt implemented --task {tid}"
                     " and test again.")
-        if (s.index_code(root) if staged else s.code_digest(root, s.head(root))) == current["code"]:
+        tree = s.git(root, "write-tree").stdout.strip() if staged else s.head(root)
+        if claim_matches(root, record, current, s.head(root), tree):
             return None
         where = "in this commit" if staged else "now"
         return (f"NOT QUITE  {tid} is being marked {status}, but the code {where} differs from the"
@@ -464,39 +477,91 @@ def stale_claim(root, record, staged=False, base=None):
         statuses = histories.get(tid, [])
     claim = None
     for commit, status_at_commit in statuses:  # newest first: find the commit that made the claim
-        if status_at_commit not in FINISHED:
+        if status_at_commit != status:
             break
         claim = commit
     else:
-        if base and committed_status(root, tid, base) in FINISHED:
+        if base and committed_status(root, tid, base) == status:
             claim = None  # claimed before the base
     if claim is None:
         return None
     relied_on = implementation_at(root, claim, tid)
-    if (relied_on is None or current["hash"] != relied_on.get("hash")
-            or s.code_digest(root, claim) == current["code"]):
+    if relied_on is None or current["hash"] != relied_on.get("hash"):
         return None
-    # This concerns the claim's history, even when the task ships nothing.
-    target = merge_target(root, record)
-    merged = merge_match(root, current, target[1]) if target else None
-    if (merged and merged["method"] in {"squash", "rebase"}
-            and s.contains(root, merged["commit"], claim)
-            and s.code_digest(root, claim) == s.code_digest(root, merged["commit"])):
-        return None
-    if equivalent_claim(root, record, current, claim):
+    if claim_matches(root, record, current, claim):
         return None
     return (f"NOT QUITE  {tid} was marked {status} in {claim[:7]} on code other than the implemented"
-            f" commit {short}. Record workorder receipt implemented --task {tid} on that code and test again.")
+            f" commit {short}. Run workorder renew --task {tid} on that code, or record"
+            f" workorder receipt implemented --task {tid} and test again.")
 
 
-def equivalent_claim(root, record, implemented, claim):
-    """A rebase preserves the code patch relative to each commit's own target merge base."""
+def claim_matches(root, record, implemented, claim, tree=None):
+    tree = tree or claim
+    # This concerns the claim's history, even when the task ships nothing.
     target = merge_target(root, record)
-    if target is None:
-        return False
+    merged = merge_match(root, implemented, target[1]) if target else None
+    if merged and s.contains(root, merged["commit"], claim):
+        return unchanged_implementation_paths(root, implemented, merged, tree)
+    if s.code_digest(root, tree) == implemented["code"]:
+        return True
+    if merged and s.contains(root, claim, merged["commit"]):
+        # Landing must not invalidate a claim whose patch matched before it landed.
+        before = s.git(root, "rev-parse", "--verify", "--quiet", f"{merged['commit']}^1",
+                       required=False).stdout.strip()
+        if before and equivalent_claim(root, record, implemented, tree, before):
+            return True
+    return tree == claim and equivalent_claim(root, record, implemented, claim)
+
+
+def unchanged_implementation_paths(root, implemented, merged, claim):
+    """Only changes on implementation paths can invalidate a claim after its landing."""
+    original, landing = implemented["commit"], merged["commit"]
+    if claim == landing:
+        return True
+    changed = s.git(root, "diff", "--name-only", "-z", "--no-renames", landing, claim,
+                    "--", *s.CODE_PATHS).stdout
+    if not changed:
+        return True
+    reference = landing
+    if merged["method"] == "ancestry":
+        reference = s.git(root, "rev-parse", "--verify", "--quiet", f"{landing}^1",
+                          required=False).stdout.strip()
+    base = (s.git(root, "merge-base", original, reference, required=False).stdout.strip()
+            if reference and s.has_commit(root, original) else "")
+    if landing == original:
+        # A fast-forward has no merge commit recording the branch boundary. Use the
+        # task's current open period, or the implementation's parent when the task
+        # was introduced later. This includes earlier commits of a multi-commit task.
+        commits = s.git(root, "log", "--format=%H", original, "--", f"tasks/{implemented['task']}.md").stdout.split()
+        for commit in commits:
+            status = committed_status(root, implemented["task"], commit)
+            if status is None or status in FINISHED | {"CANCELLED"}:
+                break
+            base = commit
+    if base and base != original:
+        paths = s.git(root, "diff", "--name-only", "-z", "--no-renames", base, original,
+                      "--", *s.CODE_PATHS).stdout
+    else:
+        # Without a branch boundary (or the original history), the recorded tree is the
+        # evidence available. Include deleted paths too, so restoring one cannot escape.
+        paths = s.git(root, "ls-tree", "-r", "--name-only", "-z", landing).stdout
+        paths = "\0".join(p for p in paths.split("\0")
+                          if not p.startswith(("tasks/", ".workorder/", ".notquite/")))
+        paths += s.git(root, "diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z",
+                       "--no-renames", landing, "--", *s.CODE_PATHS).stdout
+    return not ((set(paths.split("\0")) - {""}) & (set(changed.split("\0")) - {""}))
+
+
+def equivalent_claim(root, record, implemented, claim, target_commit=None):
+    """A rebase preserves the code patch relative to each commit's own target merge base."""
+    if target_commit is None:
+        target = merge_target(root, record)
+        if target is None:
+            return False
+        target_commit = target[1]
     patches = []
     for commit in (implemented["commit"], claim):
-        base = s.git(root, "merge-base", commit, target[1], required=False).stdout.strip()
+        base = s.git(root, "merge-base", commit, target_commit, required=False).stdout.strip()
         if not base:
             return False
         diff = s.git(root, "diff", "--binary", "--no-renames", "--no-ext-diff", "--no-textconv",
@@ -920,7 +985,7 @@ def next_step(item, record, code_changed=False, root=None):
                 f" workorder receipt test --task {tid} -- {command}")
     if item.startswith("a passing test on the code marked"):
         return (f"workorder receipt implemented --task {tid}, then"
-                f" workorder receipt test --task {tid} -- {command}")
+                f" workorder receipt test --task {tid} -- {command}; or workorder renew --task {tid}")
     if item.startswith("a passing test on"):
         if code_changed:
             return (f"workorder receipt implemented --task {tid}, then"
@@ -1192,10 +1257,12 @@ def ready(root):
     cycles = dependency_cycles(all_records)
     views = Views(root, all_records)
     lines = [f"{tid} cannot be read: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())]
+    upstream = {}
     try:
-        claims = s.active_claims(root) if s.has_origin(root) else {}
+        claims = s.active_claims(root, upstream) if s.has_origin(root) else {}
     except s.Refused:
         claims = {}
+        upstream = {}
         lines.append("(claims not shown: origin could not be reached)")
     for tid, record in sorted(all_records.items()):
         if record["status"] == "CANCELLED":
@@ -1207,7 +1274,9 @@ def ready(root):
         if claimed and views[tid][0] == "CLOSED" and not blocked and tid not in refused:
             continue
         held = claims.get(tid)
-        if tid in cycles:
+        if tid in upstream:
+            state = f"finished on {upstream[tid]['ref']}; pull to update"
+        elif tid in cycles:
             state = cycles[tid]
         elif tid in refused:
             state = f"says {record['status']}, which the evidence does not support: workorder check {tid}"

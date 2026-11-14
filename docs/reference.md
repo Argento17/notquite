@@ -194,6 +194,14 @@ DONE or CLOSED claim must therefore be made on the implemented code:
   compared with the implementation the claim relied on, unless a newer
   `implemented` receipt was recorded after it. A claim carried into a verified
   squash or rebase is accepted on that merged change, from any checkout.
+  For all merge methods (ancestry, same code, squash and rebase), a claim on
+  commit C descending from the matched landing M must have the same content
+  as M on every code path changed by the implementation. A revert, overwrite,
+  deletion or rename of those paths before C needs `workorder renew --task ID`
+  on the claimed code. Changes confined to unrelated paths are allowed.
+  Changing DONE to CLOSED makes a new claim, including in the index or
+  working tree; the earlier DONE does not excuse changed code at CLOSED.
+  A valid claim at or before M stays valid when later commits change those paths.
 - After a branch rebase, the claim also counts when its code diff from its
   merge base with the target has the same `git patch-id --stable` as the
   implementation's code diff from its own merge base with that target.
@@ -231,11 +239,21 @@ and changes confined to those folders cannot supply a patch match. Tests,
 contracts and dependencies still have to pass. An existing `merged` receipt
 continues to count by the original ancestry or code-fingerprint rules.
 
-The target is the pushed branch: the branch `refs/remotes/origin/HEAD` points
-to, else `refs/remotes/origin/main`. A repository with neither uses
-`refs/heads/main`. A commit only on local `main` is not merged until it is
-pushed (pushing updates the local copy of `origin/main`).
-A task's `merge_ref` overrides this order. Checks read local refs without
+Ancestry names the first landing on the target's first-parent history;
+same-code and patch searches keep the earliest matching landing within the
+search window. For fast-forwards, Git records no branch boundary: the path
+comparison uses the task's most recent open period before implementation,
+or the implementation's parent if the task was introduced later. This is
+conservative when unrelated work also happened during that open period.
+Without the original history, the available landing tree is protected.
+
+The target is `merge_ref` when set; otherwise the first existing branch in
+this order: `refs/remotes/origin/main`, `refs/remotes/origin/master`,
+`refs/heads/main`, `refs/heads/master`. `origin/HEAD` is ignored, even if it
+points to a feature branch. A remote `merge_ref` must name both the remote
+and its branch (`refs/remotes/<remote>/<branch>`).
+A commit only on local `main` is not merged when `origin/main` exists until
+it is pushed (pushing updates the local copy of `origin/main`). Checks read local refs without
 fetching. Checks use this target from any checkout, including feature
 branches and detached checkouts. The checked-out feature branch is never
 used as its own merge target.
@@ -285,6 +303,12 @@ Removing a task file is refused by default, even if it has no receipts. With
 removed together with all its receipts in both receipt folders. Partial
 removal, removal of an unfinished task, and changes to receipts of a retained
 task are still refused. Dependents must still have valid dependencies.
+
+The check also walks every commit in `REF..HEAD` and refuses receipt files
+deleted or modified there, naming the paths in either receipt directory.
+This includes receipts first added after REF and edits later restored, which
+comparing the base and HEAD alone cannot detect. The complete task removal
+exception above also exempts that task's receipts from this history check.
 
 `--allow` takes comma-separated ids. It accepts definition changes and the
 complete removal described above. It does not excuse missing evidence,
@@ -381,7 +405,8 @@ These rules apply to the working tree against HEAD, the index under
 `check --staged`, and the base revision under `check --base REF`.
 Line-ending conversion from LF to CRLF is allowed. A deletion already
 committed with hooks skipped cannot be found by comparing HEAD with itself;
-use `--base` to check against the earlier revision. The complete removal of
+use `--base` to check both the earlier revision and intervening commits for
+receipt-file deletions or modifications. The complete removal of
 a finished or cancelled task has the explicit exception below.
 
 ### Repair
@@ -398,7 +423,10 @@ side follows the prefix's last hash, or has no parents for an empty prefix.
 Hashes change because `parents` replaces `previous`. Contract references to
 the original test hashes still count. Each converted receipt
 also includes its original object in `legacy`. This lets HEAD and `--base`
-verify an exact move of a committed legacy tail. This verified conversion is
+verify an exact move of a committed legacy tail in the current snapshot.
+The separate `--base` history check still refuses committed modifications
+to the JSONL file anywhere in `REF..HEAD`, including appends or repairs;
+new receipt files avoid modifying that ledger. This verified conversion is
 the only exception to the legacy prefix rule; dropping or changing a receipt
 is still refused. Repair prints the counts. Stage the prefix and new files
 to finish resolving the conflict.
@@ -442,6 +470,19 @@ A push that would replace an existing tag is rejected by Git, so the first
 clone to push wins. The claim token is kept in `.git/workorder-claims/<id>` and
 is never committed or pushed. The claim tag stores only its SHA-256 hash
 (`token_sha256`); `claim` and `release` compare against that hash.
+
+`claim` and `ready` also fetch origin's main branch (master if main is absent)
+into the private `refs/workorder/upstream` ref in the same fetch as missing
+claim tags. They refresh it even when all tags are already cached, without
+changing the checkout or remote-tracking branches. `claim` refuses a task
+whose upstream record is DONE, CLOSED or CANCELLED, for example:
+`TASK-2 is already DONE on origin/main (by agent-b); pull to update`.
+The name is the author of the latest commit touching that task record.
+`ready` lists an outdated open task as
+`finished on origin/main; pull to update`, even after its claim was released.
+When origin is unreachable, `ready` uses local records and its existing
+offline note; it never reuses an old upstream snapshot. `claim` still refuses
+when origin cannot be reached.
 Force-pushes and tag deletion by anyone with push access bypass all of this;
 protect `workorder/*` tags if it matters.
 

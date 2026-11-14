@@ -176,8 +176,11 @@ def test_repair_preserves_both_verified_legacy_sides(local_repo, style):
     converted = {e["legacy"]["hash"]: e for e in history[1:]}
     assert converted[a["hash"]]["parents"] == converted[b["hash"]]["parents"] == [first["hash"]]
     assert converted[aa["hash"]]["parents"] == [converted[a["hash"]]["hash"]]
-    for base in (main, side):
-        ok(root, "check", "--base", base)
+    ok(root, "check", "--base", main)  # the working repair still preserves HEAD's receipts
+    refused = cli(root, "check", "--base", side)
+    # main has modified the legacy file since side; --base now audits intervening commits.
+    assert refused.returncode == 1 and "removed or changed since" in refused.stdout
+    assert ".workorder/receipts/TASK-1.jsonl" in refused.stdout
     git(root, "add", "tasks", ".workorder")
     ok(root, "check", "--staged")
     git(root, "commit", "-qm", "Repair")
@@ -295,7 +298,7 @@ def test_target_merge_is_visible_from_the_feature_branch(local_repo):
     assert "Merge:" in ok(root, "check", "TASK-1")
 
 
-@pytest.mark.parametrize("target", ["local", "symbolic", "fallback", "override"])
+@pytest.mark.parametrize("target", ["local", "local-master", "remote-main", "remote-master", "override"])
 def test_merge_target_selection(local_repo, target):
     root = local_repo
     feature(root)
@@ -309,15 +312,16 @@ def test_merge_target_selection(local_repo, target):
         git(root, "checkout", "-q", "main")
     git(root, "merge", "-q", "--no-ff", "--no-edit", "feature")
     tip = store.head(root)
-    if target in {"symbolic", "fallback"}:
+    if target == "local-master":
+        git(root, "branch", "-m", "main", "master")
+    if target in {"remote-main", "remote-master"}:
         git(root, "checkout", "-q", "--detach")
         git(root, "branch", "-D", "main")
-        ref = "refs/remotes/origin/trunk" if target == "symbolic" else "refs/remotes/origin/main"
+        ref = "refs/remotes/origin/" + target.removeprefix("remote-")
         git(root, "update-ref", ref, tip)
-        if target == "symbolic":
-            git(root, "symbolic-ref", "refs/remotes/origin/HEAD", ref)
     shown = ok(root, "show", "--task", "TASK-1")
-    expected = {"local": "main", "symbolic": "origin/trunk", "fallback": "origin/main", "override": "release"}[target]
+    expected = {"local": "main", "local-master": "master", "remote-main": "origin/main",
+                "remote-master": "origin/master", "override": "release"}[target]
     assert f"merged into {expected} by ancestry" in shown and "computed CLOSED" in shown
 
 
