@@ -30,6 +30,11 @@ jobs:
           # One case per released tag, added after its files are built and tested.
           # NotQuite 0.1.0 and 0.2.0 were published to the old PyPI project and never go to this one.
           case "$TAG" in
+            v0.5.0)
+              printf '%s\n' \
+                "b20a3f95785b007f290e05135c6a952006f3ea304c3f9da987807b1012434d71  workorder-0.5.0-py3-none-any.whl" \
+                "d1d016133dab3d3e73c672b8f9dbe6dd7bf1c8357b49eebadcaeab8c0e0d942f  workorder-0.5.0.tar.gz" \
+                > expected.sha256 ;;
             *) echo "No tested checksums recorded for $TAG"; exit 1 ;;
           esac
           cd dist
