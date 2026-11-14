@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import time
 import uuid
 
 
@@ -103,8 +104,9 @@ def _git_run(root, *args, data=None, required=True):
 
 
 def who(root):
-    # Only the Git user name: receipts and claims are pushed, and a hostname says more than needed.
-    name = git(root, "config", "user.name", required=False).stdout.strip()
+    # An agent can distinguish itself from others sharing the same Git identity.
+    name = os.environ.get("WORKORDER_AGENT", "").strip()
+    name = name or git(root, "config", "user.name", required=False).stdout.strip()
     if not name:
         raise Refused("set git user.name first")
     return name
@@ -116,9 +118,7 @@ def head(root):
 
 
 def repository(root):
-    top = Path(git(root, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
-    if top != root.resolve():
-        raise Refused("run workorder at the Git repository root")
+    return Path(git(root, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
 
 
 def local_path(root, relative):
@@ -429,7 +429,7 @@ EXTENDED_BODY = """
 
 ## Progress
 
-<!-- Dated notes: workorder note adds one, workorder show prints them. The status line is your claim; workorder show and workorder check compute what the receipts support. Workorder never edits the status line. -->
+<!-- Dated notes: workorder note adds one, workorder show prints them. The status line is your claim; workorder show and workorder check compute what the receipts support. workorder done sets DONE only when its check supports the claim. -->
 """
 
 
@@ -479,7 +479,7 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
     raise Refused("too much allocation contention; retry")
 
 
-def active_claims(root, upstream=None):
+def active_claims(root, upstream=None, snapshot=None):
     refs = remote_refs(root, upstream=upstream is not None)
     latest = {}
     stem = NAMESPACE + "claims/"
@@ -505,8 +505,10 @@ def active_claims(root, upstream=None):
             required=upstream is not None)
     if upstream is not None and branch:
         invalidate_reads()
-        snapshot = git(root, "rev-parse", "refs/workorder/upstream^{commit}").stdout.strip()
-        for path, text in metadata_texts(root, snapshot).items():
+        commit = git(root, "rev-parse", "refs/workorder/upstream^{commit}").stdout.strip()
+        if snapshot is not None:
+            snapshot.update(commit=commit, ref="origin/" + branch[11:])
+        for path, text in metadata_texts(root, commit).items():
             if not path.startswith("tasks/") or not path.endswith(".md"):
                 continue
             tid = path[6:-3]
@@ -519,7 +521,7 @@ def active_claims(root, upstream=None):
                 continue
             if fields.get("status") in {"DONE", "CLOSED", "CANCELLED"}:
                 upstream[tid] = {"status": fields["status"], "ref": "origin/" + branch[11:],
-                                 "commit": snapshot}
+                                 "commit": commit}
     for tid, (generation, ref, oid) in latest.items():
         released = NAMESPACE + f"releases/{tid}/{oid}" in refs
         try:
@@ -550,8 +552,11 @@ def holds(held, token):
 def claim(root, tid):
     repository(root)
     record(root, tid)
-    upstream = {}
-    held = active_claims(root, upstream).get(tid)
+    upstream, snapshot = {}, {}
+    held = active_claims(root, upstream, snapshot).get(tid)
+    newer = newer_work(root, tid, snapshot)
+    if newer:
+        raise Refused(f"{snapshot['ref']} has newer work on {tid} ({newer}); pull first")
     if tid in upstream:
         finished = upstream[tid]
         author = git(root, "log", "-1", "--format=%an", finished["commit"], "--", f"tasks/{tid}.md").stdout.strip()
@@ -590,6 +595,58 @@ def release(root, tid, force=False):
     value = {"at": now(), "who": who(root), **({} if holder else {"forced": True, "holder": held["who"]})}
     reserve(root, NAMESPACE + f"releases/{tid}/{held['oid']}", value)
     return not holder
+
+
+def fetch_upstream(root):
+    """Best-effort show refresh, with one short deadline and no stale-ref fallback."""
+    if not has_origin(root):
+        return None
+    deadline = time.monotonic() + 3
+    for branch in ("main", "master"):
+        try:
+            result = subprocess.run(
+                ["git", "fetch", "--no-tags", "--refmap=", "origin",
+                 f"+refs/heads/{branch}:refs/workorder/upstream"], cwd=root,
+                capture_output=True, timeout=max(.01, deadline - time.monotonic()),
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        except (OSError, subprocess.TimeoutExpired):
+            return {}
+        if result.returncode == 0:
+            invalidate_reads()
+            return {"ref": f"origin/{branch}",
+                    "commit": git(root, "rev-parse", "refs/workorder/upstream^{commit}").stdout.strip()}
+        if time.monotonic() >= deadline:
+            break
+    return {}
+
+
+def newer_work(root, tid, snapshot):
+    """Upstream task work not present here; local additions alone are not stale work."""
+    if not snapshot:
+        return None
+    commit = snapshot["commit"]
+    remote = metadata_texts(root, commit, tid)
+    task_path = f"tasks/{tid}.md"
+    if task_path not in remote:
+        return None
+    base = git(root, "merge-base", "HEAD", commit, required=False).stdout.strip()
+    before = metadata_texts(root, base, tid) if base else {}
+    local = receipt_texts(root, tid)
+    try:
+        local[task_path] = read_text(root, task_path)
+    except (OSError, Refused):
+        pass
+    different = [p for p in remote.keys() | before.keys()
+                 if remote.get(p) != local.get(p) and remote.get(p) != before.get(p)]
+    if not different:
+        return None
+    receipts = len(entries(root, tid, rev=commit))
+    notes = sum(line.lstrip().startswith("- ") for heading, body in task_body_sections(remote[task_path])
+                if heading == "Progress" for line in body)
+    author = git(root, "log", "-1", "--format=%an", commit, "--", task_path,
+                 *(p for p in remote if receipt_task(p) == tid)).stdout.strip()
+    return (f"{receipts} receipt{'s' if receipts != 1 else ''}, "
+            f"{notes} note{'s' if notes != 1 else ''}, by {author}")
 
 
 def task_body_sections(text):

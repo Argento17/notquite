@@ -6,13 +6,13 @@
 pipx install workorder
 ```
 
-No pipx? On Ubuntu or Debian: `sudo apt install pipx && pipx ensurepath`. Other systems: see the [pipx install guide](https://pipx.pypa.io/stable/how-to/install-pipx.html). Plain `pip install` outside a virtual environment is blocked on recent Ubuntu; the [quick start](#quick-start) uses one.
+No pipx? On Ubuntu or Debian: `sudo apt install pipx && pipx ensurepath`. Other systems: see the [pipx install guide](https://pipx.pypa.io/stable/how-to/install-pipx.html). Plain `pip install` outside a virtual environment is blocked on recent Ubuntu; use `pipx install workorder` instead.
 
 Workorder keeps each task as a record in your repository. A coding agent starts every session from the task, works within it, and leaves it up to date. The next session, or the next agent, picks up where the last one stopped.
 
 - **Recorded:** each task is a Markdown file in `tasks/`. It holds the mission, scope, acceptance criteria, dependencies, the test that proves it, and progress notes, in a format people and agents both read and write.
 - **A clear history:** receipts record what was implemented and tested, on which commit, with which command, by whom. Each receipt is a separate file, linked to the receipts it follows. Committed receipts stay unchanged. `workorder show` prints the task with that history as a timeline.
-- **Agents go back to it:** a short block in `CLAUDE.md` / `AGENTS.md` makes the agent start each session with `workorder show` and end it with `workorder note` ([see below](#working-with-coding-agents)).
+- **Agents go back to it:** a short block in `CLAUDE.md` / `AGENTS.md` makes the agent pull, read the task with `workorder show`, and leave progress with `workorder done --note` or `workorder note` ([see below](#working-with-coding-agents)).
 - **DONE is checked:** `status: DONE` is a claim. `workorder check` compares it with the history and says what is missing.
 
 Workorder was called NotQuite up to version 0.2.0.
@@ -76,11 +76,11 @@ Out: changing how dates are entered.
 ```
 
 - **For people and agents:** `mission`, `summary`, `next`, the owners, `priority` and the five sections say what the work is, what is in and out, who does what, and how it will be accepted. Workorder keeps them in the file and never treats them as evidence.
-- **`status`** is the claim: `IN_PROGRESS`, `BLOCKED`, `DONE`, `CLOSED`, or `CANCELLED` for work that will not be done (it needs no evidence and leaves `ready`). You or the agent edit it. Workorder never edits it and never trusts it.
+- **`status`** is the claim: `IN_PROGRESS`, `BLOCKED`, `DONE`, `CLOSED`, or `CANCELLED` for work that will not be done (it needs no evidence and leaves `ready`). You or the agent can edit it. `workorder done` sets DONE when its check supports the claim; the status alone never proves completion.
 - **`test`** is the command that proves the task. A task needs one to be DONE: only a run of exactly that command counts, and `workorder receipt test --task <id>` runs it. For work no single command proves, `test: "any"` says so explicitly and accepts any recorded command. No shell runs it: words split on spaces, quotes group words, backslashes stay as written, and `&&` or pipes are refused (use a script).
 - **`depends_on`** lists tasks this one needs. `waits_on` takes `task:TASK-2` or `person:alex` items (remove a person wait when it is answered). Both form one dependency list, and a task cannot be DONE while one is open. A dependency is finished when it says DONE or CLOSED, its evidence supports that, and its own dependencies are finished. `blocks` is informational: it is checked against the other tasks but never enforced.
 - **`ships`** sets what CLOSED needs beyond DONE: `none` (the default), `repo` (the tested change on the target branch) or `live` (also deployment read-backs).
-- **`contract`** is `none` or a path to a contract that maps each acceptance criterion to evidence Workorder can check ([see below](#contracts-and-evidence)). Without one, the Acceptance list is for the agent and the reviewer; Workorder does not read it.
+- **`contract`** is `none` or a path to a contract that maps each acceptance criterion to evidence Workorder can check ([see below](#contracts-and-evidence)). Without one, the Acceptance list is for the agent and the reviewer; Workorder does not check whether its items are met.
 - **Your own fields** start with `x-`, such as `x-issue: "#42"`. They are kept and never checked.
 
 Front matter is a small, documented subset: single-line text (plain, quoted or JSON), lists, `>` and `|` blocks for `mission`, `next` and `summary`, `- TASK-1` lists and `#` comment lines. Other YAML, and unknown fields, are reported for that task, so a typo cannot quietly drop a dependency. The [reference](https://github.com/Argento17/workorder/blob/main/docs/reference.md#what-yaml-is-read) lists exactly what is read.
@@ -91,48 +91,47 @@ For small work, `workorder new --template simple` writes the seven required fiel
 
 ## Working with coding agents
 
-Workorder reads task files and recorded evidence. It does not watch conversations, so a claim made only in chat is not caught. Tell the agent how to work with tasks. Add this to `CLAUDE.md` (Claude Code) or `AGENTS.md` (Codex):
+Workorder reads task files and recorded evidence. It does not watch conversations, so a claim made only in chat is not caught. Tell the agent how to work with tasks. Run `workorder init` to add this block to both `CLAUDE.md` (Claude Code) and `AGENTS.md` (Codex), install the hook, and write the workflow below. Existing instructions stay in place and the block is appended once. An existing workflow is skipped. A different hook is refused unless you pass `--force`. `workorder init --check` changes nothing and exits 1 if setup is missing. You can also add the block yourself:
 
 ```markdown
 ## Tasks
-- Start every session with `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
+- Start every session with `git pull`, then `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
-- After committing code, run `workorder receipt implemented --task <id>`, then `workorder receipt test --task <id>` (it runs the task's `test`).
-- Set status DONE only when every Acceptance item is met, then run `workorder check <id>`. If it reports NOT QUITE, set the status back and report its Missing lines instead of saying the task is done.
+- After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If it refuses, report its Missing lines instead of saying the task is done. Acceptance lists are not checked by Workorder.
 - Before you stop, record where you are with `workorder note --task <id> "<what was done; what is next>"`, keep `next` current, then commit tasks/ and .workorder/ with your work and push.
 - If the task's `ships` is `repo` or `live`: after the change is merged, run `workorder check <id>` on main. It computes the merge from Git history. No merge receipt or extra commit is needed. If the merged change differs, run `workorder renew --task <id>` on main and test it again.
 ```
 
 ## Quick start
 
-Requires Git and Python 3.10 or newer. This uses a throwaway folder and needs no remote. On Windows, run the commands in Git Bash and activate with `. .venv/Scripts/activate`.
+Requires Git and Python 3.10 or newer. This uses a throwaway folder and needs no remote. On Windows, use Git Bash and replace `python3` with `python`.
 
 ```sh
-python3 -m venv .venv && . .venv/bin/activate
-python -m pip install workorder==0.6.0
-
+pipx install workorder
 mkdir demo && cd demo
 git init -q -b main
 git config user.name "Your Name"
 git config user.email you@example.com
+workorder init
 
 printf 'def add(a, b):\n    return a + b\n' > calc.py
 printf 'from calc import add\n\nassert add(2, 2) == 4\n' > test_calc.py
 printf '__pycache__/\n' > .gitignore
-git add . && git commit -qm "Add calc"
+git add . && git commit -qm "Add calc and Workorder setup"
 
-workorder new --title "Add calc" --owner you --test "python test_calc.py"
-workorder receipt implemented --task TASK-1
-workorder receipt test --task TASK-1
-workorder note --task TASK-1 "add() works; next: subtraction"
+workorder new --title "Add calc" --owner you --test "python3 test_calc.py"
+# Fill in the task's Scope and Acceptance list, then confirm every item is met.
+workorder done --task TASK-1 --note "add() works; next: subtraction"
 workorder show --task TASK-1
 ```
 
-`workorder show` prints the task as a record: its state (`recorded IN_PROGRESS; computed CLOSED`, because the evidence already supports it and this task ships nothing), what it still owes, its test, a timeline of the implementation and the passing test, and the progress note. The `status` line in `tasks/TASK-1.md` is the claim, and Workorder never edits it; setting `status: CLOSED` would now pass `workorder check`.
+`done` refuses uncommitted code, records implementation if the code changed since the last implemented receipt, and runs the declared test. Before setting DONE it prints the Acceptance list and reminds you to confirm it yourself. On success it prints `TASK-1 DONE: claim supported; commit tasks/ and .workorder/ and push`. It never commits or pushes. On a failed test or unsupported claim it leaves status unchanged and prints the Missing lines. `--note` keeps the dated handover line even if the test or check refuses. It needs a concrete `test` command; `test: any` still uses the individual receipt commands.
 
-To see it refuse, change `calc.py`, commit, run `workorder receipt implemented --task TASK-1`, set `status: DONE` in `tasks/TASK-1.md`, and run `workorder check TASK-1`. After the NOT QUITE result, set the status back to `IN_PROGRESS` before committing the task file; with the hook installed, the unsupported DONE claim would refuse that commit.
+`show` prints the recorded status and computed evidence for claimed tasks. For an unfinished task it starts with, for example, `TASK-1 IN_PROGRESS (not claimed finished); its test evidence is in place`. Passing tests alone do not mean every Acceptance item is met. Without a contract, supported claims rest on declared tests only; Workorder does not check the Acceptance list.
 
-Run `workorder` at the root of your repository. Commit `tasks/` and `.workorder/` along with your code. Locally, `workorder check` reads the working tree (`--staged`: what is about to be committed); in CI it reads what was committed.
+To see a refusal, break `calc.py`, commit, and run `workorder done --task TASK-1`. The failed test is recorded, the status stays as it was, and the Missing lines explain what is owed. If the task was already DONE, set it back to IN_PROGRESS before committing the failed evidence.
+
+Every command works from any subdirectory of the repository. Commit `tasks/` and `.workorder/` with your work. Locally, `workorder check` reads the working tree (`--staged`: what is about to be committed); in CI it reads what was committed.
 
 ## When DONE is not done
 
@@ -167,9 +166,9 @@ TASK-1 still owes: a passing test on 75e3c96
 ## The record
 
 - **`workorder show --task TASK-1`** prints the task as a record: recorded and computed status, what is still owed, dependencies, title, owner and `test`, plus mission, summary and `next` when filled in. It prints every section of the task (Context, Scope, Lanes, Acceptance), a dated timeline of every receipt (implemented, each test run with its command and result, merges and read-backs, and who recorded them), any computed merge, and the Progress notes. When work is still owed it prints a next step. If only unclaimed Acceptance work remains, that step is to finish the Acceptance items, set status DONE and run `workorder check TASK-1`.
-- **`workorder note --task TASK-1 "..."`** adds a dated line at the end of the task's Progress section. It is the one change Workorder makes to a task file after `new`; every other byte is left alone.
+- **`workorder note --task TASK-1 "..."`** adds a dated line at the end of the task's Progress section. `done --note` also adds a Progress line; `done` can set status DONE after checking its evidence.
 - **Ids.** `workorder new` writes `tasks/TASK-<n>.md`. With an `origin` remote, it first reserves the id there, so two clones cannot take the same id. Without one, or with `--local`, it numbers tasks from the task files and says so; those ids are not coordinated with anyone else.
-- **Claims.** `workorder claim --task TASK-1` pushes a tag to `origin`. If another clone already holds the task, Git rejects the push and the claim fails. It also fetches origin's main branch (master when main is absent) and refuses a task already DONE, CLOSED or CANCELLED there, even after its holder released it; pull to update your task files. `workorder claims` lists holders.
+- **Claims.** `workorder claim --task TASK-1` pushes a tag to `origin`. If another clone already holds the task, Git rejects the push and the claim fails. It also fetches origin's main branch (master when main is absent). If that branch has task text or receipts missing from your checkout, it refuses with the receipt count, note count and author: `origin/main has newer work on TASK-1 (2 receipts, 1 note, by alex); pull first`. It still refuses tasks already DONE, CLOSED or CANCELLED there. `show` makes a best-effort fetch with a three-second deadline and warns at the top when you need to pull. Offline it shows the local task with a short note and no stale upstream warning. `workorder claims` lists holders.
 - **Ready.** `workorder ready` lists open tasks as free, held, blocked (with what they wait for) or waiting for delivery. It fetches upstream task status too: an outdated local task says `finished on origin/main; pull to update`. It still lists local tasks when `origin` cannot be reached, with the existing note and without remote claims or status, and shows a task file that cannot be read as such.
 
 `workorder release` works in the clone that made the claim. That clone keeps a random token in its `.git` folder, and the claim tag stores only the token's SHA-256 hash. Release adds another tag, so the history stays on `origin`. If that clone or worktree is gone, `workorder release --task TASK-1 --force` releases the claim from anywhere and records that it was forced.
@@ -305,14 +304,14 @@ where each task's declared test is run again on the code being checked.
 changes to a task's requirements with a `workorder-allow:<ID>` pull request
 label, passed as `--allow` in the example below.
 
-Pre-commit hook, to refuse committing a false DONE:
+Pre-commit hook, to refuse committing a false DONE (`init` installs it). Teammates without Workorder get a warning and can still commit. When nothing is in scope, its check prints nothing:
 
 ```sh
 cat > .git/hooks/pre-commit <<'EOF'
 #!/bin/sh
 command -v workorder >/dev/null 2>&1 && exec workorder check --staged
-echo "pre-commit: workorder is not on PATH (pipx install workorder)" >&2
-exit 1
+echo "pre-commit: warning: workorder is not on PATH (pipx install workorder); skipping task check" >&2
+exit 0
 EOF
 chmod +x .git/hooks/pre-commit
 ```
@@ -340,7 +339,7 @@ jobs:
         run: |
           # task ids from pull request labels named workorder-allow:<ID>
           allow=$(jq -r '[.pull_request.labels[].name | select(test("^workorder-allow:[A-Z][A-Z0-9]*-[1-9][0-9]*$")) | sub("^workorder-allow:"; "")] | join(",")' "$GITHUB_EVENT_PATH")
-          workorder check --base "$BASE" --run-tests ${allow:+--allow "$allow"}
+          workorder check --base "$BASE" --run-tests --strict-tests ${allow:+--allow "$allow"}
 ```
 
 What `--base` adds, beyond what the pre-commit hook can promise (`git commit --no-verify` skips the hook):
@@ -348,14 +347,41 @@ What `--base` adds, beyond what the pre-commit hook can promise (`git commit --n
 - Receipts already on the base branch must stay unchanged. Receipt files deleted or modified in any commit since the base are refused with their paths, even if absent at the base or restored at HEAD. With `--allow ID`, a task that was DONE, CLOSED or CANCELLED at the base may be removed with all its receipts.
 - A commit since the base that marked a task DONE or CLOSED must carry its implemented code.
 - A change to what a task requires (its `test`, its contract or its evidence, a removed dependency, or a removed or reworded line of its Scope or Acceptance) fails the check until a reviewer accepts it: `--allow TASK-4` (comma-separated ids) for a re-run started by a maintainer. Adding lines is not a change of requirement.
-- Removing or changing lines in a task's test files needs `--allow ID`. Pure additions pass. Set `test_paths` to name files or folders; otherwise Workorder uses paths in the `test` command.
+- Removing or changing lines in a task's test files needs `--allow ID`. Without `--strict-tests`, pure additions pass, even an early exit prepended to a test such as `import sys; sys.exit(0)`. With `--strict-tests`, every change needs acceptance, including additions and new test files. Set `test_paths` to name files or folders; otherwise Workorder uses paths in the `test` command.
 - A task created and claimed DONE or CLOSED in the same change needs `--allow ID` to accept its definition.
 - With `--run-tests`, the check runs the declared tests of supported DONE or CLOSED claims in scope. It reports how many tasks it checked and how many tests actually ran. If none ran, it says so plainly.
 
-Only reviewers who may accept these changes should apply the allow labels.
+Anyone with triage rights can apply a `workorder-allow:<ID>` label. Protect acceptance with CODEOWNERS and a required code owner review on `tasks/` and the test paths. For example, alongside the `workorder-allow:TASK-4` label:
+
+```text
+# .github/CODEOWNERS — replace @your-org/reviewers with your reviewers
+/tasks/ @your-org/reviewers
+/tests/ @your-org/reviewers
+/conftest.py @your-org/reviewers
+/pytest.ini @your-org/reviewers
+/tox.ini @your-org/reviewers
+/setup.cfg @your-org/reviewers
+/pyproject.toml @your-org/reviewers
+```
+
+Add other test and nested configuration paths your tasks use. Enable required code owner review in branch protection; CODEOWNERS alone does not require approval.
+
 `--allow` accepts the named definition changes or complete task removal; it
 does not waive missing evidence, changed receipts on a retained task, or a
 failing test.
+
+With `--strict-tests`, changes to `conftest.py` anywhere, `pytest.ini`, `tox.ini`, `setup.cfg`, and `[tool.pytest*]` sections of `pyproject.toml` need `--allow` for every task whose command runs pytest. Other TOML sections do not trigger this rule. With `--run-tests`, pytest output reporting only skipped tests gets a note. Adding `--strict-tests` refuses runs reporting no passed tests (only skipped or `no tests ran`). A failed command always fails the check.
+
+Two further choices are off by default in the workflow:
+
+```sh
+# Run every DONE/CLOSED task's declared test on current code, once per distinct command.
+workorder check --base origin/main --run-tests --all-tests
+# Require a task file or receipt in changes that edit code outside task/receipt folders.
+workorder check --base origin/main --require-task
+```
+
+`--all-tests` reports a failure as `regression: TASK-1's test fails on this code` and exits 1 without changing computed history or writing receipts. `--require-task` refuses changes to paths outside `tasks/`, `.workorder/`, and `.notquite/` when no task file or receipt changed: `this change edits code but no task records it`.
 
 ## Limitations
 
@@ -364,7 +390,7 @@ failing test.
 - Committed receipt files stay unchanged; new files can be added. Legacy ledgers keep their committed prefix. The pre-commit hook enforces this against the previous commit, and `workorder check --base <branch>` also refuses receipt-file deletions and modifications anywhere in the intervening history. Without `--base`, a commit made with `git commit --no-verify` can remove receipts unnoticed.
 - A DONE is about the code that was implemented and tested. Code that lands after a task is DONE does not reopen it; `workorder check <id>` notes the change.
 - Only task files are checked. Claims made in chat, issues or pull request text are not.
-- Receipts and claims record your Git `user.name`, and it is pushed. Receipts written by 0.2.0 or earlier also carry the computer's hostname, and keep it.
+- Receipts and claims record `WORKORDER_AGENT` when set, otherwise Git `user.name`, and that name is pushed. Set, for example, `export WORKORDER_AGENT=agent-b` to distinguish agents sharing a Git identity. Receipts written by 0.2.0 or earlier also carry the computer's hostname, and keep it.
 - Ids, claims and releases are Git tags, so they show up in tag lists; a `git tag` that picks the newest tag should filter out `workorder/*`.
 - Tasks stay in `tasks/` until removed with reviewer acceptance through `check --base --allow`. Plain `workorder check` reads all current tasks, while the hook and `--base` read what a change touches.
 

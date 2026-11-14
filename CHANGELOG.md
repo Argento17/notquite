@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.6.0 (unreleased)
+## 0.6.0 (14 Nov 2026)
+
+- Add idempotent `init`, its read-only `--check`, and `--force` for a different hook.
+- Add `done --task ID [--note TEXT]`: record changed implementation, run the declared test, show Acceptance for confirmation, and set DONE only when supported. Preserve status on refusal; never commit or push.
+- Add opt-in `check --strict-tests`: require acceptance for additions and pytest configuration changes as well as removed or changed test lines. Refuse pytest reruns reporting no passed tests; ordinary reruns note skipped-only output.
+- Add opt-in `--all-tests` for current-code regression runs of every DONE/CLOSED task, once per command, without changing history; add `--require-task` for code changes without task records.
+- Say when supported claims without contracts rest on declared tests alone.
+- Refuse claims from stale clones when upstream has task text or receipts missing locally. Refresh `show` with a short timeout and warn before work starts; start the agent block with `git pull`.
+- Headline unclaimed work as unfinished, explain uncounted timeline tests, and distinguish pre-merge advice from a changed merge. Make Result wording name a stale claim without contradicting computed evidence.
+- Accept `check --task ID`, resolve repository roots from subdirectories, and use `WORKORDER_AGENT` before Git user.name for claims and receipts.
+- Let teammates without Workorder commit with a hook warning; keep empty staged checks silent.
+- Update the agent block, quick start and strict CI example. Explain who can apply allow labels and recommend CODEOWNERS plus required review.
 
 - Keep each task's protected paths separate when several tasks land in one
   squash. Exclude other tasks' recorded implementation commits and commits

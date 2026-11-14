@@ -143,7 +143,7 @@ def test_check_reports_scope(local_repo, mode, count, claimed):
     git(root, 'add', 'tasks')
     args = [*mode, base] if mode == ['--base'] else mode
     output = ok(root, 'check', *args)
-    assert output.splitlines()[-1] == f'checked {count} tasks ({claimed} claimed DONE or CLOSED)'
+    assert output.splitlines()[-1] == f'checked {count} task{"" if count == 1 else "s"} ({claimed} claimed DONE or CLOSED)'
     assert 'ran ' not in output
 
 
@@ -170,7 +170,7 @@ def test_check_reports_actual_tests_run(local_repo, kind, expected):
         commit_all(root)
     result = cli(root, 'check', '--base', base, '--run-tests')
     assert result.returncode == (0 if kind in {'pass', 'empty'} else 1)
-    assert f'; ran {expected} declared tests' in result.stdout
+    assert f'; ran {expected} declared test{"" if expected == 1 else "s"}' in result.stdout
     assert ('no declared test ran in this check' in result.stdout) == (expected == 0)
 
 
@@ -203,7 +203,7 @@ def test_base_guards_test_files(local_repo, explicit, change):
         assert 'tests/test example.py' in result.stdout
         assert 'a reviewer accepts it with --allow TASK-1' in result.stdout
         ok(root, 'check', '--base', base, '--allow', 'TASK-1')
-    assert 'checked 1 tasks' in result.stdout
+    assert 'checked 1 task ' in result.stdout
 
 
 def test_test_file_change_selects_dependents(local_repo):

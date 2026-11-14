@@ -307,7 +307,7 @@ def test_released_upstream_finished_task_is_not_free(clones, status, command):
     if command == 'claim':
         result = cli(one, 'claim', '--task', 'TASK-2')
         assert result.returncode == 1, result.stdout + result.stderr
-        assert f'TASK-2 is already {status} on origin/main (by agent-b); pull to update' in result.stderr
+        assert 'origin/main has newer work on TASK-2 (2 receipts, 0 notes, by agent-b); pull first' in result.stderr
         assert len([ref for ref in store.remote_refs(one) if '/claims/TASK-2/' in ref]) == 1
     else:
         output = ok(one, 'ready')

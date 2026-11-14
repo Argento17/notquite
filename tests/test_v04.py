@@ -356,7 +356,7 @@ def test_metadata_patches_do_not_stand_in_for_missing_code(local_repo):
     git(root, "checkout", "feature", "--", "tasks", ".workorder")
     git(root, "commit", "-qm", "Metadata only")
     refused = cli(root, "check", "TASK-1")
-    assert refused.returncode == 1 and "merged code differs from the tested code" in refused.stdout
+    assert refused.returncode == 1 and "merge of the tested code is still owed" in refused.stdout
     assert "Merge:" not in refused.stdout
     # One of two patches is also insufficient for a rebase match.
     git(root, "checkout", "feature", "--", "app.py")

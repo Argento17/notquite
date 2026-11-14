@@ -248,7 +248,8 @@ def test_delivery_rules_are_computed(clones, ships, computed):
     task(one, ships=ships)
     implement(one)
     passed(one)
-    assert f"computed {computed}" in ok(one, "show", "--task", "TASK-1")
+    assert gate.verdict(one, store.record(one, "TASK-1"))[0] == computed
+    assert "IN_PROGRESS (not claimed finished)" in ok(one, "show", "--task", "TASK-1")
     task(one, ships=ships, status="CLOSED")
     assert cli(one, "check").returncode == (0 if ships == "none" else 1)
 
@@ -624,7 +625,8 @@ def test_check_from_a_subdirectory_cannot_report_false_success(clones):
     directory = one / "nested"
     directory.mkdir()
     result = cli(directory, "check")
-    assert result.returncode == 1 and "repository root" in result.stderr
+    assert result.returncode == 1 and "TASK-1 says DONE but owes" in result.stdout
+    assert not result.stderr
 
 
 # Regression tests for the Workorder name, packaging and the per-task explanation.
@@ -708,7 +710,7 @@ def test_explain_refuses_closed_without_merge(clones):
     task(one, status="CLOSED")
     result = cli(one, "check", "TASK-1")
     assert result.returncode == 1 and "Result: NOT CLOSED" in result.stdout
-    assert "workorder renew --task TASK-1 on main, or record workorder receipt merged --task TASK-1" in result.stdout
+    assert "merge of the tested code is still owed" in result.stdout
     merge(one)
     assert cli(one, "check", "TASK-1").returncode == 0
 
@@ -811,7 +813,7 @@ def test_a_later_uncounted_run_also_revokes_done(clones):
     passed(one)
     cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c",
         "open('build.log', 'w').write('x')")
-    assert "computed IN_PROGRESS" in ok(one, "show", "--task", "TASK-1")
+    assert "IN_PROGRESS (not claimed finished); owes: a passing test" in ok(one, "show", "--task", "TASK-1")
 
 
 def test_a_failure_before_a_new_implementation_does_not_count_against_it(clones):
@@ -823,7 +825,8 @@ def test_a_failure_before_a_new_implementation_does_not_count_against_it(clones)
     git(one, "commit", "-qam", "Fix the list")
     implement(one)
     passed(one)
-    assert "computed DONE" in ok(one, "show", "--task", "TASK-1")
+    assert gate.verdict(one, store.record(one, "TASK-1"))[0] == "DONE"
+    assert "IN_PROGRESS (not claimed finished); owes: merge" in ok(one, "show", "--task", "TASK-1")
 
 @pytest.fixture
 def local_repo(tmp_path):
@@ -844,7 +847,7 @@ def test_without_a_remote_tasks_are_local_and_checks_work(local_repo):
     assert "TASK-2 opened" in ok(local_repo, "new", "--title", "More", "--owner", "solo")
     ok(local_repo, "receipt", "implemented", "--task", "TASK-1")
     ok(local_repo, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "pass")
-    assert "computed CLOSED" in ok(local_repo, "show", "--task", "TASK-1")
+    assert "IN_PROGRESS (not claimed finished); its test evidence is in place" in ok(local_repo, "show", "--task", "TASK-1")
     assert ok(local_repo, "check").splitlines()[0] == "check: OK"
     assert "TASK-2 free" in ok(local_repo, "ready")
 
@@ -1440,7 +1443,8 @@ def test_a_dependency_waiting_on_a_person_holds_back_its_dependents(local_repo):
     for tid in ("TASK-1", "TASK-2", "TASK-3"):
         finish_with_evidence(local_repo, tid)
     shown = ok(local_repo, "show", "--task", "TASK-1")
-    assert "computed BLOCKED" in shown and "still owes: person:alex" in shown
+    assert "IN_PROGRESS (not claimed finished); owes: person:alex" in shown
+    assert "still owes: person:alex" in shown
     task(local_repo, "TASK-2", status="DONE", ships="none", waits=["task:TASK-1"])
     task(local_repo, "TASK-3", status="DONE", ships="none", waits=["task:TASK-2"])
     refused = cli(local_repo, "check")
@@ -1661,7 +1665,7 @@ def test_the_hook_does_not_block_an_unrelated_commit_on_an_old_problem(local_rep
     (local_repo / "docs.md").write_text("notes\n", encoding="utf-8")
     git(local_repo, "add", "docs.md")
     staged = cli(local_repo, "check", "--staged")
-    assert staged.returncode == 0 and staged.stdout.splitlines()[0] == "check: OK"
+    assert staged.returncode == 0 and staged.stdout == ""
 
 
 def test_ready_lists_tasks_when_origin_cannot_be_reached(clones):
@@ -1916,7 +1920,7 @@ def test_a_broken_task_file_affects_only_that_task(local_repo):
     assert "TASK-1 says DONE but owes" in found.stdout  # the other task is still checked
     (local_repo / "docs.md").write_text("notes\n", encoding="utf-8")
     git(local_repo, "add", "docs.md")
-    assert ok(local_repo, "check", "--staged").splitlines()[0] == "check: OK"  # neither task is touched
+    assert ok(local_repo, "check", "--staged") == ""  # neither task is touched
     assert "TASK-1" in ok(local_repo, "show", "--task", "TASK-1")
 
 
@@ -2002,6 +2006,7 @@ def test_a_half_done_task_with_passing_tests_is_not_presented_as_finished(local_
     ok(local_repo, "new", "--title", "Calc", "--owner", "solo", "--test", f"{PYTHON} -c pass")
     finish_with_evidence(local_repo, "TASK-1")
     shown = ok(local_repo, "show", "--task", "TASK-1")
-    assert "computed CLOSED" in shown
+    assert "IN_PROGRESS (not claimed finished); its test evidence is in place" in shown
+    assert "computed CLOSED" not in shown
     assert "note:     the evidence covers the task's test only, not its Acceptance list" in shown
     assert "not its Acceptance list" in ok(local_repo, "check", "TASK-1")
