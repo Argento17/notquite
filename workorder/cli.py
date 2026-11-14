@@ -108,6 +108,7 @@ def main(argv=None):
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
                         options.template, options.test, options.local)
             where = ("reserved on origin" if shared
+                     else "local id: --local, not reserved on origin" if options.local
                      else "local id: no origin remote, so other clones could pick the same id")
             print(f"{tid} opened: tasks/{tid}.md ({where})")
         elif options.action == "receipt":

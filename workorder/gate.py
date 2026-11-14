@@ -375,6 +375,22 @@ def requirement_changes(root, base, record):
         dropped = []
     if dropped:
         found.append(f"dependencies removed: {', '.join(dropped)}")
+    # The written ask: removing or rewording a Scope or Acceptance line changes what DONE means.
+    # Adding lines does not (that is how a task gets filled in).
+    old = s.git(root, "show", f"{base}:tasks/{tid}.md", required=False)
+    if old.returncode == 0:
+        def section_lines(text, name):
+            return {line.strip() for heading, body in s.task_body_sections(text) if heading == name
+                    for line in body if line.strip() and not line.strip().startswith("<!--")}
+        try:
+            now_text = s.read_text(root, f"tasks/{tid}.md")
+        except (OSError, s.Refused):
+            now_text = ""
+        before_text = old.stdout.replace("\r\n", "\n")
+        for name in ("Scope", "Acceptance"):
+            removed = section_lines(before_text, name) - section_lines(now_text, name)
+            if removed:
+                found.append(f"{name} lines removed or changed: {len(removed)}")
     return found
 
 
@@ -429,6 +445,10 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False):
         selected, changed = set(names), None
     problems = [f"{tid}: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())
                 if tid in selected]
+    stray = [path for path in s.files(root, "tasks", staged) if not path.endswith(".md")
+             and (changed is None or path in changed)]
+    problems += [f"{path}: only task files belong in tasks/; a file here is outside the code fingerprint,"
+                 " so changes to it are never checked" for path in stray]
     if base:
         problems += [p for p in base_problems(root, base, staged)
                      if s.ledger_path(p.split(":")[0]) in changed]
@@ -683,8 +703,12 @@ def record_lines(root, tid):
         computed = "BLOCKED"
     history = s.entries(root, tid)
     recognise_squashed(root, tid, history)
+    stale = [] if done else (["a passing test on the code marked " + record["status"]]
+                             if stale_claim(root, record) else [])
+    if stale and computed in FINISHED:
+        computed = "IN_PROGRESS"
     lines = [f"{tid} recorded {record['status']}; computed {computed}",
-             "still owes: " + (", ".join(done + delivery + open_waits) or "nothing")]
+             "still owes: " + (", ".join(stale + done + delivery + open_waits) or "nothing")]
     if s.dependencies(record):
         lines.append("waits_on: " + ", ".join(s.dependencies(record)))
     lines += ["", f"title:    {record['title']}", f"owner:    {record['owner']}"]
@@ -692,11 +716,23 @@ def record_lines(root, tid):
         if record.get(key, "").strip():
             lines.append(f"{key + ':':<9} {' '.join(record[key].split())}")
     lines.append(f"test:     {record.get('test', '').strip() or '(none declared)'}")
+    # The task's own words: every section of the body except Progress, which follows the history.
+    sections = s.task_body_sections(s.read_text(root, f"tasks/{tid}.md"))
+    for heading, body in sections:
+        if heading in (None, "Progress"):
+            continue
+        text = [line.rstrip() for line in body if not line.strip().startswith("<!--")]
+        while text and not text[0].strip():
+            text.pop(0)
+        while text and not text[-1].strip():
+            text.pop()
+        lines += ["", f"{heading.lower()}:"] + ([f"  {line}" if line.strip() else "" for line in text]
+                                               or ["  (empty)"])
     lines += ["", "history:"] + (timeline(root, record, history) or ["  (no receipts yet)"])
-    progress = [line.strip() for heading, body in s.task_body_sections(s.read_text(root, f"tasks/{tid}.md"))
+    progress = [line.strip() for heading, body in sections
                 if heading == "Progress" for line in body if line.strip() and not line.strip().startswith("<!--")]
     lines += ["", "progress:"] + ([f"  {line}" for line in progress] or ["  (no notes yet)"])
-    owed = done + delivery + open_waits
+    owed = stale + done + delivery + open_waits
     if owed:
         lines += ["", f"next step: {next_step(owed[0], record)}"]
     return lines
@@ -758,8 +794,11 @@ def ready(root):
     # A refused DONE or CLOSED claim is shown on its own task; it does not hide the rest of the work.
     # Problems with the task set itself (cycles, missing tasks, stray ledgers) still stop the listing.
     issues = check(root)
+    unreadable = {}
+    records(root, errors=unreadable)
     refused = {issue.split()[2] for issue in issues if issue.startswith("NOT QUITE  ")}
-    structural = [issue for issue in issues if not issue.startswith("NOT QUITE  ")]
+    structural = [issue for issue in issues if not issue.startswith("NOT QUITE  ")
+                  and issue.split(":")[0] not in unreadable and not issue.startswith("tasks/")]
     if structural:
         raise s.Refused("; ".join(structural))
     errors = {}

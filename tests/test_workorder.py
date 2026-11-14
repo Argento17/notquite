@@ -1868,3 +1868,65 @@ def test_the_hook_and_ci_judge_touched_tasks_and_what_depends_on_them(local_repo
     git(local_repo, "commit", "-qam", "Reopen TASK-1")
     refused = cli(local_repo, "check", "--base", base)
     assert refused.returncode == 1 and "TASK-2 says DONE but owes: task:TASK-1" in refused.stdout
+
+
+def test_show_prints_every_section_of_the_task(local_repo):
+    ok(local_repo, "new", "--title", "Calc", "--owner", "solo", "--test", "any")
+    path = local_repo / "tasks/TASK-1.md"
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("<!-- Why this task exists and what it touches. -->", "CONTEXT-MARK the calculator app")
+    text = text.replace("<!-- What is in scope, and what is explicitly out. -->", "SCOPE-MARK in: add; out: subtract")
+    text = text.replace("<!-- Parallel streams of work and who or what owns each. -->", "LANES-MARK agent: code")
+    text = text.replace("<!-- The original ask, criterion by criterion. Evidence Workorder should check belongs in a contract. -->",
+                        "- ACCEPT-MARK add(-2, -3) returns -5")
+    path.write_text(text, encoding="utf-8")
+    shown = ok(local_repo, "show", "--task", "TASK-1")
+    for mark in ("CONTEXT-MARK", "SCOPE-MARK", "LANES-MARK", "ACCEPT-MARK"):
+        assert mark in shown, mark
+    assert shown.index("scope:") < shown.index("acceptance:") < shown.index("history:") < shown.index("progress:")
+
+
+def test_check_base_refuses_a_rewritten_acceptance_list_but_not_an_added_line(local_repo):
+    ok(local_repo, "new", "--title", "Subtract", "--owner", "solo", "--test", "any")
+    path = local_repo / "tasks/TASK-1.md"
+    original = path.read_text(encoding="utf-8").replace(
+        "<!-- The original ask, criterion by criterion. Evidence Workorder should check belongs in a contract. -->",
+        "- subtract(5, 2) returns 3.")
+    path.write_text(original, encoding="utf-8")
+    git(local_repo, "add", "tasks")
+    git(local_repo, "commit", "-qm", "Task")
+    base = store.head(local_repo)
+    path.write_text(original.replace("- subtract(5, 2) returns 3.",
+                                     "- subtract(5, 2) returns 3.\n- subtract(0, 0) returns 0."), encoding="utf-8")
+    git(local_repo, "commit", "-qam", "Add an acceptance line")
+    assert ok(local_repo, "check", "--base", base).strip() == "check: OK"
+    path.write_text(original.replace("- subtract(5, 2) returns 3.", "- This task requires nothing."),
+                    encoding="utf-8")
+    git(local_repo, "commit", "-qam", "Rewrite the ask")
+    refused = cli(local_repo, "check", "--base", base)
+    assert refused.returncode == 1 and "Acceptance lines removed or changed: 1" in refused.stdout
+    assert "(allowed)" in ok(local_repo, "check", "--base", base, "--allow", "TASK-1")
+
+
+def test_round_six_small_fixes(local_repo):
+    refused = cli(local_repo, "new", "--title", "T", "--owner", "o", "--test", "PYTHONPATH=. pytest tests")
+    assert refused.returncode == 1 and "use env, as in: env PYTHONPATH=. pytest tests" in refused.stderr
+    task(local_repo, "TASK-1", ships="none")
+    task(local_repo, "TASK-2", ships="none")
+    path = local_repo / "tasks/TASK-2.md"
+    path.write_text(path.read_text(encoding="utf-8").replace('"IN_PROGRESS"', '"done"'), encoding="utf-8")
+    listed = ok(local_repo, "ready")
+    assert "TASK-1 free" in listed and "TASK-2 cannot be read: unknown status 'done'" in listed
+    (local_repo / "tasks" / "email.py").write_text("def send(): pass\n", encoding="utf-8")
+    assert "tasks/email.py: only task files belong in tasks/" in cli(local_repo, "check").stdout
+
+
+def test_show_owes_what_check_owes_for_a_stale_claim(local_repo):
+    task(local_repo, "TASK-1", ships="none")
+    finish_with_evidence(local_repo, "TASK-1")
+    (local_repo / "app.py").write_text("items = ['later']\n", encoding="utf-8")
+    git(local_repo, "commit", "-qam", "Later change")
+    task(local_repo, "TASK-1", ships="none", status="DONE")
+    shown = ok(local_repo, "show", "--task", "TASK-1")
+    assert "computed IN_PROGRESS" in shown and "a passing test on the code marked DONE" in shown
+    assert cli(local_repo, "check").returncode == 1

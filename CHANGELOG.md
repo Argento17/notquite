@@ -25,8 +25,8 @@ Name and format
 
 The record
 - `workorder show` prints the task as a record: state, what is owed, title,
-  mission, next and test, a dated timeline of its receipts, its Progress notes
-  and the next step.
+  mission, next and test, every section of the task, a dated timeline of its
+  receipts, its Progress notes and the next step.
 - `workorder note` adds a dated line under Progress.
 - The agent instructions start every session with `show`, end it with `note`,
   and cover the task's test, committing, pushing and the merge.
@@ -45,8 +45,9 @@ Checking
   elsewhere does not block anyone. Plain `check` reads every task.
 - `check --base` refuses removed or changed receipts, a stale DONE claimed
   since the base, and any change to a task's test, contract, evidence or
-  dependencies unless a reviewer passes `--allow ID`. `--run-tests` runs each
-  claimed task's declared test on the code being merged.
+  dependencies, or a removed or reworded Scope or Acceptance line, unless a
+  reviewer passes `--allow ID`. `--run-tests` runs each claimed task's declared
+  test on the code being merged.
 - A task file that cannot be read is a problem of that task only; `show`,
   `ready` and `check ID` keep working for the others.
 

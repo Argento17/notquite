@@ -636,6 +636,9 @@ def split_command(value, what="test"):
         words = list(lexer)
     except ValueError as error:
         raise Refused(f"{what} is not a valid command line ({error})") from None
+    if words and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0]):
+        raise Refused(f"{what} starts with an environment setting ({words[0]}), which needs a shell;"
+                      " use env, as in: env " + " ".join(words))
     operators = sorted(set(words) & SHELL_OPERATORS)
     if operators:
         raise Refused(f"{what} runs without a shell, so {' '.join(operators)} would be passed as an argument;"

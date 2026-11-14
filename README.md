@@ -87,7 +87,7 @@ Out: changing how dates are entered.
 
 Front matter is a small, documented subset: single-line text (plain, quoted or JSON), lists, `>` and `|` blocks for `mission`, `next` and `summary`, `- TASK-1` lists and `#` comment lines. Other YAML, and unknown fields, are reported for that task, so a typo cannot quietly drop a dependency. The [reference](https://github.com/Argento17/workorder/blob/main/docs/reference.md#what-yaml-is-read) lists exactly what is read.
 
-Files in `tasks/` whose names are not task ids, such as a README or a notes folder, are ignored.
+Markdown files in `tasks/` whose names are not task ids, such as a README or notes, are ignored. Any other file there (code, for example) is reported, because `tasks/` is outside the code fingerprint and changes to it would never be checked.
 
 For small work, `workorder new --template simple` writes the seven required fields only (`id`, `title`, `owner`, `status`, `ships`, `waits_on`, `contract`), the format of version 0.1.0; add `test:` before claiming DONE. Both formats can sit in the same repository. Version 0.1.0 refuses task files that use the other fields, so upgrade every clone and CI pin before using them.
 
@@ -168,7 +168,7 @@ TASK-1 still owes: a passing test on 75e3c96
 
 ## The record
 
-- **`workorder show --task TASK-1`** prints the task as a record: recorded and computed status, what is still owed, title, mission, `next` and `test`, a dated timeline of every receipt (implemented, each test run with its command and result, merges and read-backs, and who recorded them), the Progress notes, and the next step.
+- **`workorder show --task TASK-1`** prints the task as a record: recorded and computed status, what is still owed, title, mission, `next` and `test`, every section of the task (Context, Scope, Lanes, Acceptance), a dated timeline of every receipt (implemented, each test run with its command and result, merges and read-backs, and who recorded them), the Progress notes, and the next step.
 - **`workorder note --task TASK-1 "..."`** adds a dated line at the end of the task's Progress section. It is the one change Workorder makes to a task file after `new`; every other byte is left alone.
 - **Ids.** `workorder new` writes `tasks/TASK-<n>.md`. With an `origin` remote, it first reserves the id there, so two clones cannot take the same id. Without one, or with `--local`, it numbers tasks from the task files and says so; those ids are not coordinated with anyone else.
 - **Claims.** `workorder claim --task TASK-1` pushes a tag to `origin`. If another clone already holds the task, Git rejects the push and the claim fails. `workorder claims` lists holders.
@@ -279,7 +279,7 @@ What `--base` adds, beyond what the pre-commit hook can promise (`git commit --n
 
 - Receipts already on the base branch must still be there, unchanged.
 - A commit since the base that marked a task DONE or CLOSED must carry its implemented code.
-- A change to what a task requires (its `test`, its contract or its evidence, or a removed dependency) fails the check until a reviewer accepts it: `--allow TASK-4` (comma-separated ids) for a re-run started by a maintainer.
+- A change to what a task requires (its `test`, its contract or its evidence, a removed dependency, or a removed or reworded line of its Scope or Acceptance) fails the check until a reviewer accepts it: `--allow TASK-4` (comma-separated ids) for a re-run started by a maintainer. Adding lines is not a change of requirement.
 - With `--run-tests`, the check runs the declared test of every task the change claims DONE or CLOSED, on the code being merged, instead of trusting the receipts recorded on the agent's machine.
 
 ## Limitations
