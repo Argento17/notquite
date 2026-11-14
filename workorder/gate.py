@@ -43,7 +43,10 @@ def contract_debt(root, record, history, implemented, staged=False):
                 raise s.Refused(f"{cid}: every evidence item needs provenance and ref")
             provenance = evidence["provenance"]
             if provenance == "REAL":
-                artifact = s.read_bytes(root, evidence["ref"], staged)
+                try:
+                    artifact = s.read_bytes(root, evidence["ref"], staged)
+                except (OSError, s.Refused):
+                    continue  # a missing evidence file proves nothing; the criterion stays owed
                 proved |= s.digest(artifact) == evidence.get("sha256")
             elif provenance == "TEST" and item["requires"] != "REAL":
                 proved |= any(evidence["ref"] == "receipt:" + entry["hash"]
@@ -58,7 +61,7 @@ def contract_debt(root, record, history, implemented, staged=False):
 def declared_test(record):
     """The task's own test command as an argument list, or None when the task declares none."""
     value = record.get("test", "")
-    return shlex.split(value) if value.strip() else None
+    return s.split_command(value) if value.strip() else None
 
 
 def counting_runs(record, current, implemented):
@@ -142,21 +145,53 @@ def waits(record, all_records, views, seen=frozenset()):
 def finished(tid, all_records, views, seen=frozenset()):
     """A dependency is finished when its evidence computes DONE or CLOSED and its own dependencies are
     finished, all the way down. A cycle never counts as finished."""
-    if tid not in all_records or tid in seen or views[tid][0] not in {"DONE", "CLOSED"}:
+    if (tid not in all_records or tid in seen or views[tid][0] not in {"DONE", "CLOSED"}
+            or all_records[tid]["status"] == "CANCELLED"):
         return False
     return not waits(all_records[tid], all_records, views, seen | {tid})
 
 
-def committed_status(root, tid, rev="HEAD"):
-    """The status line of tasks/<tid>.md at a revision, or None if it has no readable record there."""
+def fields_at(root, tid, rev="HEAD"):
+    """The front matter of tasks/<tid>.md at a revision, or None if it has no readable record there."""
     shown = s.git(root, "show", f"{rev}:tasks/{tid}.md", required=False)
     if shown.returncode:
         return None
-    lines = shown.stdout.replace("\r\n", "\n").splitlines()
+    lines = shown.stdout.replace("\r\n", "\n").removeprefix("\ufeff").splitlines()
     try:
-        return s.front_matter(tid, lines[1:lines.index("---", 1)]).get("status")
+        return s.front_matter(tid, lines[1:lines.index("---", 1)])
     except (s.Refused, ValueError):
         return None
+
+
+def committed_status(root, tid, rev="HEAD"):
+    """The status line of tasks/<tid>.md at a revision, or None if it has no readable record there."""
+    fields = fields_at(root, tid, rev)
+    return fields.get("status") if fields else None
+
+
+def base_notes(root, base):
+    """Changes since base to what a task requires: its test, its contract, its dependencies. These are
+    shown for review; they are not refused, because requirements legitimately change."""
+    notes = []
+    for tid, record in sorted(records(root).items()):
+        before = fields_at(root, tid, base)
+        if before is None:
+            continue
+        if before.get("test", "") != record.get("test", ""):
+            notes.append(f"{tid}: test changed since {base}: {before.get('test', '') or '(none)'!r}"
+                         f" -> {record.get('test', '') or '(none)'!r}")
+        if before.get("contract") != record.get("contract"):
+            notes.append(f"{tid}: contract changed since {base}: {before.get('contract')} -> {record.get('contract')}")
+        try:
+            dropped = sorted(set(s.dependencies({"waits_on": before.get("waits_on", []),
+                                                 "depends_on": s.task_refs(tid, "depends_on",
+                                                                           before.get("depends_on", []))}))
+                             - set(s.dependencies(record)))
+        except (s.Refused, TypeError):
+            dropped = []
+        if dropped:
+            notes.append(f"{tid}: dependencies removed since {base}: {', '.join(dropped)}")
+    return notes
 
 
 def newest_implementation(history):
@@ -176,6 +211,8 @@ def base_problems(root, base, staged=False):
     problems = []
     for path in sorted(p for p in listed.splitlines() if p.endswith(".jsonl")):
         tid = path.rsplit("/", 1)[-1].removesuffix(".jsonl")
+        if path.count("/") != 2 or not s.ID.fullmatch(tid):
+            continue
         before = s.git(root, "show", f"{commit}:{path}").stdout.replace("\r\n", "\n")
         now = s.read_text(root, path, staged) if path in present else None
         if now is None or not now.startswith(before):
@@ -215,6 +252,11 @@ def stale_claim(root, record, staged=False, base=None):
         return None  # the verdict already reports these
     short = current["commit"][:7]
     if committed_status(root, tid) not in FINISHED:
+        dirty = [] if staged else s.dirty_paths(root)
+        if dirty:
+            return (f"NOT QUITE  {tid} is being marked {status} with uncommitted code changes; "
+                    + s.describe_dirty(dirty) + f". Commit, record workorder receipt implemented --task {tid}"
+                    " and test again.")
         if (s.index_code(root) if staged else s.code_digest(root, s.head(root))) == current["code"]:
             return None
         where = "in this commit" if staged else "now"
@@ -240,15 +282,34 @@ def stale_claim(root, record, staged=False, base=None):
             f" commit {short}. Record workorder receipt implemented --task {tid} on that code and test again.")
 
 
-def check(root, staged=False, base=None):
+def unchanged_since(root, base, tid, staged=False):
+    """True when the task file and its receipts are byte-for-byte what they were on base."""
+    for path in (f"tasks/{tid}.md", s.ledger_path(tid)):
+        before = s.git(root, "show", f"{base}:{path}", required=False)
+        folder = path.rsplit("/", 1)[0]
+        now = s.read_text(root, path, staged) if path in s.files(root, folder, staged) else None
+        if before.returncode:
+            if now is not None:
+                return False
+        elif now != before.stdout.replace("\r\n", "\n").removeprefix("\ufeff"):
+            return False
+    return True
+
+
+def check(root, staged=False, base=None, notes=None):
+    """Problems that refuse the check. With base, a claim problem on a task whose file and receipts are
+    unchanged since base was already there before this change: it goes to notes, not problems."""
+    notes = [] if notes is None else notes
     all_records = records(root, staged)
     views = {tid: verdict(root, record, staged) for tid, record in all_records.items()}
     problems = base_problems(root, base, staged) if base else []
     # Also inspect ledgers removed from the current snapshot.
     old = s.git(root, "ls-tree", "-r", "--name-only", "HEAD", "--", ".workorder/receipts", required=False)
     paths = set(old.stdout.splitlines()) | set(s.files(root, ".workorder/receipts", staged))
-    for path in paths:
+    for path in sorted(paths):
         tid = path.rsplit("/", 1)[-1].removesuffix(".jsonl")
+        if not path.endswith(".jsonl") or path.count("/") != 2 or not s.ID.fullmatch(tid):
+            continue  # a .gitkeep or a note in the folder is not a ledger
         s.entries(root, tid, staged)
         if tid not in all_records:
             problems.append(f"{tid}: receipt ledger has no task record")
@@ -279,13 +340,13 @@ def check(root, staged=False, base=None):
             elif tid in all_records[other].get("blocks", []) and tid < other:
                 problems.append(f"{tid} and {other} each say they block the other")
         debt = claim_debt(record, all_records, views)
-        if debt:
-            problems.append(f"NOT QUITE  {tid} says {record['status']} but owes: {', '.join(debt)}."
-                            f" Details: workorder check {tid}")
-        else:
-            changed = stale_claim(root, record, staged, base)
-            if changed:
-                problems.append(changed)
+        found = (f"NOT QUITE  {tid} says {record['status']} but owes: {', '.join(debt)}."
+                 f" Details: workorder check {tid}") if debt else stale_claim(root, record, staged, base)
+        reference = base or ("HEAD" if staged else None)
+        if found and reference and unchanged_since(root, reference, tid, staged):
+            notes.append(f"{found} (already so on {reference}; this change does not touch {tid})")
+        elif found:
+            problems.append(found)
     return problems
 
 
@@ -306,6 +367,9 @@ def next_step(item, record, code_changed=False):
     if item.startswith("implementation (commit"):
         return ("fetch the full history; after a squash or rebase merge, record it again on the merged"
                 f" code: workorder receipt implemented --task {tid}")
+    if item == "evidence for the uncommitted code changes":
+        return (f"commit the code, then: workorder receipt implemented --task {tid}, then"
+                f" workorder receipt test --task {tid} -- {command}")
     if item.startswith("a passing test on the code marked"):
         return (f"workorder receipt implemented --task {tid}, then"
                 f" workorder receipt test --task {tid} -- {command}")
@@ -431,10 +495,19 @@ def explain(root, tid):
     implemented = newest_implementation(history)
     runs = (counting_runs(record, history[history.index(implemented) + 1:], implemented)
             if implemented and not implemented["missing"] else [])
-    if not debt and stale_claim(root, record):
+    stale = None if debt else stale_claim(root, record)
+    if stale and "uncommitted code changes" in stale:
+        debt = ["evidence for the uncommitted code changes"]
+    elif stale:
         debt = [f"a passing test on the code marked {record['status']} (it differs from {commit})"]
     code_changed = implemented is not None and s.code_digest(root, s.head(root)) != implemented["code"]
     claimed = record["status"]
+    if computed in FINISHED and waits(record, all_records, views):
+        computed = "BLOCKED"  # the evidence is in, but a dependency is still open
+    if s.dirty_paths(root):
+        code_note = "uncommitted code changes are not covered by any receipt"
+    else:
+        code_note = None
     lines = [f"NOT QUITE  {tid}" if debt else f"{claimed}  {tid}", "",
              f"  Claimed:  {claimed}", f"  Computed: {computed}",
              f"  Commit:   {commit or 'none recorded'}", f"  Test:     {test}"]
@@ -442,6 +515,8 @@ def explain(root, tid):
         lines.append(f"  Command:  {shlex.join(runs[-1]['command'])}")
     if code_changed:
         lines.append(f"  Note:     the code has changed since {commit}; this verdict is about {commit}")
+    if code_note:
+        lines.append(f"  Note:     {code_note}")
     if debt:
         lines += [f"  Missing:  {item}" for item in debt]
         lines += [f"  Next:     {next_step(item, record, code_changed)}" for item in debt]
@@ -465,10 +540,18 @@ def ready(root):
         raise s.Refused("; ".join(structural))
     all_records = records(root)
     views = {tid: verdict(root, record) for tid, record in all_records.items()}
-    claims = s.active_claims(root) if s.has_origin(root) else {}
     lines = []
+    try:
+        claims = s.active_claims(root) if s.has_origin(root) else {}
+    except s.Refused:
+        claims = {}
+        lines.append("(claims not shown: origin could not be reached)")
     for tid, record in sorted(all_records.items()):
+        if record["status"] == "CANCELLED":
+            continue
         blocked = waits(record, all_records, views)
+        if record["status"] == "BLOCKED":
+            blocked = ["status BLOCKED"] + blocked
         if views[tid][0] == "CLOSED" and not blocked and tid not in refused:
             continue
         held = claims.get(tid)

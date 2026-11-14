@@ -22,9 +22,12 @@ def parser():
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
     new.add_argument("--owner", required=True)
-    new.add_argument("--ships", choices=["none", "repo", "live"], default="repo",
-                     help="what CLOSED needs beyond DONE (default: repo)")
+    new.add_argument("--ships", choices=["none", "repo", "live"], default="none",
+                     help="what CLOSED needs beyond DONE: nothing, a merge receipt, or also deployment"
+                          " read-backs (default: none)")
     new.add_argument("--prefix", default="TASK", help="id prefix (default: TASK)")
+    new.add_argument("--local", action="store_true",
+                     help="number the id locally even with an origin remote (no tag is pushed)")
     new.add_argument("--test", default="", metavar="COMMAND",
                      help="the task's test command; once set, only a run of exactly this command counts")
     new.add_argument("--template", choices=["extended", "simple"], default="extended",
@@ -39,7 +42,11 @@ def parser():
     helps = {"show": "print a task's recorded and computed status",
              "claim": "take a task with a pushed Git tag", "release": "give up your claim on a task"}
     for name, text in helps.items():
-        commands.add_parser(name, help=text).add_argument("--task", required=True)
+        sub = commands.add_parser(name, help=text)
+        sub.add_argument("--task", required=True)
+        if name == "release":
+            sub.add_argument("--force", action="store_true",
+                             help="release a claim whose clone or worktree is gone")
     commands.add_parser("claims", help="list active claims")
     commands.add_parser("ready", help="list open work: free, held, blocked or awaiting delivery")
     check = commands.add_parser(
@@ -86,9 +93,9 @@ def main(argv=None):
         if command and (options.action != "receipt" or options.kind not in {"test", "deployed", "live"}):
             raise s.Refused("this command does not accept a command after --")
         if options.action == "new":
-            shared = s.has_origin(root)
+            shared = s.has_origin(root) and not options.local
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
-                        options.template, options.test)
+                        options.template, options.test, options.local)
             where = ("reserved on origin" if shared
                      else "local id: no origin remote, so other clones could pick the same id")
             print(f"{tid} opened: tasks/{tid}.md ({where})")
@@ -115,6 +122,8 @@ def main(argv=None):
             views = {tid: gate.verdict(root, item) for tid, item in all_records.items()}
             computed, done, delivery = views.get(options.task) or gate.verdict(root, record)
             open_waits = gate.waits(record, all_records, views)
+            if computed in gate.FINISHED and open_waits:
+                computed = "BLOCKED"
             print(f"{options.task} recorded {record['status']}; computed {computed}")
             print("still owes: " + (", ".join(done + delivery + open_waits) or "nothing"))
             needs = s.dependencies(record)
@@ -122,10 +131,10 @@ def main(argv=None):
                 print("waits_on: " + ", ".join(needs))
         elif options.action == "claim":
             held = s.claim(root, options.task)
-            print(f"{options.task} held by {held['who']} since {held['at']}")
+            print(f"{options.task} claimed by this clone: held by {held['who']} since {held['at']}")
         elif options.action == "release":
-            s.release(root, options.task)
-            print(f"{options.task} released")
+            forced = s.release(root, options.task, options.force)
+            print(f"{options.task} released" + (" (forced: its holder's clone did not release it)" if forced else ""))
         elif options.action == "claims":
             held = s.active_claims(root)
             lines = [f"{tid} held by {c['who']} since {c['at']}"
@@ -140,8 +149,12 @@ def main(argv=None):
             print("\n".join(lines))
             return int(refused)
         else:
-            problems = gate.check(root, options.staged, options.base)
+            notes = []
+            problems = gate.check(root, options.staged, options.base, notes)
             print("\n".join(problems) if problems else "check: OK")
+            notes += gate.base_notes(root, options.base) if options.base else []
+            if notes:
+                print("\n".join(f"Note: {note}" for note in notes))
             return int(bool(problems))
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:

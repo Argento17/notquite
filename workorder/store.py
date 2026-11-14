@@ -6,6 +6,7 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -101,6 +102,8 @@ def files(root, directory, staged=False):
     return sorted(p.relative_to(root).as_posix() for p in base.rglob("*") if p.is_file())
 
 
+# CANCELLED ends a task that will not be done: it needs no evidence and never counts as finished.
+STATUSES = ("IN_PROGRESS", "BLOCKED", "DONE", "CLOSED", "CANCELLED")
 CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract")
 # Optional fields of the extended template. Only depends_on and test affect a verdict, and only by
 # adding requirements (dependencies; the one test command that counts); the rest is information for
@@ -133,8 +136,11 @@ def front_value(tid, key, raw):
     except ValueError:
         pass
     inner = raw[1:-1].strip() if raw.startswith("[") and raw.endswith("]") else None
-    items = [item.strip() for item in inner.split(",")] if inner else []
-    if inner is None or any(not re.fullmatch(PLAIN_ITEM, item) for item in items):
+    raw_items = [item.strip() for item in inner.split(",")] if inner else []
+    quoted = [len(item) >= 2 and item[0] == item[-1] and item[0] in "\"'" for item in raw_items]
+    items = [item[1:-1] if q else item for item, q in zip(raw_items, quoted)]
+    if inner is None or any(not (item if q else re.fullmatch(PLAIN_ITEM, item))
+                            for item, q in zip(items, quoted)):
         raise Refused(f"{tid}: cannot read {key}; {FRONT_MATTER_HELP}")
     return items
 
@@ -265,13 +271,14 @@ def record(root, tid, staged=False):
     if any(not isinstance(fields[k], str) or not fields[k].strip()
            for k in set(CORE_FIELDS) - {"waits_on"}):
         raise Refused(f"{tid}: text fields must be nonempty strings")
-    if fields["status"] not in {"IN_PROGRESS", "BLOCKED", "DONE", "CLOSED"}:
-        raise Refused(f"{tid}: unknown status")
+    if fields["status"] not in STATUSES:
+        raise Refused(f"{tid}: unknown status {fields['status']!r}; use {', '.join(STATUSES)}")
     if fields["ships"] not in {"none", "repo", "live"}:
         raise Refused(f"{tid}: ships must be none, repo or live")
     waits = fields["waits_on"]
     if not isinstance(waits, list) or any(
-        not isinstance(w, str) or not re.fullmatch(rf"(?:task:{TASK_REF}|person:[^\s:]+)", w)
+        not isinstance(w, str) or not re.fullmatch(rf"(?:task:{TASK_REF}|person:[^:\s][^:]*)", w)
+        or w != w.strip()
         for w in waits
     ):
         raise Refused(f"{tid}: waits_on needs task:<id> or person:<name> items")
@@ -279,10 +286,7 @@ def record(root, tid, staged=False):
         if key in fields and not isinstance(fields[key], str):
             raise Refused(f"{tid}: {key} must be text")
     if fields.get("test", "").strip():
-        try:
-            shlex.split(fields["test"])
-        except ValueError as error:
-            raise Refused(f"{tid}: test is not a valid command line ({error})") from None
+        split_command(fields["test"], f"{tid}: test")
     if fields.get("created_at"):
         try:
             dt.datetime.fromisoformat(fields["created_at"].replace("Z", "+00:00"))
@@ -366,21 +370,19 @@ def task_text(tid, data, template):
             + f"---\n\n# {tid}\n" + EXTENDED_BODY)
 
 
-def new(root, title, owner, ships="repo", prefix="TASK", template="extended", test=""):
+def new(root, title, owner, ships="none", prefix="TASK", template="extended", test="", local_only=False):
     repository(root)
     if template not in {"simple", "extended"}:
         raise Refused("template must be simple or extended")
     if not re.fullmatch(r"[A-Z][A-Z0-9]*", prefix) or not title.strip() or not owner.strip():
         raise Refused("use an uppercase prefix, nonempty title and owner")
-    try:
-        shlex.split(test)
-    except ValueError as error:
-        raise Refused(f"--test is not a valid command line ({error})") from None
+    if test.strip():
+        split_command(test, "--test")
     directory = local_path(root, "tasks")
     directory.mkdir(exist_ok=True)
     # Without an origin remote, ids are numbered locally and not coordinated with other clones.
     # With one, it must answer: never guess offline.
-    local = not has_origin(root)
+    local = local_only or not has_origin(root)
     for _ in range(30):
         refs = {} if local else remote_refs(root)
         stem = NAMESPACE + f"ids/{prefix}-"
@@ -461,16 +463,22 @@ def claim(root, tid):
     return value
 
 
-def release(root, tid):
+def release(root, tid, force=False):
+    """Give up a claim. Only the holding clone can, unless force: for a claim whose clone or worktree is
+    gone. Anyone with push access could push the release tag by hand; force does it openly and says so."""
     repository(root)
     task_id(tid)
     held = active_claims(root).get(tid)
     path = claim_token_path(root, tid)
     if not held or held["released"]:
         raise Refused(f"{tid} has no active claim")
-    if not path.exists() or not holds(held, path.read_text(encoding="utf-8")):
-        raise Refused(f"{tid}: only its holder can release it")
-    reserve(root, NAMESPACE + f"releases/{tid}/{held['oid']}", {"at": now(), "who": who(root)})
+    holder = path.exists() and holds(held, path.read_text(encoding="utf-8"))
+    if not holder and not force:
+        raise Refused(f"{tid}: only its holder can release it; if that clone or worktree is gone, run"
+                      f" workorder release --task {tid} --force")
+    value = {"at": now(), "who": who(root), **({} if holder else {"forced": True, "holder": held["who"]})}
+    reserve(root, NAMESPACE + f"releases/{tid}/{held['oid']}", value)
+    return not holder
 
 
 def ledger_path(tid):
@@ -492,7 +500,8 @@ def entries(root, tid, staged=False):
             raise Refused(f"{tid}: receipt must be an object")
         checksum = item.pop("hash", None)
         if checksum != digest(packed(item).encode()) or item.get("previous") != previous:
-            raise Refused(f"{tid}: broken receipt chain")
+            raise Refused(f"{tid}: broken receipt chain (receipts edited by hand, or written by two commands"
+                          " at once; drop the uncommitted lines from the first broken one and record again)")
         if (item.get("task") != tid or item.get("kind") not in KINDS
                 or not isinstance(item.get("who"), str) or not item["who"].strip()
                 or not isinstance(item.get("at"), str)
@@ -524,10 +533,37 @@ def append(root, tid, item):
     data["hash"] = digest(packed(data).encode())
     path = local_path(root, ledger_path(tid))
     path.parent.mkdir(parents=True, exist_ok=True)
-    # One O_APPEND write per receipt. A same-task concurrent writer is refused by the chain checker.
     with path.open("a", encoding="utf-8", newline="\n") as stream:
         stream.write(packed(data) + "\n")
     return data
+
+
+def ledger_lock(root, tid):
+    """Serialise receipt writers for one task in this clone: the chain needs one writer at a time."""
+    import contextlib
+    import time
+
+    @contextlib.contextmanager
+    def held():
+        folder = root / git(root, "rev-parse", "--git-path", "workorder-locks").stdout.strip()
+        folder.mkdir(parents=True, exist_ok=True)
+        lock = folder / f"{task_id(tid)}.lock"
+        deadline = time.monotonic() + 120
+        while True:
+            try:
+                handle = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                break
+            except FileExistsError:
+                if time.monotonic() > deadline:
+                    raise Refused(f"{tid}: another receipt is being written; if no workorder command is"
+                                  f" running, remove {lock}") from None
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            os.close(handle)
+            lock.unlink(missing_ok=True)
+    return held()
 
 
 # Releases up to 0.2.0 (named NotQuite) kept receipts in .notquite/. It stays outside the code
@@ -539,6 +575,25 @@ CODE_PATHS = (".", ":(exclude)tasks", ":(exclude).workorder", ":(exclude).notqui
 # Commits never change, so their fingerprints are worked out once per run.
 _DIGESTS = {}
 _PRESENT = {}
+
+
+SHELL_OPERATORS = {"&&", "||", ";", "|", "&", ">", ">>", "<", "2>", "2>&1"}
+
+
+def split_command(value, what="test"):
+    """A test command line as arguments: split on spaces, quotes group words, backslashes are kept as
+    written (so Windows paths work), and no shell runs it, so shell operators are refused."""
+    lexer = shlex.shlex(value, posix=True)
+    lexer.whitespace_split, lexer.escape, lexer.commenters = True, "", ""
+    try:
+        words = list(lexer)
+    except ValueError as error:
+        raise Refused(f"{what} is not a valid command line ({error})") from None
+    operators = sorted(set(words) & SHELL_OPERATORS)
+    if operators:
+        raise Refused(f"{what} runs without a shell, so {' '.join(operators)} would be passed as an argument;"
+                      " put the steps in a script, or use sh -c '...'")
+    return words
 
 
 def has_commit(root, commit):
@@ -554,14 +609,38 @@ def contains(root, ancestor, commit):
             and git(root, "merge-base", "--is-ancestor", ancestor, commit, required=False).returncode == 0)
 
 
+def _cache_dir(root):
+    key = ("cache", str(root))
+    if key not in _DIGESTS:
+        found = git(root, "rev-parse", "--git-path", "workorder-digests", required=False)
+        _DIGESTS[key] = (root / found.stdout.strip()) if found.returncode == 0 else None
+    return _DIGESTS[key]
+
+
 def code_digest(root, commit):
+    """The code fingerprint of a commit (or tree). Commits never change, so the result is kept for the
+    run and in .git/workorder-digests/ for later runs; it is a cache, never evidence."""
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+        return _code_digest(root, commit)
     key = (str(root), commit)
-    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit) and key in _DIGESTS:
+    if key in _DIGESTS:
         return _DIGESTS[key]
-    result = _code_digest(root, commit)
-    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
-        _DIGESTS[key] = result
-    return result
+    folder = _cache_dir(root)
+    cached = folder / commit if folder else None
+    try:
+        value = cached.read_text(encoding="ascii").strip() if cached and cached.is_file() else ""
+    except OSError:
+        value = ""
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        value = _code_digest(root, commit)
+        try:
+            if cached:
+                folder.mkdir(exist_ok=True)
+                cached.write_text(value, encoding="ascii")
+        except OSError:
+            pass
+    _DIGESTS[key] = value
+    return value
 
 
 def _code_digest(root, commit):
@@ -633,4 +712,5 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main"):
         data.update(command=list(command), exit_code=exit_code, valid=valid)
         if kind != "test":
             data.update(target=target, output_sha256=digest(output.encode()))
-    return append(root, tid, data)
+    with ledger_lock(root, tid):
+        return append(root, tid, data)

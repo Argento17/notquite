@@ -78,10 +78,10 @@ Out: changing how dates are entered.
 ```
 
 - **For people and agents:** `mission`, `summary`, `next`, the owners, `priority` and the five sections say what the work is, what is in and out, who does what, and how it will be accepted. Workorder keeps them in the file and never treats them as evidence.
-- **`status`** is the claim: `IN_PROGRESS`, `BLOCKED`, `DONE` or `CLOSED`. You or the agent edit it. Workorder never edits it and never trusts it.
+- **`status`** is the claim: `IN_PROGRESS`, `BLOCKED`, `DONE`, `CLOSED`, or `CANCELLED` for work that will not be done (it needs no evidence and leaves `ready`). You or the agent edit it. Workorder never edits it and never trusts it.
 - **`depends_on`** lists tasks this one needs. `waits_on` takes `task:TASK-2` or `person:alex` items (remove a person wait when it is answered). Both form one dependency list, and a task cannot be DONE while one is open. A task dependency counts as finished only when its own dependencies are finished too. `blocks` is informational: it is checked against the other tasks but never enforced.
-- **`test`** is the task's own test command. Once it is set, only a run of exactly that command counts as the task's test, and `workorder receipt test --task <id>` runs it. Leave it empty and any recorded command counts.
-- **`ships`** sets what CLOSED needs beyond DONE: `none`, `repo` (the default) or `live`.
+- **`test`** is the task's own test command. Once it is set, only a run of exactly that command counts as the task's test, and `workorder receipt test --task <id>` runs it. Leave it empty and any recorded command counts. No shell runs it: words split on spaces, quotes group words, backslashes stay as written, and `&&` or pipes are refused (use a script).
+- **`ships`** sets what CLOSED needs beyond DONE: `none` (the default), `repo` (a merge receipt) or `live` (also deployment read-backs).
 - **`contract`** is `none` or a path to a contract that maps each acceptance criterion to evidence Workorder can check ([see below](#contracts-and-evidence)). Without one, the Acceptance list is for the agent and the reviewer; Workorder does not read it.
 
 Front matter is a small, documented subset: single-line text (plain, quoted or JSON), lists, `>` and `|` blocks for `mission`, `next` and `summary`, `- TASK-1` lists and `#` comment lines. Other YAML, and unknown fields, are refused, so a typo cannot quietly drop a dependency. The [reference](https://github.com/Argento17/workorder/blob/main/docs/reference.md#what-yaml-is-read) lists exactly what is read.
@@ -97,11 +97,11 @@ Workorder reads task files and recorded evidence. It does not watch conversation
 ```markdown
 ## Tasks
 - Work from the task file. Read tasks/<id>.md first: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it.
-- Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to); run `workorder release --task <id>` when you stop.
+- Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - Add dated notes under Progress as you go, and keep `next` current.
 - After committing code, run `workorder receipt implemented --task <id>`, then `workorder receipt test --task <id>` (it runs the task's `test`; if the task has none, put the project's test command after `--`).
 - Set status DONE only when every Acceptance item is met, then run `workorder check <id>`. If it reports NOT QUITE, set the status back and report its Missing lines instead of saying the task is done.
-- Commit tasks/ and .workorder/ with your work and push. After the change is merged, run `workorder receipt merged --task <id>`, and set CLOSED only if `workorder check <id>` passes.
+- Commit tasks/ and .workorder/ with your work and push. If the task's `ships` is `repo` or `live`: after the change is merged, on the main branch run `workorder receipt merged --task <id>`, set CLOSED only if `workorder check <id>` passes, then commit and push again.
 ```
 
 ## Quick start
@@ -168,12 +168,13 @@ TASK-1 still owes: a passing test on cfd328a
 
 - **Ids.** `workorder new` writes `tasks/TASK-<n>.md`. With an `origin` remote, it first reserves the id there, so two clones cannot take the same id. Without one, it numbers tasks locally and says so; those ids are not coordinated with anyone else.
 - **Claims.** `workorder claim --task TASK-1` pushes a tag to `origin`. If another clone already holds the task, Git rejects the push and the claim fails. `workorder claims` lists holders.
+- **Offline or without tag rights.** `workorder new --local` numbers the id from the task files without pushing a tag. `ready` still lists tasks when `origin` cannot be reached, without claims.
 - **Ready.** `workorder ready` lists open tasks as free, held, blocked (with what they wait for) or waiting for delivery.
 - **Status.** `workorder show --task TASK-1` prints the recorded and the computed status, and what is still owed.
 
-`workorder release` works only in the clone that made the claim. That clone keeps a random token in its `.git` folder, and the claim tag stores only the token's SHA-256 hash. Release adds another tag, so the history stays on `origin`.
+`workorder release` works in the clone that made the claim. That clone keeps a random token in its `.git` folder, and the claim tag stores only the token's SHA-256 hash. Release adds another tag, so the history stays on `origin`. If that clone or worktree is gone, `workorder release --task TASK-1 --force` releases the claim from anywhere and records that it was forced.
 
-Ids, claims and releases live under `refs/tags/workorder/`. Hosting sites list them with your other tags, and `git fetch --tags` downloads them. The token is a courtesy between clones, not access control. Anyone with push access can push a release tag, force-push or delete tags. If that matters, protect `workorder/*` tags in your repository settings. A claim whose clone is gone can only be freed that way.
+Ids, claims and releases live under `refs/tags/workorder/`. Hosting sites list them with your other tags, and `git fetch --tags` downloads them. The token is a courtesy between clones, not access control. Anyone with push access can push a release tag, force-push or delete tags. If that matters, protect `workorder/*` tags in your repository settings.
 
 Claims always need `origin`. Without a remote there are no claims at all: Workorder refuses `claim` rather than keep a local claim that nobody else could see. If `origin` is configured but unreachable, `new` and `claim` refuse rather than guess.
 
@@ -184,7 +185,7 @@ Claims always need `origin`. Without a remote there are no claims at all: Workor
 3. Every critical contract criterion met, if there is a contract.
 4. Nothing left in `waits_on` or `depends_on`: each task dependency is finished (its own dependencies included), and no `person:` wait remains.
 
-"Code" is every tracked file outside `tasks/` and `.workorder/`, so committing the task file and receipts does not change it: a later run on the same code still counts, pass or fail. A test recorded before the latest implementation, on different code, or while files or HEAD changed does not count. Each `receipt test` runs the command itself and records the real exit code. Declare the task's `test` so the agent cannot settle for a weaker command; `workorder check <id>` shows the command behind the deciding run.
+"Code" is every tracked file outside `tasks/` and `.workorder/`, so committing the task file and receipts does not change it: a later run on the same code still counts, pass or fail. A test recorded before the latest implementation, on different code, or while files or HEAD changed does not count. Each `receipt test` runs the command itself and records the real exit code. Declare the task's `test` so a weaker command does not count; changing the `test` line itself is a change to the task, and `workorder check --base` points it out for review. `workorder check <id>` shows the command behind the deciding run.
 
 A receipt that is recorded but cannot count, such as a test on code that changed since `receipt implemented`, says why and exits 1.
 
@@ -269,7 +270,7 @@ jobs:
       - run: workorder check --base origin/${{ github.base_ref }}
 ```
 
-`--base` adds two checks the pre-commit hook alone cannot promise, because `git commit --no-verify` skips the hook: receipts already on the base branch must still be there, unchanged, and a commit since the base that marked a task DONE or CLOSED must carry its implemented code.
+`--base` adds two checks the pre-commit hook alone cannot promise, because `git commit --no-verify` skips the hook: receipts already on the base branch must still be there, unchanged, and a commit since the base that marked a task DONE or CLOSED must carry its implemented code. It judges the change, not the whole history: a problem already on the base branch, on a task the change does not touch, is printed as a note and does not fail the check. So are changes to a task's `test`, contract or dependencies, for the reviewer to see. The pre-commit hook treats problems already in HEAD the same way, so an old problem does not block unrelated commits.
 
 Receipts name the commits they were recorded on. A squash merge, a rebase or an amend replaces those commits; once the originals are gone, their receipts no longer count, and a task that claims DONE on them is refused until `implemented` and the test are recorded again on the new commit. Other tasks are not affected. With merge commits nothing needs re-recording.
 
@@ -282,6 +283,8 @@ Receipts name the commits they were recorded on. A squash merge, a rebase or an 
 - A DONE is about the code that was implemented and tested. Code that lands after a task is DONE does not reopen it; `workorder check <id>` notes the change.
 - Only task files are checked. Claims made in chat, issues or pull request text are not.
 - Receipts and claims record your Git `user.name`, and it is pushed. Receipts written by 0.2.0 or earlier also carry the computer's hostname, and keep it.
+- Ids, claims and releases are Git tags, so they show up in tag lists; a `git tag` that picks the newest tag should filter out `workorder/*`.
+- Every task stays in `tasks/` and is checked on every run; there is no archive yet. Checking is faster on later runs, because commit fingerprints are cached in `.git`.
 
 ## Contributing
 

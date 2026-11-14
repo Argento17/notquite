@@ -7,7 +7,7 @@ code in `workorder/`; if the two disagree, the code wins and this file has a bug
 
 | Command | What it does |
 |---|---|
-| `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote; writes `tasks/<id>.md` (extended by default; `simple` writes the seven required fields only) |
+| `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple] [--test COMMAND] [--local]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote or with `--local` (no tag is pushed); writes `tasks/<id>.md` (extended by default; `simple` writes the seven required fields only). `ships` defaults to `none` |
 | `workorder receipt implemented --task ID` | Records the current commit as the implementation; refuses uncommitted or untracked code |
 | `workorder receipt test --task ID -- CMD...` | Runs `CMD` (no shell), records its exit code against the current commit |
 | `workorder receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to (needs `origin`) |
@@ -15,9 +15,9 @@ code in `workorder/`; if the two disagree, the code wins and this file has a bug
 | `workorder receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
 | `workorder check [ID or tasks/ID.md]` | No argument: one line per refused claim in the repository, or `check: OK`; use this in hooks and CI. With a task: an explanation of that task alone |
 | `workorder check --staged` | Checks the staged versions of task files and receipts (for pre-commit); also refuses a commit that newly claims DONE or CLOSED on code other than the implemented code |
-| `workorder check --base REF` | Also refuses if receipts committed on `REF` were removed or changed, or if a commit since `REF` newly claimed DONE or CLOSED on code other than the implementation it relied on (for CI: the pull request's base branch) |
+| `workorder check --base REF` | Also refuses if receipts committed on `REF` were removed or changed, or if a commit since `REF` newly claimed DONE or CLOSED on code other than the implementation it relied on (for CI: the pull request's base branch). Problems already on `REF`, on tasks the change does not touch, and changes to a task's `test`, contract or dependencies are printed as notes |
 | `workorder show --task ID` | Recorded status, computed status, what is still owed |
-| `workorder claim --task ID` / `release --task ID` | Takes or gives up a task with a pushed tag |
+| `workorder claim --task ID` / `release --task ID [--force]` | Takes or gives up a task with a pushed tag; `--force` releases a claim whose clone or worktree is gone, and records that it was forced |
 | `workorder claims` | Active claims |
 | `workorder ready` | Open tasks: free, held, blocked, or waiting for delivery |
 
@@ -80,7 +80,8 @@ Block values were checked against PyYAML: for the supported forms they read
 the same, except that Workorder refuses the less-indented lines above.
 
 - `id` matches the file name and the pattern `PREFIX-N`, for example `TASK-12`.
-- `status`: `IN_PROGRESS`, `BLOCKED`, `DONE` or `CLOSED`.
+- `status`: `IN_PROGRESS`, `BLOCKED`, `DONE`, `CLOSED` or `CANCELLED` (needs no
+  evidence, is never a finished dependency, and is left out of `ready`).
 - `ships`: `none`, `repo` or `live`.
 - `waits_on`: a JSON list of `task:<id>` or `person:<name>`.
 - `contract`: `none` or a repository-relative path.
@@ -102,7 +103,9 @@ may be used; any other field is refused, so typos are caught.
 - `test`: empty, or the task's test command as one line, split like a shell
   would split it (no shell runs it). Once set, only a `test` receipt whose
   command is exactly this counts, and `receipt test --task ID` with nothing
-  after it runs this command. `new --test COMMAND` fills it in.
+  after it runs this command. `new --test COMMAND` fills it in. Words split on
+  spaces, quotes group words, backslashes are kept as written, and shell
+  operators (`&&`, `|`, `;`, `>`) are refused: put compound steps in a script.
 - `blocks`: task ids. Informational: `check` reports a `blocks` entry that
   names an unknown task, or two tasks that each say they block the other, but
   never makes a task wait because of it.
@@ -118,9 +121,9 @@ all the way down; `ready` lists such open dependencies as blocked. A task may no
 wait for and block the same task. Missing task dependencies and dependency
 cycles, across both fields, make `check` fail.
 
-None of the extended fields or sections can satisfy or replace evidence; the
-only extended field that affects a verdict is `depends_on`, and it can only
-add requirements.
+None of the extended fields or sections can satisfy or replace evidence. Two
+extended fields affect a verdict, and both can only add requirements:
+`depends_on` (more dependencies) and `test` (only that command counts).
 
 ## How the status is computed
 
@@ -188,7 +191,9 @@ The checker refuses a broken chain, a receipt whose `code` does not match its
 commit, and any change to receipts already in `HEAD` other than appending.
 A ledger without a matching task file is reported.
 
-The append-only rule compares the working tree or the index with `HEAD` only.
+Receipt commands for one task take a lock in `.git/workorder-locks/`, so two
+at once are written one after the other. The append-only rule compares the
+working tree or the index with `HEAD` only.
 It protects receipts while you commit, through `check --staged` in the
 pre-commit hook. Once a commit that drops receipts exists (for example one made
 with `git commit --no-verify`), plain `check` on that commit compares it with

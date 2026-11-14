@@ -393,7 +393,7 @@ def test_ready_reports_free_held_blocked_and_delivery(clones):
     task(one, "TASK-2", waits=["task:TASK-1", "person:bo"], status="BLOCKED")
     task(one, "TASK-3")
     assert "TASK-1 free" in ok(one, "ready")
-    assert "TASK-2 blocked: task:TASK-1, person:bo" in ok(one, "ready")
+    assert "TASK-2 blocked: status BLOCKED, task:TASK-1, person:bo" in ok(one, "ready")
     ok(one, "claim", "--task", "TASK-1")
     assert "TASK-1 held by one since" in ok(one, "ready")
     ok(one, "release", "--task", "TASK-1")
@@ -401,7 +401,7 @@ def test_ready_reports_free_held_blocked_and_delivery(clones):
     passed(one)
     output = ok(one, "ready")
     assert "TASK-1 waiting for delivery" in output
-    assert "TASK-2 blocked: person:bo" in output
+    assert "TASK-2 blocked: status BLOCKED, person:bo" in output
     assert "TASK-3 free" in output
 
 
@@ -919,7 +919,8 @@ def extended(root, tid="TASK-1", status="IN_PROGRESS", ships="repo", body=None, 
 
 
 def test_simple_template_output_is_byte_identical_to_v010(local_repo):
-    ok(local_repo, "new", "--title", "Solo work", "--owner", "solo", "--template", "simple")
+    # 0.1.0's default was ships: repo; with the same choices the file is byte for byte the same.
+    ok(local_repo, "new", "--title", "Solo work", "--owner", "solo", "--template", "simple", "--ships", "repo")
     assert (local_repo / "tasks/TASK-1.md").read_text(encoding="utf-8") == V010_SIMPLE
 
 
@@ -1368,7 +1369,8 @@ def test_a_dependency_waiting_on_a_person_holds_back_its_dependents(local_repo):
     task(local_repo, "TASK-3", ships="none", waits=["task:TASK-2"])
     for tid in ("TASK-1", "TASK-2", "TASK-3"):
         finish_with_evidence(local_repo, tid)
-    assert "computed CLOSED" in ok(local_repo, "show", "--task", "TASK-1")
+    shown = ok(local_repo, "show", "--task", "TASK-1")
+    assert "computed BLOCKED" in shown and "still owes: person:alex" in shown
     task(local_repo, "TASK-2", status="DONE", ships="none", waits=["task:TASK-1"])
     task(local_repo, "TASK-3", status="DONE", ships="none", waits=["task:TASK-2"])
     refused = cli(local_repo, "check")
@@ -1540,3 +1542,123 @@ def test_claiming_a_task_this_checkout_does_not_have_says_so(clones):
     result = cli(one, "claim", "--task", "TASK-7")
     assert result.returncode == 1
     assert "no task record tasks/TASK-7.md in this checkout" in result.stderr
+
+
+# 0.3.0: the third review round, kept as regression tests.
+
+def test_a_test_command_keeps_backslashes_and_refuses_shell_operators(local_repo):
+    assert store.split_command(r'C:\Tools\python.exe -m pytest "tests\a b.py"') == [
+        r"C:\Tools\python.exe", "-m", "pytest", r"tests\a b.py"]
+    refused = cli(local_repo, "new", "--title", "T", "--owner", "o", "--test", "pytest && echo ok")
+    assert refused.returncode == 1 and "runs without a shell" in refused.stderr
+    task(local_repo, "TASK-1", ships="none")
+    path = local_repo / "tasks/TASK-1.md"
+    path.write_text(path.read_text(encoding="utf-8").replace('contract: "none"',
+                                                            'test: "pytest | tee log"\ncontract: "none"'),
+                    encoding="utf-8")
+    assert "runs without a shell" in cli(local_repo, "check").stderr
+
+
+def test_a_done_over_uncommitted_code_changes_is_refused(local_repo):
+    task(local_repo, "TASK-1", ships="none")
+    finish_with_evidence(local_repo, "TASK-1")
+    (local_repo / "app.py").write_text("items = ['not committed']\n", encoding="utf-8")
+    task(local_repo, "TASK-1", ships="none", status="DONE")
+    refused = cli(local_repo, "check")
+    assert refused.returncode == 1 and "with uncommitted code changes" in refused.stdout
+    explained = cli(local_repo, "check", "TASK-1")
+    assert "Missing:  evidence for the uncommitted code changes" in explained.stdout
+    assert "Note:     uncommitted code changes are not covered by any receipt" in explained.stdout
+
+
+def test_check_base_notes_a_changed_test_and_keeps_old_problems_as_notes(local_repo):
+    task(local_repo, "TASK-1", ships="none", status="DONE")  # a false claim already on the base
+    ok(local_repo, "new", "--title", "Second", "--owner", "solo", "--test", "true")
+    git(local_repo, "add", "tasks")
+    git(local_repo, "commit", "-qm", "Base with an old problem")
+    base = store.head(local_repo)
+    path = local_repo / "tasks/TASK-2.md"
+    path.write_text(path.read_text(encoding="utf-8").replace('test: "true"', 'test: "git --version"'),
+                    encoding="utf-8")
+    git(local_repo, "commit", "-qam", "Change TASK-2's test")
+    result = cli(local_repo, "check", "--base", base)
+    assert result.returncode == 0, result.stdout
+    assert "check: OK" in result.stdout
+    assert "Note: NOT QUITE  TASK-1 says DONE but owes: implementation" in result.stdout
+    assert "this change does not touch TASK-1" in result.stdout
+    assert f"Note: TASK-2: test changed since {base}: 'true' -> 'git --version'" in result.stdout
+    assert cli(local_repo, "check").returncode == 1  # without a base, the old problem still counts
+
+
+def test_the_hook_does_not_block_an_unrelated_commit_on_an_old_problem(local_repo):
+    task(local_repo, "TASK-1", ships="none", status="DONE")
+    git(local_repo, "add", "tasks")
+    git(local_repo, "commit", "-qm", "An old false claim")
+    (local_repo / "docs.md").write_text("notes\n", encoding="utf-8")
+    git(local_repo, "add", "docs.md")
+    staged = cli(local_repo, "check", "--staged")
+    assert staged.returncode == 0 and "already so on HEAD" in staged.stdout
+
+
+def test_ready_lists_tasks_when_origin_cannot_be_reached(clones):
+    one, _ = clones
+    git(one, "remote", "set-url", "origin", str(one.parent / "gone.git"))
+    listed = ok(one, "ready")
+    assert "(claims not shown: origin could not be reached)" in listed and "TASK-1 free" in listed
+
+
+def test_a_claim_whose_clone_is_gone_can_be_released_with_force(clones):
+    one, two = clones
+    ok(one, "claim", "--task", "TASK-1")
+    denied = cli(two, "release", "--task", "TASK-1")
+    assert denied.returncode == 1 and "--force" in denied.stderr
+    assert "released (forced" in ok(two, "release", "--task", "TASK-1", "--force")
+    assert "claimed by this clone: held by two" in ok(two, "claim", "--task", "TASK-1")
+
+
+def test_new_local_pushes_no_tag(clones):
+    one, _ = clones
+    assert "local id" in ok(one, "new", "--title", "Offline", "--owner", "one", "--local")
+    assert "workorder/ids" not in git(one, "ls-remote", "origin")
+
+
+def test_stray_files_missing_evidence_and_mixed_lists_do_not_break_checks(local_repo):
+    receipts = local_repo / ".workorder" / "receipts"
+    receipts.mkdir(parents=True)
+    (receipts / ".gitkeep").write_text("", encoding="utf-8")
+    task(local_repo, "TASK-1", ships="none", contract=".workorder/contracts/c.json")
+    contract = local_repo / ".workorder" / "contracts" / "c.json"
+    contract.parent.mkdir(parents=True)
+    contract.write_text(json.dumps({"task": "TASK-1", "criteria": [{
+        "id": "C1", "ask": "Works", "critical": True, "requires": "REAL",
+        "evidence": [{"provenance": "REAL", "ref": "evidence/missing.txt", "sha256": "0" * 64}]}]}),
+        encoding="utf-8")
+    task(local_repo, "TASK-2", ships="none")
+    path = local_repo / "tasks/TASK-2.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("waits_on: []",
+                                                            "waits_on: [task:TASK-1, \"person:Sam Lee\"]"),
+                    encoding="utf-8")
+    assert store.record(local_repo, "TASK-2")["waits_on"] == ["task:TASK-1", "person:Sam Lee"]
+    finish_with_evidence(local_repo, "TASK-1")
+    assert "contract C1: REAL evidence" in ok(local_repo, "show", "--task", "TASK-1")
+    assert ok(local_repo, "check").strip() == "check: OK"
+
+
+def test_parallel_receipts_for_one_task_keep_the_chain(local_repo):
+    task(local_repo, "TASK-1", ships="none")
+    ok(local_repo, "receipt", "implemented", "--task", "TASK-1")
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(lambda _: cli(local_repo, "receipt", "test", "--task", "TASK-1", "--",
+                                              PYTHON, "-c", "pass"), range(6)))
+    assert all(r.returncode == 0 for r in results), [r.stdout + r.stderr for r in results]
+    assert len(store.entries(local_repo, "TASK-1")) == 7
+
+
+def test_a_cancelled_task_leaves_ready_and_never_counts_as_finished(local_repo):
+    task(local_repo, "TASK-1", ships="none", status="CANCELLED")
+    task(local_repo, "TASK-2", ships="none", waits=["task:TASK-1"])
+    assert ok(local_repo, "ready").splitlines() == ["TASK-2 blocked: task:TASK-1"]
+    path = local_repo / "tasks/TASK-1.md"
+    path.write_text(path.read_text(encoding="utf-8").replace('"CANCELLED"', '"DONE # finished"'),
+                    encoding="utf-8")
+    assert "unknown status 'DONE # finished'" in cli(local_repo, "check").stderr

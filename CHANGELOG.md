@@ -49,6 +49,29 @@ From the second, neutral four-reviewer round:
   PATH, and the agent instructions cover the task's `test`, committing,
   pushing and recording the merge.
 
+From the third four-reviewer round:
+
+- `test` commands split without escape characters, so Windows paths work, and
+  shell operators such as `&&` are refused instead of passed as arguments.
+- Plain `check` refuses a new DONE made over uncommitted code changes, and
+  `check <id>` notes uncommitted changes. While a dependency is open, the
+  computed status reads BLOCKED.
+- `check --base` judges the change: problems already on the base branch, on
+  tasks the change does not touch, and changes to a task's `test`, contract
+  or dependencies are printed as notes. The pre-commit hook treats problems
+  already in HEAD the same way, so an old problem no longer blocks unrelated
+  commits.
+- `release --force` frees a claim whose clone or worktree is gone;
+  `new --local` numbers a task without pushing a tag; `ready` works when
+  origin cannot be reached and shows a BLOCKED status as blocked.
+- New status `CANCELLED` for work that will not be done. `ships` now
+  defaults to `none`.
+- Receipt commands for one task are serialised by a lock, so parallel runs
+  keep the chain. Commit fingerprints are cached in `.git` between runs.
+- Stray files in `.workorder/receipts/` are ignored, a missing contract
+  evidence file is unmet evidence rather than an error, quoted list items and
+  person names with spaces are read, and an unknown status shows its value.
+
 - A test run counts when its code matches the implemented code, on any commit.
   Committing the task file and receipts no longer hides later runs: a later
   failing run revokes DONE again, and a passing run after that commit counts.
