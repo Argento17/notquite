@@ -16,3 +16,4 @@ First public release.
   evidence never count.
 - Task claims as Git tags.
 - Pre-commit hook and GitHub Actions workflow.
+- Tested in CI on Linux and Windows with Python 3.10, 3.12 and 3.13.

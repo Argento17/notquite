@@ -48,7 +48,7 @@ TASK-1 still owes: a passing test on cfd328a
 
 ## Quick start
 
-Requires Git and Python 3.10 or newer. This uses a throwaway folder and needs no remote.
+Requires Git and Python 3.10 or newer. CI runs the tests on Linux and Windows with Python 3.10, 3.12 and 3.13. This uses a throwaway folder and needs no remote. On Windows, run the commands in Git Bash and activate with `. .venv/Scripts/activate`.
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
