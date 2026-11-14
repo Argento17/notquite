@@ -3,6 +3,8 @@
 Details behind the [README](../README.md). Everything here is read from the
 code in `workorder/`; if the two disagree, the code wins and this file has a bug.
 
+**Until 0.6.0 is on PyPI:** install from GitHub with `pipx install "git+https://github.com/Argento17/workorder@v0.6.0"`. Released form: `pipx install workorder`.
+
 ## Commands
 
 | Command | What it does |
@@ -16,7 +18,7 @@ code in `workorder/`; if the two disagree, the code wins and this file has a bug
 | `workorder check [ID or tasks/ID.md]` | No argument: reads every task; one line per problem, or `check: OK`. With a task: an explanation of that task alone |
 | `workorder check --staged` | For the pre-commit hook: checks the staged versions of the tasks this commit touches (task file, receipts, contract or its evidence) and the tasks that depend on them; refuses a commit that newly claims DONE or CLOSED on code other than the implemented code; notes changes to a task's requirements |
 | `workorder check --base REF [--allow IDS] [--run-tests]` | Checks changed tasks, including their test files, and their dependents. Refuses stale claims, changed receipts, changed requirements or test lines, new finished definitions, and removed tasks. `--allow` accepts definition changes and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
-| `workorder show --task ID` | The task as a record: recorded and computed status, what is still owed, title, mission, next and test, a dated timeline of its receipts, its Progress notes and the next step |
+| `workorder show --task ID` | The task as a record: recorded and computed status, what is still owed, dependencies, title, owner and test; mission, summary and next when filled in; body sections, a dated receipt timeline, any computed merge and Progress notes. Prints a next step for outstanding evidence or unclaimed Acceptance work |
 | `workorder note --task ID TEXT` | Adds `- YYYY-MM-DD: TEXT` at the end of the task's Progress section (creating it if needed) |
 | `workorder renew --task ID [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded by `renew` |
 | `workorder repair --task ID` | Verifies a conflicted legacy append, keeps the common prefix, and converts each side's extra lines to receipt files |
@@ -245,6 +247,13 @@ search window. For fast-forwards, Git records no branch boundary: the path
 comparison uses the task's most recent open period before implementation,
 or the implementation's parent if the task was introduced later. This is
 conservative when unrelated work also happened during that open period.
+Within that range, commits recorded as another task's implementation are
+excluded from this task's protected paths. Commits covered by this task's
+previous implemented receipt are excluded too. Paths changed by the remaining
+commits stay protected even when another task also changed them. Without those
+receipt boundaries, the full implementation range still supplies the paths.
+For a committed claim, these boundaries use the receipts in that commit, so
+later task removal does not change which paths that claim protected.
 Without the original history, the available landing tree is protected.
 
 The target is `merge_ref` when set; otherwise the first existing branch in
@@ -337,6 +346,8 @@ request event and passes their ids to `--allow`. Only reviewers who may
 accept these changes should apply those labels. Label text is read as data;
 it is never inserted into shell code.
 
+**Until 0.6.0 is on PyPI:** replace the released install step below with `python -m pip install "git+https://github.com/Argento17/workorder@v0.6.0"`.
+
 ```yaml
 name: Workorder
 on:
@@ -351,7 +362,7 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install workorder==0.5.0
+      - run: python -m pip install workorder==0.6.0
       - name: Check tasks and run their tests
         env:
           BASE: origin/${{ github.base_ref }}

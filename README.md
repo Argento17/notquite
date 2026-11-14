@@ -4,6 +4,8 @@
 
 ![Workorder demo: a task is marked DONE, workorder check says NOT QUITE because the last passing test belongs to an older commit.](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)
 
+**Until 0.6.0 is on PyPI:** install from GitHub with `pipx install "git+https://github.com/Argento17/workorder@v0.6.0"`. Released form:
+
 ```sh
 pipx install workorder
 ```
@@ -109,9 +111,11 @@ Workorder reads task files and recorded evidence. It does not watch conversation
 
 Requires Git and Python 3.10 or newer. This uses a throwaway folder and needs no remote. On Windows, run the commands in Git Bash and activate with `. .venv/Scripts/activate`.
 
+**Until 0.6.0 is on PyPI:** after activating the virtual environment, replace the released install command below with `python -m pip install "git+https://github.com/Argento17/workorder@v0.6.0"`.
+
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-python -m pip install workorder
+python -m pip install workorder==0.6.0
 
 mkdir demo && cd demo
 git init -q -b main
@@ -132,7 +136,7 @@ workorder show --task TASK-1
 
 `workorder show` prints the task as a record: its state (`recorded IN_PROGRESS; computed CLOSED`, because the evidence already supports it and this task ships nothing), what it still owes, its test, a timeline of the implementation and the passing test, and the progress note. The `status` line in `tasks/TASK-1.md` is the claim, and Workorder never edits it; setting `status: CLOSED` would now pass `workorder check`.
 
-To see it refuse, change `calc.py`, commit, run `workorder receipt implemented --task TASK-1`, set `status: DONE` in `tasks/TASK-1.md`, and run `workorder check TASK-1`.
+To see it refuse, change `calc.py`, commit, run `workorder receipt implemented --task TASK-1`, set `status: DONE` in `tasks/TASK-1.md`, and run `workorder check TASK-1`. After the NOT QUITE result, set the status back to `IN_PROGRESS` before committing the task file; with the hook installed, the unsupported DONE claim would refuse that commit.
 
 Run `workorder` at the root of your repository. Commit `tasks/` and `.workorder/` along with your code. Locally, `workorder check` reads the working tree (`--staged`: what is about to be committed); in CI it reads what was committed.
 
@@ -168,7 +172,7 @@ TASK-1 still owes: a passing test on 75e3c96
 
 ## The record
 
-- **`workorder show --task TASK-1`** prints the task as a record: recorded and computed status, what is still owed, title, mission, `next` and `test`, every section of the task (Context, Scope, Lanes, Acceptance), a dated timeline of every receipt (implemented, each test run with its command and result, merges and read-backs, and who recorded them), the Progress notes, and the next step.
+- **`workorder show --task TASK-1`** prints the task as a record: recorded and computed status, what is still owed, dependencies, title, owner and `test`, plus mission, summary and `next` when filled in. It prints every section of the task (Context, Scope, Lanes, Acceptance), a dated timeline of every receipt (implemented, each test run with its command and result, merges and read-backs, and who recorded them), any computed merge, and the Progress notes. When work is still owed it prints a next step. If only unclaimed Acceptance work remains, that step is to finish the Acceptance items, set status DONE and run `workorder check TASK-1`.
 - **`workorder note --task TASK-1 "..."`** adds a dated line at the end of the task's Progress section. It is the one change Workorder makes to a task file after `new`; every other byte is left alone.
 - **Ids.** `workorder new` writes `tasks/TASK-<n>.md`. With an `origin` remote, it first reserves the id there, so two clones cannot take the same id. Without one, or with `--local`, it numbers tasks from the task files and says so; those ids are not coordinated with anyone else.
 - **Claims.** `workorder claim --task TASK-1` pushes a tag to `origin`. If another clone already holds the task, Git rejects the push and the claim fails. It also fetches origin's main branch (master when main is absent) and refuses a task already DONE, CLOSED or CANCELLED there, even after its holder released it; pull to update your task files. `workorder claims` lists holders.
@@ -226,6 +230,10 @@ the content of every code path changed by the implementation at that landing.
 Reverting or overwriting those files before claiming completion is refused;
 run `workorder renew --task TASK-1` on the claimed code. This applies to
 ancestry, same-code, squash and rebase matches. Unrelated paths may change.
+When a branch contains several tasks, each task protects its own implementation
+paths. Commits recorded as another task's implementation are excluded, as are
+commits covered by this task's previous implemented receipt. A path this task
+also changed stays protected.
 A transition from DONE to CLOSED is a new claim and is checked again.
 A valid claim already made at or before the landing stays valid when later
 commits change those files: later work does not reopen a finished task.
@@ -305,6 +313,8 @@ label, passed as `--allow` in the example below.
 
 Pre-commit hook, to refuse committing a false DONE:
 
+**Until 0.6.0 is on PyPI:** install the command with `pipx install "git+https://github.com/Argento17/workorder@v0.6.0"`; the hook's install hint below is the released form.
+
 ```sh
 cat > .git/hooks/pre-commit <<'EOF'
 #!/bin/sh
@@ -316,6 +326,8 @@ chmod +x .git/hooks/pre-commit
 ```
 
 GitHub Actions (`.github/workflows/workorder.yml` in your project):
+
+**Until 0.6.0 is on PyPI:** replace the released install step below with `python -m pip install "git+https://github.com/Argento17/workorder@v0.6.0"`.
 
 ```yaml
 name: Workorder
@@ -331,7 +343,7 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install workorder==0.5.0
+      - run: python -m pip install workorder==0.6.0
       - name: Check tasks and run their tests
         env:
           BASE: origin/${{ github.base_ref }}

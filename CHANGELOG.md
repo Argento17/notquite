@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+- Keep each task's protected paths separate when several tasks land in one
+  squash. Exclude other tasks' recorded implementation commits and commits
+  covered by the task's previous implemented receipt. Keep protecting paths
+  the current task also changed.
+- Correct `renew` help: it records implementation and tests; merges are computed.
+- List the checks performed by `check --base`, with `--allow` and `--run-tests`.
+- Explain in the task template that status is your claim and `show` and `check`
+  compute what the receipts support.
+- Give `show` a next step when only unclaimed Acceptance work remains, and
+  document which empty planning fields it omits.
+- Reset the unsupported status in the README refusal demo before committing.
+- Document GitHub installation until 0.6.0 is on PyPI, alongside the released
+  commands, and update package versions and install pins to 0.6.0.
+
 ## 0.5.0 (unreleased)
 
 - Check claims after a matched landing against its implementation paths for

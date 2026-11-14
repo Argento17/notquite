@@ -429,7 +429,7 @@ EXTENDED_BODY = """
 
 ## Progress
 
-<!-- Dated notes: workorder note adds one, workorder show prints them. Status comes from receipts, not from here. -->
+<!-- Dated notes: workorder note adds one, workorder show prints them. The status line is your claim; workorder show and workorder check compute what the receipts support. Workorder never edits the status line. -->
 """
 
 

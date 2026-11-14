@@ -48,7 +48,7 @@ def parser():
                              help="release a claim whose clone or worktree is gone")
     commands.add_parser("claims", help="list active claims")
     renew = commands.add_parser("renew", help="record implemented and the task's test again on the current"
-                                " commit (after a squash merge or rebase), and the merge if the task ships")
+                                " commit (after a squash merge or rebase); merges are computed")
     renew.add_argument("--task", required=True)
     note = commands.add_parser("note", help="add a dated line under the task's Progress section")
     note.add_argument("--task", required=True)
@@ -67,8 +67,12 @@ def parser():
     check.add_argument("--run-tests", action="store_true",
                        help="with --base: run the declared test of every task this change claims DONE or CLOSED")
     check.add_argument("--base", metavar="REF",
-                       help="also refuse if receipts committed on REF were removed or changed"
-                            " (in CI: the pull request's base branch)")
+                       help="check changes since REF: changed or removed receipts; requirement changes"
+                            " (test, contract, evidence, dependencies, Scope and Acceptance lines);"
+                            " removed or changed test-file lines; tasks created and claimed finished in"
+                            " the same change; and task removal. Use --allow for reviewer acceptance of"
+                            " definition changes or complete removal of finished or cancelled tasks;"
+                            " use --run-tests to rerun declared tests of supported DONE/CLOSED claims")
     return result
 
 

@@ -463,7 +463,7 @@ def stale_claim(root, record, staged=False, base=None):
                     + s.describe_dirty(dirty) + f". Commit, record workorder receipt implemented --task {tid}"
                     " and test again.")
         tree = s.git(root, "write-tree").stdout.strip() if staged else s.head(root)
-        if claim_matches(root, record, current, s.head(root), tree):
+        if claim_matches(root, record, current, s.head(root), tree, staged):
             return None
         where = "in this commit" if staged else "now"
         return (f"NOT QUITE  {tid} is being marked {status}, but the code {where} differs from the"
@@ -488,20 +488,20 @@ def stale_claim(root, record, staged=False, base=None):
     relied_on = implementation_at(root, claim, tid)
     if relied_on is None or current["hash"] != relied_on.get("hash"):
         return None
-    if claim_matches(root, record, current, claim):
+    if claim_matches(root, record, current, claim, receipt_rev=claim):
         return None
     return (f"NOT QUITE  {tid} was marked {status} in {claim[:7]} on code other than the implemented"
             f" commit {short}. Run workorder renew --task {tid} on that code, or record"
             f" workorder receipt implemented --task {tid} and test again.")
 
 
-def claim_matches(root, record, implemented, claim, tree=None):
+def claim_matches(root, record, implemented, claim, tree=None, staged=False, receipt_rev=None):
     tree = tree or claim
     # This concerns the claim's history, even when the task ships nothing.
     target = merge_target(root, record)
     merged = merge_match(root, implemented, target[1]) if target else None
     if merged and s.contains(root, merged["commit"], claim):
-        return unchanged_implementation_paths(root, implemented, merged, tree)
+        return unchanged_implementation_paths(root, implemented, merged, tree, staged, receipt_rev)
     if s.code_digest(root, tree) == implemented["code"]:
         return True
     if merged and s.contains(root, claim, merged["commit"]):
@@ -513,7 +513,44 @@ def claim_matches(root, record, implemented, claim, tree=None):
     return tree == claim and equivalent_claim(root, record, implemented, claim)
 
 
-def unchanged_implementation_paths(root, implemented, merged, claim):
+def implementation_paths(root, implemented, base, staged=False, receipt_rev=None):
+    """The net changed paths contributed by this task's current implementation period."""
+    original, tid = implemented["commit"], implemented["task"]
+    paths = set(s.git(root, "diff", "--name-only", "-z", "--no-renames", base, original,
+                      "--", *s.CODE_PATHS).stdout.split("\0")) - {""}
+    # A committed claim keeps the task boundaries recorded when it was made.
+    history = s.entries(root, tid, staged, rev=receipt_rev)
+    index = next(i for i, item in enumerate(history) if item["hash"] == implemented["hash"])
+    previous = next((item["commit"] for item in reversed(history[:index])
+                     if item["kind"] == "implemented" and item["commit"] != original
+                     and s.contains(root, item["commit"], original)), None)
+    others = set()
+    owners = {s.receipt_task(p) for p in s.receipt_paths(root, staged, rev=receipt_rev)} - {None, tid}
+    for owner in sorted(owners):
+        try:
+            others.update(item["commit"] for item in s.entries(root, owner, staged, rev=receipt_rev)
+                          if item["kind"] == "implemented")
+        except s.Refused:
+            # An unreadable task's receipts cannot narrow another task's protection.
+            continue
+    if not previous and not others:
+        return paths
+    revisions = [f"{base}..{original}"] + ([f"^{previous}"] if previous else [])
+    commits = s.git(root, "rev-list", *revisions).stdout.split()
+    # A shared implementation commit still belongs to the task being checked.
+    commits = [commit for commit in commits if commit == original or commit not in others]
+    if not commits:
+        return set()
+    contributed = s.git(root, "log", "--no-walk=unsorted", "--format=", "--name-only", "-z",
+                        "--diff-merges=first-parent", "--no-renames", "--no-ext-diff", "--no-textconv",
+                        *commits, "--", *s.CODE_PATHS).stdout
+    # Intersect with the net diff to preserve the single-task behaviour for reverted work.
+    # Select contributions by commit, not by subtracting another task's path names:
+    # two tasks may legitimately change the same file.
+    return paths & set(contributed.split("\0"))
+
+
+def unchanged_implementation_paths(root, implemented, merged, claim, staged=False, receipt_rev=None):
     """Only changes on implementation paths can invalidate a claim after its landing."""
     original, landing = implemented["commit"], merged["commit"]
     if claim == landing:
@@ -539,8 +576,7 @@ def unchanged_implementation_paths(root, implemented, merged, claim):
                 break
             base = commit
     if base and base != original:
-        paths = s.git(root, "diff", "--name-only", "-z", "--no-renames", base, original,
-                      "--", *s.CODE_PATHS).stdout
+        paths = implementation_paths(root, implemented, base, staged, receipt_rev)
     else:
         # Without a branch boundary (or the original history), the recorded tree is the
         # evidence available. Include deleted paths too, so restoring one cannot escape.
@@ -549,7 +585,8 @@ def unchanged_implementation_paths(root, implemented, merged, claim):
                           if not p.startswith(("tasks/", ".workorder/", ".notquite/")))
         paths += s.git(root, "diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z",
                        "--no-renames", landing, "--", *s.CODE_PATHS).stdout
-    return not ((set(paths.split("\0")) - {""}) & (set(changed.split("\0")) - {""}))
+        paths = set(paths.split("\0")) - {""}
+    return not (paths & (set(changed.split("\0")) - {""}))
 
 
 def equivalent_claim(root, record, implemented, claim, target_commit=None):
@@ -1177,6 +1214,9 @@ def record_lines(root, tid):
     owed = stale + done + delivery + open_waits
     if owed:
         lines += ["", f"next step: {next_step(owed[0], record, root=root)}"]
+    elif record["status"] not in FINISHED | {"CANCELLED"}:
+        lines += ["", "next step: finish the Acceptance items, then set status DONE and run "
+                  f"workorder check {tid}"]
     return lines
 
 
