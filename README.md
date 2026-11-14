@@ -172,6 +172,8 @@ DONE, plus what the task ships:
 | `repo` | `receipt merged`: the tested code is on `origin`'s `main` (`--ref refs/heads/<branch>` to change) |
 | `live` | the merge, then `receipt deployed --target <name> -- <command>`, then a later `receipt live --target <name> -- <command>` |
 
+`receipt merged` and `receipt deployed` count only when that commit's code (everything outside `tasks/` and `.notquite/`) is exactly the implemented code: a fast-forward merge with nothing else landed on the branch. Once other work has landed, the receipt is recorded but does not count, so on a busy branch a `repo` or `live` task may not reach CLOSED.
+
 A deployment or live read-back counts when its command exits 0 and its output contains the expected full commit ID. NotQuite reads back; it does not deploy. A passing read-back shows that the command returned that commit ID, nothing more. `receipt merged` reads from `origin`, so `repo` and `live` tasks need a remote.
 
 `notquite check` refuses DONE or CLOSED when the evidence falls short. `notquite show --task TASK-1` prints the recorded and computed status, and `notquite ready` lists open work.

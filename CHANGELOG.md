@@ -13,6 +13,8 @@ Documentation corrections; no code change.
   made with `--no-verify` can drop receipts, and `check` in CI does not notice.
 - Squash and rebase merges are not supported: they remove the commits receipts
   name, and `check` then refuses in fresh clones. Use merge commits.
+- `receipt merged` and `receipt deployed` count only when the branch's code is
+  exactly the implemented code; after other work lands, they do not count.
 
 ## 0.2.0
 
