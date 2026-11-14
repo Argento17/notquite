@@ -260,11 +260,12 @@ def record(root, tid, staged=False):
         raise Refused(f"{tid}: expected fenced front matter")
     fields = front_matter(tid, lines[1:lines.index("---", 1)])
     missing = [k for k in CORE_FIELDS if k not in fields]
-    unknown = sorted(set(fields) - set(CORE_FIELDS) - set(EXTENDED_FIELDS))
+    unknown = sorted(k for k in set(fields) - set(CORE_FIELDS) - set(EXTENDED_FIELDS) if not k.startswith("x-"))
     if missing or unknown:
         raise Refused(f"{tid}: " + "; ".join(
             ([f"missing {', '.join(missing)}"] if missing else [])
-            + ([f"unknown {', '.join(unknown)} (known optional fields: {', '.join(EXTENDED_FIELDS)})"]
+            + ([f"unknown {', '.join(unknown)} (known optional fields: {', '.join(EXTENDED_FIELDS)};"
+                 " your own fields start with x-, such as x-issue)"]
                if unknown else [])))
     if fields["id"] != tid:
         raise Refused(f"{tid}: id must match the file name")
@@ -355,7 +356,7 @@ EXTENDED_BODY = """
 
 ## Progress
 
-<!-- Dated notes. Workorder does not read this section: status comes from receipts. -->
+<!-- Dated notes: workorder note adds one, workorder show prints them. Status comes from receipts, not from here. -->
 """
 
 
@@ -384,7 +385,11 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
     # With one, it must answer: never guess offline.
     local = local_only or not has_origin(root)
     for _ in range(30):
-        refs = {} if local else remote_refs(root)
+        try:
+            refs = {} if local else remote_refs(root)
+        except Refused as error:
+            raise Refused(f"origin could not be reached ({error}); workorder new --local numbers the task"
+                          " from the task files without it") from None
         stem = NAMESPACE + f"ids/{prefix}-"
         numbers = [int(ref[len(stem):]) for ref in refs
                    if ref.startswith(stem) and ref[len(stem):].isdigit()]
@@ -481,14 +486,56 @@ def release(root, tid, force=False):
     return not holder
 
 
+def task_body_sections(text):
+    """The Markdown body after the front matter, as (heading, lines) pairs in order."""
+    lines = text.splitlines()
+    end = lines.index("---", 1) if lines and lines[0] == "---" and "---" in lines[1:] else -1
+    sections, heading, current = [], None, []
+    for line in lines[end + 1:]:
+        if line.startswith("## "):
+            sections.append((heading, current))
+            heading, current = line[3:].strip(), []
+        else:
+            current.append(line)
+    sections.append((heading, current))
+    return sections
+
+
+def add_note(root, tid, text):
+    """Add "- YYYY-MM-DD: text" at the end of the task's Progress section (creating it if needed).
+    This is the one change Workorder makes to a task file after new; every other byte is kept."""
+    record(root, tid)
+    text = " ".join(text.split())
+    if not text:
+        raise Refused("a note needs some text")
+    path = local_path(root, f"tasks/{tid}.md")
+    lines = read_text(root, f"tasks/{tid}.md").split("\n")
+    line = f"- {dt.datetime.now(dt.timezone.utc).date().isoformat()}: {text}"
+    starts = [i for i, value in enumerate(lines) if value.strip() == "## Progress"]
+    if starts:
+        end = next((i for i in range(starts[-1] + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+        while end > starts[-1] + 1 and not lines[end - 1].strip():
+            end -= 1
+        lines[end:end] = [line] if lines[end - 1].strip() and not lines[end - 1].startswith("## ") else ["", line]
+    else:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += ["", "## Progress", "", line]
+    path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8", newline="\n")
+    return line
+
+
 def ledger_path(tid):
     return f".workorder/receipts/{task_id(tid)}.jsonl"
 
 
 def entries(root, tid, staged=False):
     path = ledger_path(tid)
-    available = files(root, ".workorder/receipts", staged)
-    text = read_text(root, path, staged) if path in available else ""
+    if staged:
+        present = git(root, "cat-file", "-e", f":{path}", required=False).returncode == 0
+    else:
+        present = local_path(root, path).is_file()
+    text = read_text(root, path, staged) if present else ""
     # Existing committed receipts are an immutable prefix, including during staging.
     old = git(root, "show", f"HEAD:{path}", required=False)
     if old.returncode == 0 and not text.startswith(old.stdout):

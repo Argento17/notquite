@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "workorder"
 version = "0.3.0"
-description = "A task format for coding agents: define the work, track the evidence, verify DONE."
+description = "The task record for coding agents: every task recorded, a clear history, agents always go back to it."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

@@ -2,98 +2,71 @@
 
 ## 0.3.0
 
-NotQuite is now **Workorder**: a task format for coding agents (define the
-work, track the evidence, verify DONE), with the DONE check as one part. It
-works alongside CI, not instead of it. The check still says NOT QUITE when it
-refuses a claim.
+NotQuite is now **Workorder: the task record for coding agents**. Every task is
+recorded in the repository with a clear history, agents go back to it at the
+start of every session, and DONE is checked against that history. It works
+alongside CI, not instead of it. The check still says NOT QUITE when it refuses
+a claim.
 
+Name and format
 - New name everywhere: PyPI project `workorder`, the `workorder` command and
   package, receipts in `.workorder/`, ids and claims under
-  `refs/tags/workorder/`. A repository with NotQuite receipts carries over with
+  `refs/tags/workorder/`. A NotQuite repository carries over with
   `git mv .notquite .workorder` (see docs/reference.md, Compatibility).
 - `workorder new` writes the extended task by default; `--template simple`
-  writes the 0.1.0 seven-field format. The README leads with the task format.
+  writes the 0.1.0 seven-field format. `ships` defaults to `none`.
+- A task declares its `test` (`new --test ...`); DONE needs it, and only a run
+  of exactly that command counts. `test: any` accepts any command explicitly.
+  Commands split without a shell: backslashes are kept (Windows paths work),
+  shell operators are refused.
+- New status `CANCELLED`. Your own fields start with `x-`. Front matter also
+  reads `#` comments, single-quoted values, left-margin lists, quoted list
+  items and a UTF-8 byte order mark.
 
-Fixes for what five independent reviews found; every finding below is now a
-regression test.
+The record
+- `workorder show` prints the task as a record: state, what is owed, title,
+  mission, next and test, a dated timeline of its receipts, its Progress notes
+  and the next step.
+- `workorder note` adds a dated line under Progress.
+- The agent instructions start every session with `show`, end it with `note`,
+  and cover the task's test, committing, pushing and the merge.
 
-- A task dependency counts as finished only when its own dependencies are
-  finished too. A task waiting on a person no longer lets the tasks that
-  depend on it pass as DONE, and `ready` lists it as blocked.
-- `check --base REF` also refuses a commit since `REF` that newly claimed DONE
-  or CLOSED on code other than the implementation it relied on: the CI form of
-  the pre-commit rule.
-- A merge receipt that counted stays counted when a later one cannot count.
-- `check <id>` shows the command behind the deciding test run.
-- Only `tasks/<id>.md` files are task records; a README or notes in `tasks/`
-  no longer break every check. A broken contract file is named in the error.
+Checking
+- A test run counts when its code matches the implemented code, on any commit:
+  a later failing run revokes DONE, also after the receipts are committed.
+- `check` refuses a DONE or CLOSED claimed, in the working tree or in a commit,
+  on code other than the implementation it relies on, or over uncommitted code.
+- A dependency is finished when it says DONE or CLOSED, its evidence supports
+  that, and its own dependencies are finished; `ready` shows the rest as
+  blocked, and a computed status reads BLOCKED while a dependency is open.
+- The pre-commit hook (`--staged`) and CI (`--base REF`) judge the change: the
+  tasks it touches (task file, receipts, contract or evidence) and the tasks
+  that depend on them. They stay fast as tasks pile up, and an old problem
+  elsewhere does not block anyone. Plain `check` reads every task.
+- `check --base` refuses removed or changed receipts, a stale DONE claimed
+  since the base, and any change to a task's test, contract, evidence or
+  dependencies unless a reviewer passes `--allow ID`. `--run-tests` runs each
+  claimed task's declared test on the code being merged.
+- A task file that cannot be read is a problem of that task only; `show`,
+  `ready` and `check ID` keep working for the others.
 
-From the second, neutral four-reviewer round:
-
-- A task can declare its own `test` command (`workorder new --test ...`). Once
-  set, only a run of exactly that command counts, and `workorder receipt test
-  --task ID` runs it.
-- Plain `workorder check` refuses a DONE or CLOSED claimed, in the working
-  tree or in a commit, on code other than the implementation it relies on.
+Merges, claims and the rest
 - Merges and deployments count when they contain the implemented commit, so a
-  task can reach CLOSED on a busy main with merge commits.
-- After a squash merge, a rebase or an amend, receipts whose commits are gone
-  no longer stop `check` for the whole repository: they stop counting, and the
-  task's evidence is recorded again on the new commit.
-- `ready` lists every task even when one claim is refused; `show` lists open
-  dependencies under "still owes"; a stray tag under `claims/` is ignored;
-  claiming a task this checkout lacks says so.
-- Front matter also reads `#` comment lines, single-quoted values,
-  left-margin `- item` lists and a UTF-8 byte order mark.
-- The README's pre-commit hook says what to do when `workorder` is not on
-  PATH, and the agent instructions cover the task's `test`, committing,
-  pushing and recording the merge.
-
-From the third four-reviewer round:
-
-- `test` commands split without escape characters, so Windows paths work, and
-  shell operators such as `&&` are refused instead of passed as arguments.
-- Plain `check` refuses a new DONE made over uncommitted code changes, and
-  `check <id>` notes uncommitted changes. While a dependency is open, the
-  computed status reads BLOCKED.
-- `check --base` judges the change: problems already on the base branch, on
-  tasks the change does not touch, and changes to a task's `test`, contract
-  or dependencies are printed as notes. The pre-commit hook treats problems
-  already in HEAD the same way, so an old problem no longer blocks unrelated
-  commits.
-- `release --force` frees a claim whose clone or worktree is gone;
-  `new --local` numbers a task without pushing a tag; `ready` works when
-  origin cannot be reached and shows a BLOCKED status as blocked.
-- New status `CANCELLED` for work that will not be done. `ships` now
-  defaults to `none`.
-- Receipt commands for one task are serialised by a lock, so parallel runs
-  keep the chain. Commit fingerprints are cached in `.git` between runs.
-- Stray files in `.workorder/receipts/` are ignored, a missing contract
-  evidence file is unmet evidence rather than an error, quoted list items and
-  person names with spaces are read, and an unknown status shows its value.
-- A problem counts as "already so on base" only when the check refuses that
-  task on the base revision itself (checked in a temporary worktree), so a
-  change to a contract or its evidence can no longer pass as an old problem.
-  An in-place contract edit is noted for review. Commands are shown the way
-  they are read, so Windows paths print without extra quoting.
-
-- A test run counts when its code matches the implemented code, on any commit.
-  Committing the task file and receipts no longer hides later runs: a later
-  failing run revokes DONE again, and a passing run after that commit counts.
-  A DONE that was hiding such a failure becomes IN_PROGRESS.
-- The pre-commit check (`check --staged`) refuses a commit that newly marks a
-  task DONE or CLOSED when the code in that commit differs from the implemented
-  code. `check <id>` notes when the code has changed since the implementation,
-  and its `Next:` line then says to record `implemented` again.
-- `check --base REF` refuses if receipts committed on `REF` were removed or
-  changed, so a `--no-verify` commit cannot drop a failing run past CI. The
-  README's Actions example uses it.
-- A receipt that is recorded but cannot count (a test on changed code, a merge
-  without the tested code, a read-back out of order, delivery receipts a task
-  does not ship) says why and exits 1. Before, most of these exited 0.
+  task reaches CLOSED on a busy main with merge commits; a merge receipt that
+  counted stays counted.
+- After a squash merge, rebase or amend, receipts whose commits are gone count
+  again when a commit in this clone holds exactly their code (the squash
+  commit, if main had not moved); otherwise `workorder renew` records the
+  evidence again on the new commit in one step.
+- A receipt that is recorded but cannot count says why and exits 1.
+- `release --force` frees a claim whose clone or worktree is gone; `new --local`
+  numbers a task without pushing a tag, and `new` suggests it when origin
+  cannot be reached; `ready` works offline; stray claim tags are ignored.
+- Receipt commands for one task are serialised by a lock; commit fingerprints
+  are cached in `.git`; reading one ledger no longer lists the whole folder.
 - New receipts and claims record only Git `user.name`, not the hostname.
-- Documentation states what is not covered yet: squash and rebase merges, and
-  `merged`/`deployed` receipts on a branch where other work has landed.
+- The changes above came from independent blind reviews; each has a
+  regression test that fails without it.
 
 ## 0.2.0 (as NotQuite)
 

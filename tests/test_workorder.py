@@ -39,9 +39,11 @@ def ok(root, *args):
     return result.stdout
 
 
-def task(root, tid="TASK-1", status="IN_PROGRESS", ships="repo", waits=(), contract="none"):
+def task(root, tid="TASK-1", status="IN_PROGRESS", ships="repo", waits=(), contract="none", test="any"):
     fields = dict(id=tid, title="Add a list filter", owner="alex", status=status,
                   ships=ships, waits_on=list(waits), contract=contract)
+    if test is not None:
+        fields["test"] = test
     path = root / "tasks" / f"{tid}.md"
     path.parent.mkdir(exist_ok=True)
     path.write_text("---\n" + "".join(f"{k}: {json.dumps(v)}\n" for k, v in fields.items())
@@ -399,6 +401,7 @@ def test_ready_reports_free_held_blocked_and_delivery(clones):
     ok(one, "release", "--task", "TASK-1")
     implement(one)
     passed(one)
+    task(one, status="DONE")  # TASK-1 says DONE, its evidence supports it; it only waits for delivery
     output = ok(one, "ready")
     assert "TASK-1 waiting for delivery" in output
     assert "TASK-2 blocked: status BLOCKED, person:bo" in output
@@ -428,9 +431,11 @@ def test_committed_receipts_cannot_be_rewritten_or_deleted(clones):
     git(one, "add", path)
     git(one, "commit", "-qm", "Record implementation", "--", path)
     (one / path).write_text("", encoding="utf-8")
-    assert "append-only" in cli(one, "check").stderr
+    found = cli(one, "check")
+    assert "append-only" in found.stdout + found.stderr
     (one / path).unlink()
-    assert "append-only" in cli(one, "check").stderr
+    found = cli(one, "check")
+    assert "append-only" in found.stdout + found.stderr
 
 
 def test_hand_edit_breaks_receipt_chain(clones):
@@ -440,7 +445,8 @@ def test_hand_edit_breaks_receipt_chain(clones):
     value = json.loads(path.read_text())
     value["commit"] = "0" * 40
     path.write_text(json.dumps(value) + "\n", encoding="utf-8")
-    assert "broken receipt chain" in cli(one, "check").stderr
+    found = cli(one, "check")
+    assert "broken receipt chain" in found.stdout + found.stderr
 
 
 def test_staged_check_uses_index_and_hook_refuses_false_done(clones):
@@ -465,7 +471,8 @@ def test_task_ids_cannot_escape_paths(clones, identifier):
 def test_contract_cannot_read_outside_repository(clones):
     one, _ = clones
     task(one, contract="../outside.json")
-    assert "inside this repository" in cli(one, "check").stderr
+    refused = cli(one, "check")
+    assert refused.returncode == 1 and "inside this repository" in refused.stdout + refused.stderr
 
 
 def test_invented_examples_are_readable_and_false_done_is_explicit(clones):
@@ -514,7 +521,8 @@ def test_recomputed_hash_cannot_hide_wrong_code_digest(clones):
     value["code"] = "0" * 64
     value["hash"] = store.digest(store.packed(value).encode())
     path.write_text(store.packed(value) + "\n", encoding="utf-8")
-    assert "code does not match" in cli(one, "check").stderr
+    found = cli(one, "check")
+    assert "code does not match" in found.stdout + found.stderr
 
 
 def test_contract_rejects_failed_test_even_when_receipt_exists(clones):
@@ -781,7 +789,7 @@ def local_repo(tmp_path):
 
 
 def test_without_a_remote_tasks_are_local_and_checks_work(local_repo):
-    opened = ok(local_repo, "new", "--title", "Solo work", "--owner", "solo", "--ships", "none")
+    opened = ok(local_repo, "new", "--title", "Solo work", "--owner", "solo", "--ships", "none", "--test", "any")
     assert "TASK-1 opened" in opened and "local id: no origin remote" in opened
     assert "TASK-2 opened" in ok(local_repo, "new", "--title", "More", "--owner", "solo")
     ok(local_repo, "receipt", "implemented", "--task", "TASK-1")
@@ -907,7 +915,7 @@ def extended(root, tid="TASK-1", status="IN_PROGRESS", ships="repo", body=None, 
     fields = {"id": tid, "title": "Add a list filter", "owner": "alex", "business_owner": "sam",
               "priority": "P1", "created_at": "2026-11-14", "mission": "Make long lists easier to scan",
               "depends_on": [], "blocks": [], "next": "Write the filter", "summary": "A filter button",
-              "status": status, "ships": ships, "waits_on": [], "contract": "none"}
+              "status": status, "ships": ships, "waits_on": [], "test": "any", "contract": "none"}
     fields.update(extra)
     text = ("---\n" + "".join(f"{k}: {json.dumps(v)}\n" for k, v in fields.items()) + f"---\n\n# {tid}\n"
             + (body if body is not None else
@@ -939,6 +947,11 @@ def test_v010_plain_scalar_records_still_read(clones):
         "waits_on: []\ncontract: none\n---\n\n# TASK-1\n", encoding="utf-8")
     implement(one)
     passed(one)
+    # Still read as before; from 0.3.0 a DONE also needs the task's test declared (or test: any).
+    assert "owes: a declared test" in cli(one, "check").stdout
+    path = one / "tasks/TASK-1.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("contract: none", "test: any\ncontract: none"),
+                    encoding="utf-8")
     assert ok(one, "check").strip() == "check: OK"
 
 
@@ -1031,16 +1044,18 @@ def test_unsupported_front_matter_is_refused_with_a_reason(clones, change, messa
     assert change[0] in text
     path.write_text(text.replace(change[0], change[1]), encoding="utf-8")
     result = cli(one, "check")
-    assert result.returncode == 1 and message in result.stderr, result.stderr
+    assert result.returncode == 1 and message in result.stdout + result.stderr, result.stdout
 
 
 def test_waiting_for_and_blocking_the_same_task_is_contradictory(clones):
     one, _ = clones
     task(one, "TASK-2")
     extended(one, depends_on=["TASK-2"], blocks=["TASK-2"])
-    assert "cannot both wait for and block TASK-2" in cli(one, "check").stderr
+    found = cli(one, "check")
+    assert "cannot both wait for and block TASK-2" in found.stdout + found.stderr
     extended(one, waits_on=["task:TASK-2"], blocks=["TASK-2"])
-    assert "cannot both wait for and block TASK-2" in cli(one, "check").stderr
+    found = cli(one, "check")
+    assert "cannot both wait for and block TASK-2" in found.stdout + found.stderr
 
 
 def test_depends_on_and_waits_on_form_one_dependency_list(clones):
@@ -1055,6 +1070,8 @@ def test_depends_on_and_waits_on_form_one_dependency_list(clones):
     assert "finish TASK-1 first, or remove it from depends_on" in refused.stdout
     implement(one)
     passed(one)
+    assert "Missing:  task:TASK-1" in cli(one, "check", "TASK-2").stdout  # evidence alone is not DONE
+    task(one, status="DONE", ships="none")
     assert cli(one, "check", "TASK-2").returncode == 0
     assert ok(one, "check").strip() == "check: OK"
 
@@ -1184,7 +1201,7 @@ def test_switching_a_simple_task_to_yaml_style_extended_keeps_its_receipts(clone
     (one / "tasks/TASK-1.md").write_text(
         "---\nid: TASK-1\ntitle: Add a list filter\nowner: alex\nbusiness_owner: sam\npriority: P1\n"
         "created_at: 2026-11-14\nsummary: >\n  A filter button that hides\n  completed items.\n"
-        "depends_on:\nblocks:\n  - TASK-2\nstatus: DONE\nships: none\nwaits_on: []\ncontract: none\n"
+        "depends_on:\nblocks:\n  - TASK-2\nstatus: DONE\nships: none\nwaits_on: []\ntest: any\ncontract: none\n"
         "---\n\n# TASK-1\n\n## Progress\n\n- 2026-11-14: switched to the extended format.\n", encoding="utf-8")
     task(one, "TASK-2")
     git(one, "add", "tasks")
@@ -1417,7 +1434,7 @@ def test_a_broken_contract_file_is_named(local_repo):
     path.write_text("{not json", encoding="utf-8")
     result = cli(local_repo, "check")
     assert result.returncode == 1
-    assert "TASK-1: contract .workorder/contracts/broken.json is not valid JSON" in result.stderr
+    assert "TASK-1: contract .workorder/contracts/broken.json is not valid JSON" in result.stdout + result.stderr
 
 
 def test_explain_shows_the_command_that_decided_the_test_line(local_repo):
@@ -1492,13 +1509,9 @@ def test_after_a_squash_merge_the_repository_keeps_working_and_evidence_can_be_r
     fresh = tmp_path / "fresh"
     git(tmp_path, "clone", "-q", "--no-local", git(one, "remote", "get-url", "origin"), str(fresh))
     git(fresh, "config", "user.name", "fresh")
-    refused = cli(fresh, "check")
-    assert refused.returncode == 1 and "is not in this clone" in refused.stdout
-    assert "TASK-2" not in refused.stdout  # the other task is unaffected
+    # main had not moved, so the squash commit holds exactly the tested code: the evidence still counts
+    assert ok(fresh, "check").strip() == "check: OK"
     assert "TASK-2 free" in ok(fresh, "ready")
-    ok(fresh, "receipt", "implemented", "--task", "TASK-1")  # renew the evidence on the merged code
-    ok(fresh, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "pass")
-    ok(fresh, "check")
 
 
 def test_plain_check_refuses_a_done_set_on_code_changed_after_testing(local_repo):
@@ -1551,12 +1564,9 @@ def test_a_test_command_keeps_backslashes_and_refuses_shell_operators(local_repo
         r"C:\Tools\python.exe", "-m", "pytest", r"tests\a b.py"]
     refused = cli(local_repo, "new", "--title", "T", "--owner", "o", "--test", "pytest && echo ok")
     assert refused.returncode == 1 and "runs without a shell" in refused.stderr
-    task(local_repo, "TASK-1", ships="none")
-    path = local_repo / "tasks/TASK-1.md"
-    path.write_text(path.read_text(encoding="utf-8").replace('contract: "none"',
-                                                            'test: "pytest | tee log"\ncontract: "none"'),
-                    encoding="utf-8")
-    assert "runs without a shell" in cli(local_repo, "check").stderr
+    task(local_repo, "TASK-1", ships="none", test="pytest | tee log")
+    found = cli(local_repo, "check")
+    assert "runs without a shell" in found.stdout + found.stderr
 
 
 def test_a_done_over_uncommitted_code_changes_is_refused(local_repo):
@@ -1571,7 +1581,7 @@ def test_a_done_over_uncommitted_code_changes_is_refused(local_repo):
     assert "Note:     uncommitted code changes are not covered by any receipt" in explained.stdout
 
 
-def test_check_base_notes_a_changed_test_and_keeps_old_problems_as_notes(local_repo):
+def test_check_base_refuses_a_changed_test_unless_allowed_and_skips_untouched_tasks(local_repo):
     task(local_repo, "TASK-1", ships="none", status="DONE")  # a false claim already on the base
     ok(local_repo, "new", "--title", "Second", "--owner", "solo", "--test", "true")
     git(local_repo, "add", "tasks")
@@ -1581,13 +1591,14 @@ def test_check_base_notes_a_changed_test_and_keeps_old_problems_as_notes(local_r
     path.write_text(path.read_text(encoding="utf-8").replace('test: "true"', 'test: "git --version"'),
                     encoding="utf-8")
     git(local_repo, "commit", "-qam", "Change TASK-2's test")
-    result = cli(local_repo, "check", "--base", base)
-    assert result.returncode == 0, result.stdout
-    assert "check: OK" in result.stdout
-    assert "Note: NOT QUITE  TASK-1 says DONE but owes: implementation" in result.stdout
-    assert "this change does not touch TASK-1" in result.stdout
-    assert f"Note: TASK-2: test changed since {base}: 'true' -> 'git --version'" in result.stdout
-    assert cli(local_repo, "check").returncode == 1  # without a base, the old problem still counts
+    refused = cli(local_repo, "check", "--base", base)
+    assert refused.returncode == 1
+    assert (f"TASK-2: test changed: 'true' -> 'git --version' since {base}; a reviewer accepts it with"
+            " --allow TASK-2") in refused.stdout
+    assert "TASK-1" not in refused.stdout  # the change does not touch TASK-1
+    allowed = ok(local_repo, "check", "--base", base, "--allow", "TASK-2")
+    assert "check: OK" in allowed and "(allowed)" in allowed
+    assert cli(local_repo, "check").returncode == 1  # plain check reads every task, TASK-1 included
 
 
 def test_the_hook_does_not_block_an_unrelated_commit_on_an_old_problem(local_repo):
@@ -1597,7 +1608,7 @@ def test_the_hook_does_not_block_an_unrelated_commit_on_an_old_problem(local_rep
     (local_repo / "docs.md").write_text("notes\n", encoding="utf-8")
     git(local_repo, "add", "docs.md")
     staged = cli(local_repo, "check", "--staged")
-    assert staged.returncode == 0 and "already so on HEAD" in staged.stdout
+    assert staged.returncode == 0 and staged.stdout.strip() == "check: OK"
 
 
 def test_ready_lists_tasks_when_origin_cannot_be_reached(clones):
@@ -1661,7 +1672,8 @@ def test_a_cancelled_task_leaves_ready_and_never_counts_as_finished(local_repo):
     path = local_repo / "tasks/TASK-1.md"
     path.write_text(path.read_text(encoding="utf-8").replace('"CANCELLED"', '"DONE # finished"'),
                     encoding="utf-8")
-    assert "unknown status 'DONE # finished'" in cli(local_repo, "check").stderr
+    found = cli(local_repo, "check")
+    assert "unknown status 'DONE # finished'" in found.stdout + found.stderr
 
 
 # 0.3.0: the adopt-or-pass round, kept as regression tests.
@@ -1692,7 +1704,7 @@ def test_changed_evidence_on_a_valid_base_fails_the_hook_and_the_base_check(loca
     assert refused.returncode == 1 and "already so" not in refused.stdout
 
 
-def test_an_in_place_contract_edit_is_noted_for_review(local_repo):
+def test_an_in_place_contract_edit_needs_a_reviewer_to_allow_it(local_repo):
     contract = local_repo / ".workorder" / "contracts" / "c.json"
     contract.parent.mkdir(parents=True)
     body = {"task": "TASK-1", "criteria": [{"id": "C1", "ask": "Works", "critical": True,
@@ -1705,7 +1717,9 @@ def test_an_in_place_contract_edit_is_noted_for_review(local_repo):
     body["criteria"][0]["critical"] = False
     contract.write_text(json.dumps(body), encoding="utf-8")
     git(local_repo, "commit", "-qam", "Make it optional")
-    assert "contract .workorder/contracts/c.json edited since" in ok(local_repo, "check", "--base", base)
+    refused = cli(local_repo, "check", "--base", base)
+    assert refused.returncode == 1 and "contract .workorder/contracts/c.json edited since" in refused.stdout
+    assert "(allowed)" in ok(local_repo, "check", "--base", base, "--allow", "TASK-1")
 
 
 def test_commands_are_shown_the_way_they_are_read():
@@ -1731,3 +1745,126 @@ def test_an_unrelated_commit_passes_the_real_hook_while_an_old_problem_remains(l
     refused = subprocess.run(["git", "commit", "-qm", "A new false claim"], cwd=local_repo, env=env,
                              capture_output=True, encoding="utf-8")
     assert refused.returncode != 0 and "TASK-2 says DONE" in refused.stdout + refused.stderr
+
+
+# 0.3.0: the adopt-or-pass round's flip conditions and the task record, kept as regression tests.
+
+def test_done_needs_a_declared_test_or_an_explicit_any(local_repo):
+    ok(local_repo, "new", "--title", "Calc", "--owner", "solo")
+    finish_with_evidence(local_repo, "TASK-1")
+    path = local_repo / "tasks/TASK-1.md"
+    path.write_text(path.read_text(encoding="utf-8").replace('status: "IN_PROGRESS"', 'status: "DONE"'),
+                    encoding="utf-8")
+    refused = cli(local_repo, "check", "TASK-1")
+    assert refused.returncode == 1 and "Missing:  a declared test" in refused.stdout
+    assert "or test: any to accept any recorded command" in refused.stdout
+    path.write_text(path.read_text(encoding="utf-8").replace('test: ""', 'test: "any"'), encoding="utf-8")
+    ok(local_repo, "check")
+
+
+def test_a_squash_onto_a_moved_main_is_renewed_in_one_command(clones, tmp_path):
+    one, two = clones
+    git(one, "checkout", "-q", "-b", "feature")
+    (one / "app.py").write_text("items = ['feature']\n", encoding="utf-8")
+    git(one, "commit", "-qam", "Feature")
+    task(one, ships="none", test=f"{PYTHON} -c pass")
+    implement(one)
+    ok(one, "receipt", "test", "--task", "TASK-1")
+    task(one, ships="none", status="DONE", test=f"{PYTHON} -c pass")
+    git(one, "add", "tasks", ".workorder")
+    git(one, "commit", "-qm", "Done")
+    (two / "other.py").write_text("x = 1\n", encoding="utf-8")
+    git(two, "add", "other.py")
+    git(two, "commit", "-qm", "Other work lands first")
+    git(two, "push", "-q", "origin", "HEAD:refs/heads/main")
+    git(one, "checkout", "-q", "main")
+    git(one, "pull", "-q", "--no-rebase", "origin", "main")
+    git(one, "merge", "-q", "--squash", "feature")
+    git(one, "commit", "-qm", "Feature (squashed onto a moved main)")
+    git(one, "branch", "-q", "-D", "feature")
+    git(one, "push", "-q", "origin", "HEAD:refs/heads/main")
+    fresh = tmp_path / "fresh"
+    git(tmp_path, "clone", "-q", "--no-local", git(one, "remote", "get-url", "origin"), str(fresh))
+    git(fresh, "config", "user.name", "fresh")
+    refused = cli(fresh, "check")
+    assert refused.returncode == 1 and "is not in this clone" in refused.stdout
+    renewed = ok(fresh, "renew", "--task", "TASK-1")
+    assert "implemented" in renewed and "test" in renewed and "still owes: nothing" in renewed
+    ok(fresh, "check")
+
+
+def test_check_base_can_run_the_declared_tests_itself(local_repo):
+    git(local_repo, "commit", "-q", "--allow-empty", "-m", "Base")
+    base = store.head(local_repo)
+    probe = f"{PYTHON} -c \"import os, sys; sys.exit(0 if os.environ.get('WO_AGENT_ONLY') else 3)\""
+    task(local_repo, "TASK-1", ships="none", test=probe)
+    ok(local_repo, "receipt", "implemented", "--task", "TASK-1")
+    env = dict(os.environ, PYTHONPATH=str(PACKAGE), WO_AGENT_ONLY="1")
+    recorded = subprocess.run([PYTHON, "-m", "workorder", "receipt", "test", "--task", "TASK-1"],
+                              cwd=local_repo, env=env, capture_output=True, encoding="utf-8")
+    assert recorded.returncode == 0, recorded.stdout + recorded.stderr  # passes on the agent's machine
+    task(local_repo, "TASK-1", ships="none", status="DONE", test=probe)
+    git(local_repo, "add", "tasks", ".workorder")
+    git(local_repo, "commit", "-qm", "Done")
+    assert ok(local_repo, "check", "--base", base).strip() == "check: OK"  # the receipts agree
+    ran = cli(local_repo, "check", "--base", base, "--run-tests")
+    assert ran.returncode == 1 and "its test failed when this check ran it (exit 3)" in ran.stdout
+
+
+def test_custom_x_fields_are_kept_and_other_unknown_fields_explain_them(local_repo):
+    task(local_repo, "TASK-1", ships="none")
+    path = local_repo / "tasks/TASK-1.md"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace('contract: "none"', 'x-issue: "#42"\ncontract: "none"'), encoding="utf-8")
+    assert store.record(local_repo, "TASK-1")["x-issue"] == "#42"
+    path.write_text(text.replace('contract: "none"', 'assignee: "claude"\ncontract: "none"'), encoding="utf-8")
+    found = cli(local_repo, "check")
+    assert "your own fields start with x-" in found.stdout + found.stderr
+
+
+def test_note_and_show_make_the_task_a_record_to_come_back_to(local_repo):
+    ok(local_repo, "new", "--title", "Calc", "--owner", "solo", "--test", f"{PYTHON} -c pass")
+    finish_with_evidence(local_repo, "TASK-1")
+    added = ok(local_repo, "note", "--task", "TASK-1", "implemented and tested; next: docs")
+    assert added.strip().endswith("implemented and tested; next: docs")
+    shown = ok(local_repo, "show", "--task", "TASK-1")
+    assert "title:    Calc" in shown and f"test:     {PYTHON} -c pass" in shown
+    assert "implemented " in shown and "test PASS: " in shown
+    assert "implemented and tested; next: docs" in shown.split("progress:")[1]
+    task(local_repo, "TASK-2", ships="none")  # a simple task with no Progress section yet
+    ok(local_repo, "note", "--task", "TASK-2", "started")
+    assert "## Progress" in (local_repo / "tasks/TASK-2.md").read_text(encoding="utf-8")
+
+
+def test_a_broken_task_file_affects_only_that_task(local_repo):
+    task(local_repo, "TASK-1", ships="none", status="DONE")
+    task(local_repo, "TASK-2", ships="none")
+    git(local_repo, "add", "tasks")
+    git(local_repo, "commit", "-qm", "Tasks")
+    path = local_repo / "tasks/TASK-2.md"
+    path.write_text(path.read_text(encoding="utf-8").replace('status: "IN_PROGRESS"', 'status: "Doing"'),
+                    encoding="utf-8")
+    git(local_repo, "commit", "-qam", "A bad status, committed without the hook")
+    found = cli(local_repo, "check")
+    assert "TASK-2: unknown status 'Doing'" in found.stdout
+    assert "TASK-1 says DONE but owes" in found.stdout  # the other task is still checked
+    (local_repo / "docs.md").write_text("notes\n", encoding="utf-8")
+    git(local_repo, "add", "docs.md")
+    assert ok(local_repo, "check", "--staged").strip() == "check: OK"  # neither task is touched
+    assert "TASK-1" in ok(local_repo, "show", "--task", "TASK-1")
+
+
+def test_the_hook_and_ci_judge_touched_tasks_and_what_depends_on_them(local_repo):
+    task(local_repo, "TASK-1", ships="none")
+    task(local_repo, "TASK-2", ships="none", waits=["task:TASK-1"])
+    finish_with_evidence(local_repo, "TASK-1")
+    finish_with_evidence(local_repo, "TASK-2")
+    task(local_repo, "TASK-1", ships="none", status="DONE")
+    task(local_repo, "TASK-2", ships="none", status="DONE", waits=["task:TASK-1"])
+    git(local_repo, "add", "tasks", ".workorder")
+    git(local_repo, "commit", "-qm", "Both done")
+    base = store.head(local_repo)
+    task(local_repo, "TASK-1", ships="none")  # reopen TASK-1: TASK-2's DONE now rests on unfinished work
+    git(local_repo, "commit", "-qam", "Reopen TASK-1")
+    refused = cli(local_repo, "check", "--base", base)
+    assert refused.returncode == 1 and "TASK-2 says DONE but owes: task:TASK-1" in refused.stdout

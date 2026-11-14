@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 from . import store as s
 
@@ -57,10 +58,14 @@ def contract_debt(root, record, history, implemented, staged=False):
     return debts
 
 
+ANY_TEST = "any"
+
+
 def declared_test(record):
-    """The task's own test command as an argument list, or None when the task declares none."""
-    value = record.get("test", "")
-    return s.split_command(value) if value.strip() else None
+    """The task's own test command as an argument list, or None when any command counts: no test
+    declared (which DONE refuses) or the explicit opt-out test: any."""
+    value = record.get("test", "").strip()
+    return s.split_command(value) if value and value != ANY_TEST else None
 
 
 def counting_runs(record, current, implemented):
@@ -79,13 +84,41 @@ def carries(root, implemented, item):
                  or s.contains(root, implemented["commit"], item["commit"])))
 
 
+def code_seen(root, tid, code, staged=False):
+    """A commit in this clone that holds exactly this code: HEAD, or a commit that touched the task or
+    its receipts (a squash merge does). None when there is none."""
+    candidates = ["HEAD"] + s.git(root, "log", "--format=%H", "-n", "50", "HEAD", "--", f"tasks/{tid}.md",
+                                  s.ledger_path(tid), required=False).stdout.split()
+    for commit in candidates:
+        found = s.git(root, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}", required=False)
+        if found.returncode == 0 and s.code_digest(root, found.stdout.strip()) == code:
+            return found.stdout.strip()
+    return None
+
+
+def recognise_squashed(root, tid, history, staged=False):
+    """Receipts whose commits are gone (squash, rebase, amend) count again when a commit in this clone
+    holds exactly the code they recorded: the evidence is about that code, and the code is here."""
+    implemented = newest_implementation(history)
+    if implemented is None or not implemented["missing"]:
+        return
+    seen = code_seen(root, tid, implemented["code"], staged)
+    if seen:
+        for item in history:
+            if item["missing"] and item["code"] == implemented["code"]:
+                item["missing"], item["seen_on"] = False, seen
+
+
 def verdict(root, record, staged=False):
     tid = record["id"]
     history = s.entries(root, tid, staged)
+    recognise_squashed(root, tid, history, staged)
     index = max((i for i, e in enumerate(history) if e["kind"] == "implemented"), default=-1)
     implemented = history[index] if index >= 0 else None
     current = history[index + 1:] if implemented else []
     done = []
+    if not record.get("test", "").strip():
+        done.append("a declared test")  # the command that proves the task, or test: any
     if not implemented:
         done.append("implementation")
     elif implemented["missing"]:
@@ -121,13 +154,27 @@ def verdict(root, record, staged=False):
     return computed, done, delivery
 
 
-def records(root, staged=False):
-    """Task records: tasks/<ID>.md. Other files there (a README, notes, subfolders) are not tasks."""
-    result = {}
+def task_names(root, staged=False):
+    """Ids of the task files: tasks/<ID>.md. Other files there (a README, notes, subfolders) are not tasks."""
+    names = []
     for path in s.files(root, "tasks", staged):
         name = path.removeprefix("tasks/")
         if name.endswith(".md") and "/" not in name and s.ID.fullmatch(name[:-3]):
-            result[name[:-3]] = s.record(root, name[:-3], staged)
+            names.append(name[:-3])
+    return names
+
+
+def records(root, staged=False, errors=None):
+    """Task records by id. With errors (a dict), a task file that cannot be read is reported there and
+    left out, so one bad file does not stop the others; without it, the first bad file is refused."""
+    result = {}
+    for tid in task_names(root, staged):
+        try:
+            result[tid] = s.record(root, tid, staged)
+        except s.Refused as error:
+            if errors is None:
+                raise
+            errors[tid] = str(error)
     return result
 
 
@@ -144,8 +191,10 @@ def waits(record, all_records, views, seen=frozenset()):
 def finished(tid, all_records, views, seen=frozenset()):
     """A dependency is finished when its evidence computes DONE or CLOSED and its own dependencies are
     finished, all the way down. A cycle never counts as finished."""
+    # Finished means the task says DONE or CLOSED and its evidence supports that: a reopened task
+    # (status set back to IN_PROGRESS) holds back the tasks that depend on it, as does a cancelled one.
     if (tid not in all_records or tid in seen or views[tid][0] not in {"DONE", "CLOSED"}
-            or all_records[tid]["status"] == "CANCELLED"):
+            or all_records[tid]["status"] not in {"DONE", "CLOSED"}):
         return False
     return not waits(all_records[tid], all_records, views, seen | {tid})
 
@@ -166,40 +215,6 @@ def committed_status(root, tid, rev="HEAD"):
     """The status line of tasks/<tid>.md at a revision, or None if it has no readable record there."""
     fields = fields_at(root, tid, rev)
     return fields.get("status") if fields else None
-
-
-def base_notes(root, base):
-    """Changes since base to what a task requires: its test, its contract, its dependencies. These are
-    shown for review; they are not refused, because requirements legitimately change."""
-    notes = []
-    for tid, record in sorted(records(root).items()):
-        before = fields_at(root, tid, base)
-        if before is None:
-            continue
-        if before.get("test", "") != record.get("test", ""):
-            notes.append(f"{tid}: test changed since {base}: {before.get('test', '') or '(none)'!r}"
-                         f" -> {record.get('test', '') or '(none)'!r}")
-        if before.get("contract") != record.get("contract"):
-            notes.append(f"{tid}: contract changed since {base}: {before.get('contract')} -> {record.get('contract')}")
-        elif record.get("contract", "none") != "none":
-            path = record["contract"]
-            old = s.git(root, "show", f"{base}:{path}", required=False)
-            try:
-                now = s.read_text(root, path)
-            except (OSError, s.Refused):
-                now = None
-            if old.returncode == 0 and now is not None and now != old.stdout.replace("\r\n", "\n"):
-                notes.append(f"{tid}: contract {path} edited since {base}")
-        try:
-            dropped = sorted(set(s.dependencies({"waits_on": before.get("waits_on", []),
-                                                 "depends_on": s.task_refs(tid, "depends_on",
-                                                                           before.get("depends_on", []))}))
-                             - set(s.dependencies(record)))
-        except (s.Refused, TypeError):
-            dropped = []
-        if dropped:
-            notes.append(f"{tid}: dependencies removed since {base}: {', '.join(dropped)}")
-    return notes
 
 
 def newest_implementation(history):
@@ -290,63 +305,149 @@ def stale_claim(root, record, staged=False, base=None):
             f" commit {short}. Record workorder receipt implemented --task {tid} on that code and test again.")
 
 
-def unchanged_since(root, base, tid, staged=False):
-    """True when the task file and its receipts are byte-for-byte what they were on base."""
-    for path in (f"tasks/{tid}.md", s.ledger_path(tid)):
-        before = s.git(root, "show", f"{base}:{path}", required=False)
-        folder = path.rsplit("/", 1)[0]
-        now = s.read_text(root, path, staged) if path in s.files(root, folder, staged) else None
-        if before.returncode:
-            if now is not None:
-                return False
-        elif now != before.stdout.replace("\r\n", "\n").removeprefix("\ufeff"):
-            return False
-    return True
+def changed_paths(root, reference, staged=False):
+    """Paths that differ between reference and what is being checked (the index under --staged, the
+    working tree otherwise, which in CI is the commit being checked), untracked task files included."""
+    args = ["diff", "--name-only", "--no-renames"] + (["--cached"] if staged else []) + [reference]
+    paths = set(s.git(root, *args).stdout.splitlines())
+    if not staged:
+        paths |= set(s.git(root, "ls-files", "--others", "--exclude-standard", "--", "tasks",
+                           ".workorder").stdout.splitlines())
+    return paths
 
 
-def failing_at(root, rev):
-    """Task ids whose claim the check refuses at rev, found by checking rev itself in a temporary
-    worktree. Used to tell a problem the change introduced from one it found already there."""
-    import os
-    import tempfile
-    from pathlib import Path
-    # Inside a pre-commit hook Git points these at the commit being made; the worktree needs its own.
-    saved = {key: os.environ.pop(key) for key in ("GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_PREFIX")
-             if key in os.environ}
+def evidence_paths(root, record, staged=False):
+    """The contract file of a task and the REAL evidence files it names."""
+    path = record.get("contract", "none")
+    if path == "none":
+        return set()
+    found = {path}
     try:
-        with tempfile.TemporaryDirectory(prefix="workorder-base-") as folder:
-            tree = Path(folder) / "tree"
-            if s.git(root, "worktree", "add", "--detach", "--quiet", str(tree), rev, required=False).returncode:
-                return set()
-            try:
-                found = check(tree)
-            except (s.Refused, OSError, ValueError):
-                found = []
-            finally:
-                s.git(root, "worktree", "remove", "--force", str(tree), required=False)
-                s.git(root, "worktree", "prune", required=False)
-        return {problem.split()[2] for problem in found if problem.startswith("NOT QUITE  ")}
-    finally:
-        os.environ.update(saved)
+        contract = json.loads(s.read_text(root, path, staged))
+        for item in contract.get("criteria", []) if isinstance(contract, dict) else []:
+            for evidence in item.get("evidence", []) if isinstance(item, dict) else []:
+                if isinstance(evidence, dict) and evidence.get("provenance") == "REAL":
+                    found.add(str(evidence.get("ref", "")))
+    except (OSError, ValueError, s.Refused, AttributeError):
+        pass
+    return found
 
 
-def check(root, staged=False, base=None, notes=None):
-    """Problems that refuse the check. With base, a claim problem on a task whose file and receipts are
-    unchanged since base was already there before this change: it goes to notes, not problems."""
+def scope(root, reference, staged, names, all_records):
+    """The tasks a change touches (task file, receipts, contract or its evidence), and every task that
+    depends on one of them, directly or not."""
+    changed = changed_paths(root, reference, staged)
+    touched = {tid for tid in names if f"tasks/{tid}.md" in changed or s.ledger_path(tid) in changed}
+    touched |= {tid for tid, record in all_records.items() if evidence_paths(root, record, staged) & changed}
+    growing = True
+    while growing:
+        growing = False
+        for tid, record in all_records.items():
+            if tid not in touched and any(w[5:] in touched for w in s.dependencies(record) if w.startswith("task:")):
+                touched.add(tid)
+                growing = True
+    return touched, changed
+
+
+def requirement_changes(root, base, record):
+    """Changes since base to what a task requires: its test, its contract, its dependencies."""
+    tid, found = record["id"], []
+    before = fields_at(root, tid, base)
+    if before is None:
+        return found
+    if before.get("test", "") != record.get("test", ""):
+        found.append(f"test changed: {before.get('test', '') or '(none)'!r} -> {record.get('test', '') or '(none)'!r}")
+    if before.get("contract") != record.get("contract"):
+        found.append(f"contract changed: {before.get('contract')} -> {record.get('contract')}")
+    elif record.get("contract", "none") != "none":
+        old = s.git(root, "show", f"{base}:{record['contract']}", required=False)
+        try:
+            now = s.read_text(root, record["contract"])
+        except (OSError, s.Refused):
+            now = None
+        if old.returncode == 0 and now is not None and now != old.stdout.replace("\r\n", "\n"):
+            found.append(f"contract {record['contract']} edited")
+    try:
+        dropped = sorted(set(s.dependencies({"waits_on": before.get("waits_on", []),
+                                             "depends_on": s.task_refs(tid, "depends_on", before.get("depends_on", []))}))
+                         - set(s.dependencies(record)))
+    except (s.Refused, TypeError):
+        dropped = []
+    if dropped:
+        found.append(f"dependencies removed: {', '.join(dropped)}")
+    return found
+
+
+def run_declared_test(root, record):
+    """Run a task's declared test here (CI), without a shell; return a problem line, or None if it passed."""
+    tid, declared = record["id"], declared_test(record)
+    if declared is None:
+        return f"NOT QUITE  {tid} says {record['status']} but declares no test for this check to run"
+    try:
+        code = subprocess.run(declared, cwd=root).returncode
+    except OSError as error:
+        code = f"not started: {error.strerror}"
+    if code == 0:
+        return None
+    return f"NOT QUITE  {tid} says {record['status']}, but its test failed when this check ran it (exit {code})"
+
+
+class Views(dict):
+    """Verdicts worked out on first use, so a scoped check reads only the tasks it needs."""
+
+    def __init__(self, root, all_records, staged=False):
+        super().__init__()
+        self.root, self.all_records, self.staged = root, all_records, staged
+
+    def __missing__(self, tid):
+        self[tid] = verdict(self.root, self.all_records[tid], self.staged)
+        return self[tid]
+
+
+def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False):
+    """Problems that refuse the check.
+
+    Plain check reads every task. With --staged (the pre-commit hook) or --base REF (CI) it judges the
+    change: the tasks it touches and the tasks that depend on them. A task file that cannot be read is
+    a problem for that task only. With base, a change to what a task requires (its test, contract or
+    dependencies) fails unless the task is in allow; with run_tests, CI runs each claimed task's test.
+    """
     notes = [] if notes is None else notes
-    failing = None  # task ids already refused on the reference revision, worked out only when needed
-    all_records = records(root, staged)
-    views = {tid: verdict(root, record, staged) for tid, record in all_records.items()}
-    problems = base_problems(root, base, staged) if base else []
-    # Also inspect ledgers removed from the current snapshot.
+    errors = {}
+    all_records = records(root, staged, errors)
+    names = task_names(root, staged)
+    reference = base or ("HEAD" if staged else None)
+    if reference and s.git(root, "rev-parse", "--verify", "--quiet", f"{reference}^{{commit}}",
+                           required=False).returncode:
+        if base:
+            raise s.Refused(f"base {base} is not in this clone; fetch it"
+                            " (in GitHub Actions: actions/checkout with fetch-depth: 0)")
+        reference = None  # the first commit: nothing to compare with, check everything
+    if reference:
+        selected, changed = scope(root, reference, staged, names, all_records)
+    else:
+        selected, changed = set(names), None
+    problems = [f"{tid}: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())
+                if tid in selected]
+    if base:
+        problems += [p for p in base_problems(root, base, staged)
+                     if s.ledger_path(p.split(":")[0]) in changed]
+    views = Views(root, all_records, staged)
+    # Receipt ledgers, including ones removed from the current snapshot.
     old = s.git(root, "ls-tree", "-r", "--name-only", "HEAD", "--", ".workorder/receipts", required=False)
-    paths = set(old.stdout.splitlines()) | set(s.files(root, ".workorder/receipts", staged))
-    for path in sorted(paths):
+    for path in sorted(set(old.stdout.splitlines()) | set(s.files(root, ".workorder/receipts", staged))):
         tid = path.rsplit("/", 1)[-1].removesuffix(".jsonl")
         if not path.endswith(".jsonl") or path.count("/") != 2 or not s.ID.fullmatch(tid):
             continue  # a .gitkeep or a note in the folder is not a ledger
-        s.entries(root, tid, staged)
-        if tid not in all_records:
+        if changed is not None and path not in changed and tid not in selected:
+            continue
+        try:
+            s.entries(root, tid, staged)
+        except s.Refused as error:
+            problems.append(f"{tid}: {str(error).removeprefix(tid + ': ')}")
+            errors.setdefault(tid, str(error))
+            continue
+        if tid not in all_records and tid not in errors:
             problems.append(f"{tid}: receipt ledger has no task record")
     visiting, visited = set(), set()
 
@@ -360,32 +461,52 @@ def check(root, staged=False, base=None, notes=None):
             if wait.startswith("task:"):
                 other = wait[5:]
                 if other not in all_records:
-                    problems.append(f"{tid}: missing dependency {other}")
+                    if other not in errors:
+                        problems.append(f"{tid}: missing dependency {other}")
                 else:
                     walk(other)
         visiting.remove(tid)
         visited.add(tid)
 
-    for tid, record in all_records.items():
+    for tid, record in sorted(all_records.items()):
+        if tid not in selected or tid in errors:
+            continue
+        try:
+            views[tid]  # read the task's receipts and contract now, so their errors belong to this task
+        except s.Refused as error:
+            problems.append(f"{tid}: {str(error).removeprefix(tid + ': ')}")
+            continue
         walk(tid)
         # blocks is informational: it is checked for consistency but never enforced.
         for other in record.get("blocks", []):
-            if other not in all_records:
+            if other not in all_records and other not in errors:
                 problems.append(f"{tid}: blocks unknown task {other}")
-            elif tid in all_records[other].get("blocks", []) and tid < other:
+            elif other in all_records and tid in all_records[other].get("blocks", []) and tid < other:
                 problems.append(f"{tid} and {other} each say they block the other")
-        debt = claim_debt(record, all_records, views)
-        found = (f"NOT QUITE  {tid} says {record['status']} but owes: {', '.join(debt)}."
-                 f" Details: workorder check {tid}") if debt else stale_claim(root, record, staged, base)
-        reference = base or ("HEAD" if staged else None)
-        if found and reference and unchanged_since(root, reference, tid, staged):
-            if failing is None:
-                failing = failing_at(root, reference)
-            if tid in failing:
-                notes.append(f"{found} (already so on {reference}; this change does not touch {tid})")
-                continue
+        try:
+            debt = claim_debt(record, all_records, views)
+            found = (f"NOT QUITE  {tid} says {record['status']} but owes: {', '.join(debt)}."
+                     f" Details: workorder check {tid}") if debt else stale_claim(root, record, staged, base)
+        except s.Refused as error:  # a dependency that cannot be read
+            found = f"{tid}: {error}"
         if found:
             problems.append(found)
+        if base:
+            for change in requirement_changes(root, base, record):
+                line = f"{tid}: {change} since {base}"
+                if tid in allow:
+                    notes.append(line + " (allowed)")
+                else:
+                    problems.append(f"{line}; a reviewer accepts it with --allow {tid}")
+        elif staged:
+            for change in requirement_changes(root, "HEAD", record):
+                notes.append(f"{tid}: {change} in this commit")
+        if run_tests and not found and record["status"] in FINISHED:
+            failed = run_declared_test(root, record)
+            if failed:
+                problems.append(failed)
+            else:
+                notes.append(f"{tid}: its test passed when this check ran it")
     return problems
 
 
@@ -403,6 +524,9 @@ def next_step(item, record, code_changed=False):
     command = record.get("test", "").strip() or "<your test command>"
     if item == "implementation":
         return f"commit the code, then: workorder receipt implemented --task {tid}"
+    if item == "a declared test":
+        return (f'add the command that proves it to tasks/{tid}.md, e.g. test: "python -m pytest",'
+                ' or test: any to accept any recorded command')
     if item.startswith("implementation (commit"):
         return ("fetch the full history; after a squash or rebase merge, record it again on the merged"
                 f" code: workorder receipt implemented --task {tid}")
@@ -520,12 +644,73 @@ def uncounted(root, record, history):
     return None
 
 
-def explain(root, tid):
-    """Lines describing one task's claim and evidence, and whether the claim stands."""
-    all_records = records(root)
+def timeline(root, record, history):
+    """One line per receipt, oldest first: when, what, by whom."""
+    lines = []
+    for item in history:
+        when = item["at"][:16].replace("T", " ")
+        commit = item["commit"][:7]
+        kind = item["kind"]
+        if kind == "implemented":
+            what = f"implemented {commit}"
+        elif kind == "test":
+            result = ("PASS" if item["exit_code"] == 0 and item["valid"]
+                      else f"FAIL (exit {item['exit_code']})" if item["exit_code"] != 0 else "not counted")
+            what = f"test {result}: {s.join_command(item['command'])} on {commit}"
+        elif kind == "merged":
+            what = f"merged: {item.get('ref', '')} at {commit}"
+        else:
+            what = f"{kind} read-back {item.get('target', '')}: {'ok' if item['valid'] else 'not valid'} ({commit})"
+        if item["missing"]:
+            what += " (commit not in this clone)"
+        lines.append(f"  {when}  {what}  ({item['who']})")
+    return lines
+
+
+def record_lines(root, tid):
+    """The task as a record to come back to: what it is, where it stands, what happened, what is next."""
+    errors = {}
+    all_records = records(root, errors=errors)
+    if tid in errors:
+        raise s.Refused(errors[tid])
     if tid not in all_records:
         raise s.Refused(f"no task record tasks/{tid}.md")
-    views = {key: verdict(root, record) for key, record in all_records.items()}
+    record = all_records[tid]
+    views = Views(root, all_records)
+    computed, done, delivery = views[tid]
+    open_waits = waits(record, all_records, views)
+    if computed in FINISHED and open_waits:
+        computed = "BLOCKED"
+    history = s.entries(root, tid)
+    recognise_squashed(root, tid, history)
+    lines = [f"{tid} recorded {record['status']}; computed {computed}",
+             "still owes: " + (", ".join(done + delivery + open_waits) or "nothing")]
+    if s.dependencies(record):
+        lines.append("waits_on: " + ", ".join(s.dependencies(record)))
+    lines += ["", f"title:    {record['title']}", f"owner:    {record['owner']}"]
+    for key in ("mission", "summary", "next"):
+        if record.get(key, "").strip():
+            lines.append(f"{key + ':':<9} {' '.join(record[key].split())}")
+    lines.append(f"test:     {record.get('test', '').strip() or '(none declared)'}")
+    lines += ["", "history:"] + (timeline(root, record, history) or ["  (no receipts yet)"])
+    progress = [line.strip() for heading, body in s.task_body_sections(s.read_text(root, f"tasks/{tid}.md"))
+                if heading == "Progress" for line in body if line.strip() and not line.strip().startswith("<!--")]
+    lines += ["", "progress:"] + ([f"  {line}" for line in progress] or ["  (no notes yet)"])
+    owed = done + delivery + open_waits
+    if owed:
+        lines += ["", f"next step: {next_step(owed[0], record)}"]
+    return lines
+
+
+def explain(root, tid):
+    """Lines describing one task's claim and evidence, and whether the claim stands."""
+    errors = {}
+    all_records = records(root, errors=errors)
+    if tid in errors:
+        raise s.Refused(errors[tid])
+    if tid not in all_records:
+        raise s.Refused(f"no task record tasks/{tid}.md")
+    views = Views(root, all_records)
     record = all_records[tid]
     computed, done, delivery = views[tid]
     debt = claim_debt(record, all_records, views)
@@ -577,9 +762,10 @@ def ready(root):
     structural = [issue for issue in issues if not issue.startswith("NOT QUITE  ")]
     if structural:
         raise s.Refused("; ".join(structural))
-    all_records = records(root)
-    views = {tid: verdict(root, record) for tid, record in all_records.items()}
-    lines = []
+    errors = {}
+    all_records = records(root, errors=errors)
+    views = Views(root, all_records)
+    lines = [f"{tid} cannot be read: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())]
     try:
         claims = s.active_claims(root) if s.has_origin(root) else {}
     except s.Refused:

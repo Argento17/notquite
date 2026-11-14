@@ -13,10 +13,12 @@ code in `workorder/`; if the two disagree, the code wins and this file has a bug
 | `workorder receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to (needs `origin`) |
 | `workorder receipt deployed --task ID --target NAME -- CMD...` | Runs a read-back command; valid only if it exits 0 and its output contains the full commit ID |
 | `workorder receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
-| `workorder check [ID or tasks/ID.md]` | No argument: one line per refused claim in the repository, or `check: OK`; use this in hooks and CI. With a task: an explanation of that task alone |
-| `workorder check --staged` | Checks the staged versions of task files and receipts (for pre-commit); also refuses a commit that newly claims DONE or CLOSED on code other than the implemented code |
-| `workorder check --base REF` | Also refuses if receipts committed on `REF` were removed or changed, or if a commit since `REF` newly claimed DONE or CLOSED on code other than the implementation it relied on (for CI: the pull request's base branch). Problems already on `REF`, on tasks the change does not touch, and changes to a task's `test`, contract or dependencies are printed as notes |
-| `workorder show --task ID` | Recorded status, computed status, what is still owed |
+| `workorder check [ID or tasks/ID.md]` | No argument: reads every task; one line per problem, or `check: OK`. With a task: an explanation of that task alone |
+| `workorder check --staged` | For the pre-commit hook: checks the staged versions of the tasks this commit touches (task file, receipts, contract or its evidence) and the tasks that depend on them; refuses a commit that newly claims DONE or CLOSED on code other than the implemented code; notes changes to a task's requirements |
+| `workorder check --base REF [--allow IDS] [--run-tests]` | For CI, against the pull request's base branch: checks the tasks changed since `REF` and their dependents; refuses receipts removed or changed since `REF`, a DONE or CLOSED claimed since `REF` on code other than the implementation it relied on, and any change to a task's `test`, contract, evidence or dependencies unless the task is in `--allow`. `--run-tests` runs the declared test of each task the change claims DONE or CLOSED |
+| `workorder show --task ID` | The task as a record: recorded and computed status, what is still owed, title, mission, next and test, a dated timeline of its receipts, its Progress notes and the next step |
+| `workorder note --task ID TEXT` | Adds `- YYYY-MM-DD: TEXT` at the end of the task's Progress section (creating it if needed) |
+| `workorder renew --task ID [-- CMD...]` | Records `implemented` and the task's test again on the current commit, and `merged` if the task ships and there is an `origin`: one step after a squash merge or rebase |
 | `workorder claim --task ID` / `release --task ID [--force]` | Takes or gives up a task with a pushed tag; `--force` releases a claim whose clone or worktree is gone, and records that it was forced |
 | `workorder claims` | Active claims |
 | `workorder ready` | Open tasks: free, held, blocked, or waiting for delivery |
@@ -34,8 +36,11 @@ matter between two `---` lines, one
 `title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
 
 A value is plain single-line text, a JSON string, or a list. Workorder never
-rewrites a task file after `new`, so whatever formatting you use is left alone,
-byte for byte.
+rewrites a task file after `new`, except that `note` appends one line under
+Progress, so whatever formatting you use is left alone, byte for byte. A task
+file that cannot be read is reported as a problem of that task; the other tasks
+are still checked. Fields starting with `x-` (such as `x-issue`) are your own:
+they are kept and never checked.
 
 ### What YAML is read
 
@@ -93,17 +98,18 @@ in this order: `id`, `title`, `owner`, `business_owner`, `priority`, `created_at
 `mission`, `depends_on`, `blocks`, `next`, `summary`, `status`, `ships`,
 `waits_on`, `test`, `contract`. The body gets `## Context`, `## Scope`, `## Lanes`,
 `## Acceptance` and `## Progress` sections. Any subset of the optional fields
-may be used; any other field is refused, so typos are caught.
+may be used; any other field (except `x-` fields) is refused, so typos are caught.
 
 - `business_owner`, `priority`, `mission`, `next`, `summary`: text, may be
   empty. Not used by any check.
 - `created_at`: empty or an ISO date or time (`2026-11-14`,
   `2026-11-14T09:30:00Z`). `new` fills in today's UTC date.
 - `depends_on`: task ids (`TASK-2` or `task:TASK-2`). Not the task itself.
-- `test`: empty, or the task's test command as one line, split like a shell
-  would split it (no shell runs it). Once set, only a `test` receipt whose
-  command is exactly this counts, and `receipt test --task ID` with nothing
-  after it runs this command. `new --test COMMAND` fills it in. Words split on
+- `test`: the task's test command as one line, or `any`. A DONE or CLOSED
+  claim needs it set (an empty or missing `test` is owed as "a declared test").
+  A command means only a `test` receipt whose command is exactly this counts,
+  and `receipt test --task ID` with nothing after it runs it; `any` accepts any
+  recorded command. `new --test COMMAND` fills it in. Words split on
   spaces, quotes group words, backslashes are kept as written, and shell
   operators (`&&`, `|`, `;`, `>`) are refused: put compound steps in a script.
 - `blocks`: task ids. Informational: `check` reports a `blocks` entry that
@@ -116,8 +122,9 @@ may be used; any other field is refused, so typos are caught.
 `task:<id>` for each `depends_on` id, without repeats. Listing a task in both
 is allowed. A DONE or CLOSED claim is refused until every task dependency
 is finished and no `person:` wait remains. A task dependency is finished when
-its evidence computes DONE or CLOSED and its own dependencies are finished,
-all the way down; `ready` lists such open dependencies as blocked. A task may not both
+it says DONE or CLOSED, its evidence computes DONE or CLOSED, and its own
+dependencies are finished, all the way down; a reopened or cancelled task is
+not finished. `ready` lists open dependencies as blocked. A task may not both
 wait for and block the same task. Missing task dependencies and dependency
 cycles, across both fields, make `check` fail.
 
@@ -127,7 +134,8 @@ extended fields affect a verdict, and both can only add requirements:
 
 ## How the status is computed
 
-- **IN_PROGRESS** until there is an `implemented` receipt, the latest `test`
+- **IN_PROGRESS** until the task declares a `test` (or `any`), there is an
+  `implemented` receipt, the latest `test`
   receipt on the same code after it is passing and valid, and every critical
   contract criterion is met. A later failing or invalid run on that code
   revokes an earlier pass; a later passing run restores it. Runs on different
@@ -174,9 +182,10 @@ does not reopen it.
 
 Receipts name commits. A receipt whose commit is not in this clone (after a
 squash merge, a rebase or an amend once the originals are gone, or in a
-shallow clone) is kept but never counts; it does not stop `check` for other
-tasks. Record `implemented` and the test again on the new commit, or fetch the
-full history.
+shallow clone) is kept. It counts again when a commit in this clone holds
+exactly the code it recorded: HEAD, or a commit that touched the task or its
+receipts, such as the squash commit. Otherwise it does not count, and
+`renew --task ID` records the evidence again on the new commit.
 
 ## Receipts
 
@@ -262,6 +271,9 @@ protect `workorder/*` tags if it matters.
 - Receipts are unchanged. Task files are left out of the code fingerprint, so
   switching a task from the simple to the extended format, in either YAML or
   JSON style, keeps its receipts valid.
+- 0.3.0 requires a declared `test` for DONE and CLOSED. Tasks from earlier
+  versions keep their receipts; add `test: "<command>"`, or `test: any` to keep
+  the old behaviour, before claiming DONE.
 - 0.3.0 reads the same receipts with three differences. A test run counts when
   its code matches the implemented code, on any commit, so a DONE that was
   hiding a later failing run on the same code becomes IN_PROGRESS. A receipt

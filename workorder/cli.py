@@ -13,7 +13,7 @@ from . import store as s
 
 def parser():
     result = argparse.ArgumentParser(
-        prog="workorder", description="A task format for coding agents: define the work, track the evidence, verify DONE.",
+        prog="workorder", description="The task record for coding agents: every task recorded, a clear history, agents always go back to it.",
         epilog="Pass a test or read-back command after --, for example: "
                "workorder receipt test --task TASK-1 -- python -m pytest")
     result.add_argument("--version", action="version", version=f"workorder {__version__}")
@@ -47,12 +47,23 @@ def parser():
             sub.add_argument("--force", action="store_true",
                              help="release a claim whose clone or worktree is gone")
     commands.add_parser("claims", help="list active claims")
+    renew = commands.add_parser("renew", help="record implemented and the task's test again on the current"
+                                " commit (after a squash merge or rebase), and the merge if the task ships")
+    renew.add_argument("--task", required=True)
+    note = commands.add_parser("note", help="add a dated line under the task's Progress section")
+    note.add_argument("--task", required=True)
+    note.add_argument("text", help="what was done, or what is next")
     commands.add_parser("ready", help="list open work: free, held, blocked or awaiting delivery")
     check = commands.add_parser(
         "check", help="refuse DONE/CLOSED claims the evidence does not support")
     check.add_argument("task", nargs="?",
                        help="explain one task, by id (TASK-1) or path (tasks/TASK-1.md)")
     check.add_argument("--staged", action="store_true", help="check the staged files (pre-commit)")
+    check.add_argument("--allow", metavar="TASKS", default="",
+                       help="with --base: accept changes to these tasks' test, contract or dependencies"
+                            " (comma-separated ids, for a reviewer to pass)")
+    check.add_argument("--run-tests", action="store_true",
+                       help="with --base: run the declared test of every task this change claims DONE or CLOSED")
     check.add_argument("--base", metavar="REF",
                        help="also refuse if receipts committed on REF were removed or changed"
                             " (in CI: the pull request's base branch)")
@@ -89,7 +100,8 @@ def main(argv=None):
     root = Path.cwd()
     try:
         s.repository(root)
-        if command and (options.action != "receipt" or options.kind not in {"test", "deployed", "live"}):
+        if command and options.action != "renew" and (options.action != "receipt"
+                                                      or options.kind not in {"test", "deployed", "live"}):
             raise s.Refused("this command does not accept a command after --")
         if options.action == "new":
             shared = s.has_origin(root) and not options.local
@@ -116,18 +128,29 @@ def main(argv=None):
             failed = item.get("exit_code", 0) != 0 or not item.get("valid", True)
             return 1 if failed or reason else 0
         elif options.action == "show":
+            print("\n".join(gate.record_lines(root, s.task_id(options.task))))
+        elif options.action == "note":
+            print(f"{options.task}: {s.add_note(root, options.task, options.text)}")
+        elif options.action == "renew":
             record = s.record(root, options.task)
-            all_records = gate.records(root)
-            views = {tid: gate.verdict(root, item) for tid, item in all_records.items()}
-            computed, done, delivery = views.get(options.task) or gate.verdict(root, record)
-            open_waits = gate.waits(record, all_records, views)
-            if computed in gate.FINISHED and open_waits:
-                computed = "BLOCKED"
-            print(f"{options.task} recorded {record['status']}; computed {computed}")
-            print("still owes: " + (", ".join(done + delivery + open_waits) or "nothing"))
-            needs = s.dependencies(record)
-            if needs:
-                print("waits_on: " + ", ".join(needs))
+            command = command or gate.declared_test(record)
+            if not command:
+                raise s.Refused(f"{options.task} declares no test; add test: to tasks/{options.task}.md,"
+                                " or put the test command after --")
+            failed = False
+            kinds = ["implemented", "test"] + (["merged"] if record["ships"] != "none" and s.has_origin(root) else [])
+            for kind in kinds:
+                item = s.receipt(root, options.task, kind, command if kind == "test" else ())
+                detail = f" exit {item['exit_code']}" if "exit_code" in item else ""
+                print(f"{options.task} {kind} {item['commit'][:7]}{detail} - recorded")
+                reason = gate.uncounted(root, s.record(root, options.task), s.entries(root, options.task))
+                if item.get("exit_code", 0) != 0 or not item.get("valid", True) or reason:
+                    print("recorded, but does not count: " + (reason or "the test did not pass"))
+                    failed = True
+                    break
+            _, done, delivery = gate.verdict(root, s.record(root, options.task))
+            print(f"{options.task} still owes: {', '.join(done + delivery) or 'nothing'}")
+            return int(failed)
         elif options.action == "claim":
             held = s.claim(root, options.task)
             print(f"{options.task} claimed by this clone: held by {held['who']} since {held['at']}")
@@ -148,10 +171,12 @@ def main(argv=None):
             print("\n".join(lines))
             return int(refused)
         else:
+            if (options.allow or options.run_tests) and not options.base:
+                raise s.Refused("--allow and --run-tests go with --base")
             notes = []
-            problems = gate.check(root, options.staged, options.base, notes)
+            allow = {item.strip() for item in options.allow.split(",") if item.strip()}
+            problems = gate.check(root, options.staged, options.base, notes, allow, options.run_tests)
             print("\n".join(problems) if problems else "check: OK")
-            notes += gate.base_notes(root, options.base) if options.base else []
             if notes:
                 print("\n".join(f"Note: {note}" for note in notes))
             return int(bool(problems))
