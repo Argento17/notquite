@@ -387,6 +387,15 @@ def implementation_at(root, rev, tid):
 FINISHED = {"DONE", "CLOSED"}
 ACCEPTANCE_NOTE = ("the evidence covers the task's test only, not its Acceptance list;"
                    " finish every Acceptance item before claiming DONE")
+UNCLAIMED_OWES = "its Acceptance items, then status DONE (the evidence for its test is in place)"
+
+
+def owes(record, owed, delivery=()):
+    """What a task still owes. A task nobody has claimed finished is never 'owing nothing'."""
+    items = list(owed)
+    if not items and record["status"] not in FINISHED | {"CANCELLED"}:
+        items.append(UNCLAIMED_OWES)
+    return ", ".join(items + list(delivery)) or "nothing"
 
 
 def stale_claim(root, record, staged=False, base=None):
@@ -846,7 +855,7 @@ def record_lines(root, tid):
     if stale and computed in FINISHED:
         computed = "IN_PROGRESS"
     lines = [f"{tid} recorded {record['status']}; computed {computed}",
-             "still owes: " + (", ".join(stale + done + delivery + open_waits) or "nothing")]
+             "still owes: " + owes(record, stale + done + open_waits, delivery)]
     if record["status"] not in FINISHED and computed in FINISHED:
         # Found in the handoff trial: "computed CLOSED, owes nothing" on a half-done task misleads.
         lines.append("note:     " + ACCEPTANCE_NOTE)
@@ -963,7 +972,8 @@ def ready(root):
         blocked = waits(record, all_records, views)
         if record["status"] == "BLOCKED":
             blocked = ["status BLOCKED"] + blocked
-        if views[tid][0] == "CLOSED" and not blocked and tid not in refused:
+        claimed = record["status"] in FINISHED
+        if claimed and views[tid][0] == "CLOSED" and not blocked and tid not in refused:
             continue
         held = claims.get(tid)
         if tid in refused:
@@ -972,7 +982,7 @@ def ready(root):
             state = "blocked: " + ", ".join(blocked)
         elif held and not held["released"]:
             state = f"held by {held['who']} since {held['at']}"
-        elif views[tid][0] == "DONE":
+        elif claimed and views[tid][0] == "DONE":
             state = "waiting for delivery: " + ", ".join(views[tid][2])
         else:
             state = "free"

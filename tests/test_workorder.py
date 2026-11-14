@@ -130,7 +130,7 @@ def test_new_refuses_an_unreachable_remote(clones):
 
 def test_second_claim_refused_and_only_holder_releases(clones):
     one, two = clones
-    assert "held by one since" in ok(one, "claim", "--task", "TASK-1")
+    assert "you hold it now, as one" in ok(one, "claim", "--task", "TASK-1")
     denied = cli(two, "claim", "--task", "TASK-1")
     assert denied.returncode == 1 and "held by one since" in denied.stderr
     assert cli(two, "release", "--task", "TASK-1").returncode == 1
@@ -415,6 +415,30 @@ def test_ready_reports_free_held_blocked_and_delivery(clones):
     assert "TASK-1 waiting for delivery" in output
     assert "TASK-2 blocked: status BLOCKED, person:bo" in output
     assert "TASK-3 free" in output
+
+
+@pytest.mark.parametrize("ships", ["none", "repo"])
+def test_ready_keeps_work_nobody_has_claimed_finished(clones, ships):
+    # Found in a blind review: a task still IN_PROGRESS whose test already passes vanished from ready
+    # ("no open work") or showed as waiting for delivery, though its Acceptance items were unmet.
+    one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")
+    task(one, ships=ships)
+    implement(one)
+    received = passed(one)
+    assert "still owes: its Acceptance items, then status DONE" in received
+    assert "still owes: nothing" not in received
+    listed = ok(one, "ready")
+    assert "TASK-1 free" in listed and "waiting for delivery" not in listed
+    shown = ok(one, "show", "--task", "TASK-1")
+    assert "still owes: its Acceptance items, then status DONE" in shown
+    task(one, status="DONE", ships=ships)  # claimed: now the evidence decides
+    listed = ok(one, "ready")
+    if ships == "none":
+        assert "TASK-1" not in listed
+    else:
+        assert "TASK-1 waiting for delivery" in listed
+    assert "still owes: nothing" in ok(one, "show", "--task", "TASK-1") or ships == "repo"
 
 
 def test_dependency_cycle_and_missing_task_are_refused(clones):
@@ -1563,7 +1587,7 @@ def test_a_stray_tag_under_claims_does_not_break_claiming(clones):
     one, two = clones
     git(two, "tag", "workorder/claims/not-a-claim")
     git(two, "push", "-q", "origin", "refs/tags/workorder/claims/not-a-claim")
-    assert "held by one since" in ok(one, "claim", "--task", "TASK-1")
+    assert "you hold it now, as one" in ok(one, "claim", "--task", "TASK-1")
     assert "TASK-1 held by one since" in ok(two, "claims")
 
 
@@ -1641,7 +1665,7 @@ def test_a_claim_whose_clone_is_gone_can_be_released_with_force(clones):
     denied = cli(two, "release", "--task", "TASK-1")
     assert denied.returncode == 1 and "--force" in denied.stderr
     assert "released (forced" in ok(two, "release", "--task", "TASK-1", "--force")
-    assert "claimed by this clone: held by two" in ok(two, "claim", "--task", "TASK-1")
+    assert "claimed: you hold it now, as two" in ok(two, "claim", "--task", "TASK-1")
 
 
 def test_new_local_pushes_no_tag(clones):

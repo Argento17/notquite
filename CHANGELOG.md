@@ -15,6 +15,12 @@
 - Bound and cache merge searches. Show the match in `show` and `check`, and
   explain how to renew evidence when the merged code differs.
 - Count deployment and live read-backs after a computed merge.
+- `ready` lists every task not yet claimed DONE or CLOSED as open work, even
+  when its test evidence is already complete; only a claimed task can wait for
+  delivery or drop off the list.
+- `show` and the receipt commands no longer say a task "still owes nothing"
+  before it is claimed: they name its Acceptance items and the DONE claim.
+- `claim` says plainly that you now hold the task.
 
 ## 0.3.0
 

@@ -127,7 +127,7 @@ def main(argv=None):
             if reason:
                 print("recorded, but does not count: " + reason)
             _, done, delivery = gate.verdict(root, record)
-            print(f"{options.task} still owes: {', '.join(done + delivery) or 'nothing'}")
+            print(f"{options.task} still owes: {gate.owes(record, done, delivery)}")
             failed = item.get("exit_code", 0) != 0 or not item.get("valid", True)
             return 1 if failed or reason else 0
         elif options.action == "show":
@@ -153,12 +153,13 @@ def main(argv=None):
                     print("recorded, but does not count: " + (reason or "the test did not pass"))
                     failed = True
                     break
-            _, done, delivery = gate.verdict(root, s.record(root, options.task))
-            print(f"{options.task} still owes: {', '.join(done + delivery) or 'nothing'}")
+            record = s.record(root, options.task)
+            _, done, delivery = gate.verdict(root, record)
+            print(f"{options.task} still owes: {gate.owes(record, done, delivery)}")
             return int(failed)
         elif options.action == "claim":
             held = s.claim(root, options.task)
-            print(f"{options.task} claimed by this clone: held by {held['who']} since {held['at']}")
+            print(f"{options.task} claimed: you hold it now, as {held['who']} (since {held['at']})")
         elif options.action == "release":
             forced = s.release(root, options.task, options.force)
             print(f"{options.task} released" + (" (forced: its holder's clone did not release it)" if forced else ""))
