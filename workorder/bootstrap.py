@@ -1,6 +1,7 @@
 """Repository setup text, also shown verbatim in the README."""
 
 from importlib import metadata
+import difflib
 import json
 import os
 import re
@@ -14,7 +15,7 @@ AGENT_BLOCK = r"""## Tasks
 - Start every session from the task: if the repository has an origin remote, update first: `git pull --rebase origin main` (or your branch's upstream). Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - Work on a branch and open a pull request for review.
-- After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If it refuses, report its Missing lines instead of saying the task is done. Acceptance lists are not checked by Workorder.
+- After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
 - Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 """
@@ -136,8 +137,8 @@ def claude_settings(root):
     return path, updated, changed
 
 
-def initialize(root, check=False, force=False, claude=False):
-    """Report or install the agent instructions, hook and workflow; never replace a workflow."""
+def initialize(root, check=False, force=False, claude=False, update_workflow=False):
+    """Report or install setup; rewrite an existing workflow only when explicitly requested."""
     settings = claude_settings(root) if claude else None
     hook = root / s.git(root, 'rev-parse', '--git-path', 'hooks/pre-commit').stdout.strip()
     hook_name = '.git/hooks/pre-commit'
@@ -176,20 +177,35 @@ def initialize(root, check=False, force=False, claude=False):
         hook.chmod(hook.stat().st_mode | 0o111)
         print(f'{hook_name}: installed' + (' (replaced with --force)' if different else ''))
     path = s.local_path(root, '.github/workflows/workorder.yml')
-    if path.exists():
+    if path.exists() and not update_workflow:
         print('.github/workflows/workorder.yml: already present; skipped')
-    elif check:
+    elif check and not update_workflow:
         missing = True
         print('.github/workflows/workorder.yml: missing')
     else:
         dependencies = project_install(root)
         dependency_step = ('      - name: Install project test dependencies\n'
-                           f'        run: {dependencies}\n') if dependencies else ''
+                           f'        run: {dependencies}\n') if dependencies else (
+                               '      # Replace this step with your test dependency installation.\n'
+                               '      - name: Add your test dependencies here\n'
+                               '        run: |\n'
+                               '          echo "add your test dependencies here" >&2\n'
+                               '          exit 1\n')
         workflow = WORKFLOW.replace('@DEPENDENCIES@', dependency_step).replace(
             '@WORKORDER@', shlex.quote(workorder_install()))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(workflow, encoding='utf-8', newline='\n')
-        print('.github/workflows/workorder.yml: written')
+        original = path.read_text(encoding='utf-8') if path.exists() else ''
+        if update_workflow:
+            print(''.join(difflib.unified_diff(original.splitlines(keepends=True),
+                                              workflow.splitlines(keepends=True),
+                                              fromfile=str(path.relative_to(root)),
+                                              tofile=str(path.relative_to(root)))), end='')
+        if check:
+            missing |= original != workflow
+            print('.github/workflows/workorder.yml: ' + ('needs update' if original != workflow else 'up to date'))
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(workflow, encoding='utf-8', newline='\n')
+            print('.github/workflows/workorder.yml: written')
         print('CI dependencies: ' + (dependencies or 'no project test dependencies detected'))
     if settings:
         path, updated, changed = settings

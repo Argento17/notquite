@@ -57,7 +57,12 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
     # The README example has a test extra; this fixture has no test dependencies.
     example_dependencies = ("      - name: Install project test dependencies\n"
                             "        run: python -m pip install -e '.[test]'\n")
-    assert snapshot[3].decode().strip() in readme.replace(example_dependencies, '')
+    placeholder = ("      # Replace this step with your test dependency installation.\n"
+                   "      - name: Add your test dependencies here\n"
+                   "        run: |\n"
+                   '          echo "add your test dependencies here" >&2\n'
+                   "          exit 1\n")
+    assert snapshot[3].decode().strip() in readme.replace(example_dependencies, placeholder)
 
 
 def test_init_preserves_existing_hook_and_workflow(local_repo):

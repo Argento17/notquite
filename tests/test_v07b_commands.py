@@ -61,7 +61,7 @@ def test_done_reports_merge_debt_and_missing_clone_hook(local_repo):
     assert 'Warning: pre-commit hook is missing in this clone; run workorder init' in output
 
 
-def test_done_warns_about_ref_tests_before_writing_done(local_repo):
+def test_done_refuses_ref_test_failure_before_writing_done(local_repo):
     root = local_repo
     path = filled_task(root)
     probe = root / 'probe.py'
@@ -73,12 +73,13 @@ def test_done_warns_about_ref_tests_before_writing_done(local_repo):
     (root / 'app.py').write_text('items = ["broken"]\n')
     probe.write_text('assert True\n')
     commit_all(root)
-    output = ok(root, 'done', '--task', 'TASK-1')
-    warning = 'Warning: TASK-1: its tests from origin/main fail on this code;'
-    assert '--allow TASK-1' in output
-    assert warning in output
-    assert output.index(warning) < output.index('TASK-1 DONE:')
-    assert store.record(root, 'TASK-1')['status'] == 'DONE'
+    result = cli(root, 'done', '--task', 'TASK-1')
+    output = result.stdout
+    assert result.returncode == 1
+    assert 'TASK-1: its tests from origin/main fail on this code;' in output
+    assert 'workorder-allow:TASK-1 label' in output
+    assert 'TASK-1 DONE:' not in output
+    assert store.record(root, 'TASK-1')['status'] == 'IN_PROGRESS'
 
 
 def test_check_and_show_use_claimed_and_evidence(local_repo):

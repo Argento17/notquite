@@ -1293,6 +1293,22 @@ def run_test(command, root, timeout=None, capture_output=True):
             return subprocess.CompletedProcess(command, 124, output, errors)
 
 
+def missing_test_dependency(command, code, output):
+    """Name a missing executable or Python module without attributing it to the code."""
+    if code == 0:
+        return None
+    module = re.search(r"No module named\s+['\"]?([\w.]+)", output)
+    if module:
+        return f"{module[1]} is not installed in this environment"
+    if code == 127 or (isinstance(code, str) and 'No such file or directory' in code):
+        name = Path(command[0]).name
+        missing = re.search(r'(?:^|\n).*?:\s*(?:\d+:\s*)?([\w./-]+): (?:command )?not found', output)
+        if missing:
+            name = missing[1]
+        return f"{name} is not installed in this environment"
+    return None
+
+
 def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None):
     repository(root)
     definition = record(root, tid)
@@ -1318,7 +1334,9 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
             raise Refused("read-backs need --target")
         try:
             if kind == "test":
-                run = run_test(command, root, test_timeout(definition, timeout), capture_output=False)
+                run = run_test(command, root, test_timeout(definition, timeout), capture_output=True)
+                print(run.stdout or '', end='')
+                print(run.stderr or '', end='', file=sys.stderr)
             else:
                 run = subprocess.run(list(command), cwd=root, capture_output=True,
                                      encoding="utf-8", errors="replace")
@@ -1326,6 +1344,11 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
             output = run.stdout or ""
         except OSError as error:
             exit_code, output = 127, str(error)
+        if kind == 'test':
+            missing = missing_test_dependency(command, exit_code,
+                                              output + (run.stderr or '') if exit_code != 127 else output)
+            if missing:
+                print(f'{tid}: {missing}')
         valid = exit_code == 0
         if kind == "test":
             valid = valid and clean_code(root) and head(root) == commit

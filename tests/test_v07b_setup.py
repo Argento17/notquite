@@ -86,6 +86,12 @@ def test_workflow_installs_detected_dependencies_before_exact_workorder(
     for command in workflow_commands(local_repo):
         completed = subprocess.run(['/bin/sh', '-eu', '-c', command], cwd=local_repo,
                                    env=environment, capture_output=True, text=True)
+        if expected is None:
+            assert completed.returncode == 1
+            assert 'add your test dependencies here' in completed.stderr
+            assert not log.exists()  # fail before installing Workorder or attempting the check
+            assert 'no project test dependencies detected' in output.lower()
+            return
         assert completed.returncode == 0, completed.stderr
     actual = [json.loads(line) for line in log.read_text().splitlines()]
     installs = [args for args in actual if args[:4] == ['python', '-m', 'pip', 'install']]
@@ -108,6 +114,7 @@ def test_workflow_preserves_installed_git_commit(local_repo, tmp_path, published
     if subdirectory:
         direct['subdirectory'] = subdirectory
     (published_install / 'direct_url.json').write_text(json.dumps(direct))
+    (local_repo / 'requirements.txt').write_text('# no extra packages needed for this fixture\n')
     bootstrap.initialize(local_repo)
     environment, log = fake_commands(tmp_path)
     for command in workflow_commands(local_repo):
@@ -117,7 +124,8 @@ def test_workflow_preserves_installed_git_commit(local_repo, tmp_path, published
     installs = [json.loads(line) for line in log.read_text().splitlines()
                 if json.loads(line)[:4] == ['python', '-m', 'pip', 'install']]
     suffix = '#subdirectory=packages/workorder' if subdirectory else ''
-    assert installs == [['python', '-m', 'pip', 'install',
+    assert installs == [['python', '-m', 'pip', 'install', '-r', 'requirements.txt'],
+                        ['python', '-m', 'pip', 'install',
                          'git+https://example.com/team/workorder.git@' + 'a' * 40 + suffix]]
 
 
@@ -280,7 +288,7 @@ def test_session_start_does_not_hold_a_task_after_losing_a_claim_race(clones, mo
     assert 'workorder show --task TASK-1' not in capsys.readouterr().out
 
 
-@pytest.mark.parametrize('status,expected', [('IN_PROGRESS', 0), ('DONE', 2), ('CLOSED', 2)])
+@pytest.mark.parametrize('status,expected', [('IN_PROGRESS', 0), ('DONE', 1), ('CLOSED', 1)])
 def test_stop_blocks_only_unsupported_completion_claims(local_repo, monkeypatch, capsys, status, expected):
     hooks = importlib.import_module('workorder.hooks')
     task(local_repo, status=status, ships='none')
@@ -318,7 +326,7 @@ def test_stop_active_guard_prevents_a_loop(local_repo, monkeypatch, capsys):
     assert output.out == output.err == ''
 
 
-@pytest.mark.parametrize('status,expected', [('IN_PROGRESS', 0), ('DONE', 2), ('CLOSED', 2)])
+@pytest.mark.parametrize('status,expected', [('IN_PROGRESS', 0), ('DONE', 1), ('CLOSED', 1)])
 def test_stop_handles_malformed_tasks_according_to_their_claim(local_repo, monkeypatch, capsys,
                                                              status, expected):
     hooks = importlib.import_module('workorder.hooks')

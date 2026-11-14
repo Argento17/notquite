@@ -2,6 +2,20 @@
 
 ## 0.8.0 (unreleased)
 
+- Refuse test-change problems in done, pre-commit and Stop when the target is
+  available locally; keep status and give workorder-allow:<ID> label advice.
+- Check failing REF tests on REF code before attributing a failure, and reuse
+  that run. Name missing test commands or modules as environment problems.
+- Cover whole pytest collection folders and imported test helpers by default.
+  Warn about wrapper scripts and protect the script itself.
+- Require reviewer acceptance for reopening finished tasks or cancelling work;
+  Stop refuses a held task newly cancelled here. Stop refusals exit 1.
+- Write a failing dependency placeholder when init cannot infer dependencies;
+  add init --update-workflow with a diff and a read-only --check preview.
+- Group repeated check notes; --verbose prints each one. Explain why a passing
+  done run does not count and how to ignore generated files.
+- Add docs/guarantees.md and tell agents to report done refusals and warnings.
+
 - Use one test-change rule for tasks whose file or receipts change: additions
   need no label; removed or changed lines need reviewer acceptance. Accept
   intended REF-test failures and reduced pytest outcomes with --allow ID,

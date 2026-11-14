@@ -9,7 +9,7 @@ Install: `pipx install workorder`.
 
 | Command | What it does |
 |---|---|
-| `workorder init [--check] [--force] [--claude]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs the hook, and writes the workflow if absent. A different hook needs --force; --check reports missing setup without writes and exits 1 if incomplete. --claude merges project hooks into .claude/settings.json |
+| `workorder init [--check] [--force] [--claude] [--update-workflow]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs the hook, and writes the workflow if absent. --update-workflow rewrites it with a diff; combined with --check it only previews changes. A different hook needs --force; --check reports missing setup without writes and exits 1 if incomplete. --claude merges project hooks into .claude/settings.json |
 | `workorder done --task ID [--note TEXT] [--timeout SECONDS]` | Refuses uncommitted code or empty Scope/Acceptance; records implementation if its code changed and runs the declared test. Prints Acceptance for human confirmation, then sets DONE only if supported. On refusal prints Missing lines and preserves status; never commits or pushes |
 | `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple] [--test COMMAND] [--local]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote or with `--local` (no tag is pushed); writes `tasks/<id>.md` (extended by default; `simple` writes the seven required fields only). `ships` defaults to `none` |
 | `workorder receipt implemented --task ID` | Records the current commit as the implementation; refuses uncommitted or untracked code |
@@ -19,7 +19,7 @@ Install: `pipx install workorder`.
 | `workorder receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
 | `workorder check [ID or tasks/ID.md]` / `check --task ID` | No argument: reads every task; one line per problem, or `check: OK`. With a task: an explanation of that task alone |
 | `workorder check --staged` | For the pre-commit hook: checks the staged versions of the tasks this commit touches (task file, receipts, contract or its evidence) and the tasks that depend on them; refuses a commit that newly claims DONE or CLOSED on code other than the implemented code; notes changes to a task's requirements |
-| `workorder check --base REF [--allow IDS] [--run-tests] [--strict-tests] [--all-tests] [--require-task] [--timeout SECONDS]` | Checks changed task records and receipts, their test files, and their dependents. Refuses stale claims, changed receipts, changed requirements, weakened tests, new finished definitions, and removed tasks. `--allow` accepts reviewed definition/test changes, REF failures and outcome changes, and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
+| `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--all-tests] [--require-task] [--timeout SECONDS]` | Checks changed task records and receipts, their test files, and their dependents. Refuses stale claims, changed receipts, changed requirements, weakened tests, new finished definitions, and removed tasks. `--allow` accepts reviewed definition/test changes, REF failures and outcome changes, and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
 | `workorder show --task ID` | The task as a record: Claimed and Evidence status, what is still owed, dependencies, title, owner and test; mission, summary and next when filled in; body sections, a dated receipt timeline, any computed merge and Progress notes. Prints a next step for outstanding evidence or unclaimed Acceptance work |
 | `workorder note --task ID [--next TEXT] [NOTE]` | Sets next when supplied; adds `- YYYY-MM-DD: NOTE` at the end of Progress when a note is supplied. Give either or both |
 | `workorder renew --task ID [--timeout SECONDS] [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded by `renew` |
@@ -41,7 +41,7 @@ matter between two `---` lines, one
 `key: value` per line, each key once. These seven fields are required: `id`,
 `title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
 
-A value is plain single-line text, a JSON string, or a list. `note` appends a line under Progress. `done` changes the status line to DONE after checking the claim, and `done --note` also appends a dated line. Other task text is preserved. `note --next "TEXT"` replaces or adds the next field, including existing folded/literal values; an empty string clears it. With no NOTE it adds no Progress entry. `done --note` keeps the handover line on every refusal, including uncommitted code or a missing declared test. Refusal says `TASK-1: DONE was not written; the status stays IN_PROGRESS`, using the actual status, then the Missing lines. `done` refuses a missing or empty Scope or Acceptance section, including sections containing only HTML template comments: `fill in Scope and Acceptance first`. It checks this before recording evidence. It preserves the status line's plain, single-quoted or double-quoted style, and its existing line endings. Success says `TASK-1 DONE: its declared test passed on this code`, followed by `; still owes: merge of the tested code` when applicable (and any other delivery debt). A separate line asks you to commit tasks/ and .workorder/, adding `and push` only with an origin remote. It warns when this clone has no pre-commit hook. If origin/main (or origin/master) exists locally, it runs the test-change checks below against that ref before writing DONE and prints refusals as warnings. It does not fetch; these warnings do not prevent DONE when the current declared test and other evidence pass. `done` needs a concrete declared command; use the individual receipts for `test: any`. A task
+A value is plain single-line text, a JSON string, or a list. `note` appends a line under Progress. `done` changes the status line to DONE after checking the claim, and `done --note` also appends a dated line. Other task text is preserved. `note --next "TEXT"` replaces or adds the next field, including existing folded/literal values; an empty string clears it. With no NOTE it adds no Progress entry. `done --note` keeps the handover line on every refusal, including uncommitted code or a missing declared test. Refusal says `TASK-1: DONE was not written; the status stays IN_PROGRESS`, using the actual status, then the Missing lines. `done` refuses a missing or empty Scope or Acceptance section, including sections containing only HTML template comments: `fill in Scope and Acceptance first`. It checks this before recording evidence. It preserves the status line's plain, single-quoted or double-quoted style, and its existing line endings. Success says `TASK-1 DONE: its declared test passed on this code`, followed by `; still owes: merge of the tested code` when applicable (and any other delivery debt). A separate line asks you to commit tasks/ and .workorder/, adding `and push` only with an origin remote. It warns when this clone has no pre-commit hook. If origin/main (or origin/master) exists locally, it runs the test-change checks below against that ref before writing DONE and refuses with exit 1 when they find a problem, preserving the prior status. It adds `a reviewer can accept it in the pull request with the workorder-allow:<ID> label` to the same diagnostic. It does not fetch. A passing run that does not count reports whether files or HEAD changed while it ran; generated files such as __pycache__/ should be added to .gitignore before committing and running done again. `done` needs a concrete declared command; use the individual receipts for `test: any`. A task
 file that cannot be read is reported as a problem of that task; the other tasks
 are still checked. Fields starting with `x-` (such as `x-issue`) are your own:
 they are kept and never checked.
@@ -323,8 +323,15 @@ at REF, there is no REF run. Every skipped comparison prints a note explaining
 why, including unavailable commands, copy failures and missing reference files.
 A comparison that cannot start or whose pytest outcomes cannot be read still
 refuses; `--allow` cannot supply missing results. A command that runs and fails,
-including a timeout, can be accepted as a REF-test failure. The current command
-must pass, including the strict-mode rule below.
+including a timeout, can be accepted as a REF-test failure only after those tests
+pass on REF code. When they already fail on REF code, a note says so instead of
+blaming this change. That REF-code run is cached by revision, command and timeout
+within the check. It uses a separate checkout, reuses ignored local dependencies,
+and redirects internal absolute symlinks into that checkout. Missing commands
+(exit 127) and Python modules are reported as environment problems, for example
+`pytest is not installed in this environment`. A renamed repository module whose
+REF tests pass on REF code can still be accepted as an intended change.
+The current command must pass, including the strict-mode rule below.
 
 For example, an intentional change from 10% to 20% needs acceptance of the
 edited assertions and failing REF assertions for each task being worked on:
@@ -333,9 +340,17 @@ edited assertions and failing REF assertions for each task being worked on:
 TASK-1: its tests from origin/main fail on this code; a reviewer accepts this intended behavior change or test rename with --allow TASK-1
 ```
 
-`test_paths` selects files or folders; otherwise paths named in `test` are used.
-Pytest with no collection paths uses its discovery patterns. Both REF and current
-definitions count. A named file that does not exist in either version selects no
+`test_paths` selects files or folders. Otherwise, the named files and folders
+and every file beneath pytest collection roots are covered, including helpers,
+__init__.py, conftest.py and data. Ancestor test package __init__.py files are
+included too. A named file selects its containing folder;
+without named paths, configured testpaths or discovered test folders supply roots.
+Imports are followed through files within repository test roots. Task and receipt
+metadata are excluded from inferred roots. Both REF and current definitions count.
+A sh, bash, make or non-test Python wrapper is itself protected and prints
+`TASK-1 runs a wrapper script; set test_paths so changes to its tests are checked`.
+Use test_paths for dynamic imports and tests hidden behind wrappers. A named
+file that does not exist in either version selects no
 files and prints a note; it never expands to unrelated repository tests.
 An explicit empty `test_paths` list also selects no test files.
 
@@ -345,6 +360,10 @@ configurations selected by the command. Unrelated TOML sections need no review.
 Without `--run-tests`, the file, configuration and selection checks still apply;
 Workorder notes that it has not run the REF comparison. A passing test says
 nothing about whether its assertion expresses the right requirement.
+
+Moving DONE/CLOSED back to IN_PROGRESS or BLOCKED needs `--allow ID`. Moving
+any other status to CANCELLED also needs it: a reviewer accepts closing a task
+without finishing it. The check reads the staged status under --staged.
 
 Scope or Acceptance removals and rewording need `--allow ID`. Additions need it
 too when the task was DONE or CLOSED at REF; filling in an open task does not.
@@ -372,6 +391,8 @@ exception above also exempts that task's receipts from this history check.
 complete removal described above. It does not excuse missing evidence,
 unfinished dependencies, changed receipts on a retained task, or current test failures.
 
+Notes of the same kind are grouped, for example `Note: 200 tasks' tests passed when this check ran them`. Use `--verbose` to print each task note.
+
 Every check mode prints a summary after its result and notes, except `--staged` with nothing in scope, which prints nothing:
 
 ```text
@@ -396,8 +417,7 @@ Exit codes are unchanged: 0 for acceptance, 1 for refusal.
 
 ### GitHub Actions
 
-The hook and plain local checks judge recorded evidence. This workflow runs
-the declared tests again. It reads `workorder-allow:<ID>` labels from the pull
+The workflow runs the declared tests again. It reads `workorder-allow:<ID>` labels from the pull
 request event and passes their ids to `--allow`. Anyone with triage rights can apply these labels. Protect acceptance with CODEOWNERS and required code owner review on `tasks/`, test files, and test configuration paths; the [README label example](../README.md#hooks-and-workflows) shows the entries. CODEOWNERS alone does not require review. Label text is read as data;
 it is never inserted into shell code.
 
@@ -595,13 +615,18 @@ Before a merge, `merge of the tested code` is owed. Advice about differing merge
 
 Run `workorder init` in every clone: hooks are not cloned. It is idempotent and
 prints a reminder when instructions are committed but the hook is absent.
-Existing workflows are left untouched. A generated workflow installs project
+Existing workflows are left untouched unless `init --update-workflow` is used.
+That option prints a unified diff and writes the new workflow; adding --check
+shows the diff without writing and exits 1 if an update is needed.
+A generated workflow installs project
 test dependencies first, choosing and reporting the first match:
 
 1. A `test` extra in pyproject.toml: `python -m pip install -e '.[test]'`.
 2. requirements-dev.txt, otherwise requirements.txt: `python -m pip install -r FILE`.
 3. A task command that uses pytest: `python -m pip install pytest`.
-4. Otherwise no inferred test dependency install; init says so.
+4. Otherwise a clearly marked step fails with `add your test dependencies here`.
+   Replace it with the dependencies your tests need (or an explicit no-op when none
+   are needed), then keep that workflow. Pytest is installed only for a pytest task.
 
 It then installs Workorder at exactly the running version. For a Git installation,
 PEP 610 direct_url.json supplies the URL and resolved commit:
@@ -611,11 +636,15 @@ It runs `workorder check --base "origin/<base>" --run-tests --all-tests --requir
 passing task ids from `workorder-allow:<ID>` labels to `--allow`. See the runtime
 trade-off above. Install additional non-Python dependencies in the workflow as
 needed. The agent block says to work on a branch, open a pull request, and after
-the merge run `workorder check <ID>` on main.
+the merge run `workorder check <ID>` on main. It also says: "If `done` refuses
+or prints a warning, report it; do not say the task is done."
 
 The pre-commit hook prints one warning when Workorder is missing from PATH and
 exits 0, so teammates without it can still commit. When Workorder becomes available it runs `check --staged`; empty staged
-checks print nothing. The README includes the installed agent block and examples.
+checks print nothing. When origin/main (or origin/master) is available locally,
+it compares the staged tests with that ref, reruns them and refuses test-change
+problems with exit 1 and reviewer-label advice. It never fetches. The README
+includes the installed agent block and examples.
 
 ## Agent hooks
 
@@ -637,8 +666,12 @@ successful claims and releases cache their tags locally for these hooks. A token
 left by a failed claim is not ownership. It does not fetch, so another clone's
 release or reassignment becomes visible after the local tags are refreshed. Stop reads the hook JSON from stdin. When `stop_hook_active`
 is true it exits 0 to prevent a stop loop. Otherwise it checks DONE/CLOSED claims only for tasks held by this clone or
-whose task file differs from the selected target branch. With no target, it compares task files with HEAD. Other tasks never block Stop. It exits 2
-with the NOT QUITE refusal lines on stderr if one of those claims lacks support. A valid claim or unfinished work exits 0. This checks task records;
+whose task file differs from the selected target branch. With no target, it compares task files with HEAD. Other tasks never block Stop. It exits 1
+with the NOT QUITE refusal lines on stderr if one of those claims lacks support.
+With a locally available remote target, it runs the same test-change comparison
+for those completion claims. A held task newly set to CANCELLED also refuses,
+including a cancellation committed on this branch. Test-change and cancellation
+refusals include reviewer-label advice. A valid claim or other unfinished work exits 0. This checks task records;
 it cannot detect a completion claim made only in chat.
 
 `init --claude --check` reports missing hook setup without writing it. Codex users

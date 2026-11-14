@@ -2,6 +2,8 @@
 
 **Every task recorded. A clear history. Agents always go back to it.**
 
+[What Workorder guarantees, and what it does not](docs/guarantees.md).
+
 ```sh
 pipx install workorder
 ```
@@ -91,14 +93,14 @@ For small work, `workorder new --template simple` writes the seven required fiel
 
 ## Working with coding agents
 
-Workorder reads task files and recorded evidence. It does not watch conversations, so a claim made only in chat is not caught. Tell the agent how to work with tasks. Run `workorder init` in every clone: hooks are not cloned, even when the agent instructions are already committed. It is idempotent. It adds this block to both `CLAUDE.md` (Claude Code) and `AGENTS.md` (Codex), installs the hook, and writes the workflow below. Existing instructions stay in place and the block is appended once. An existing workflow is skipped. A different hook is refused unless you pass `--force`. `workorder init --check` changes nothing and exits 1 if setup is missing. You can also add the block yourself:
+Workorder reads task files and recorded evidence. It does not watch conversations, so a claim made only in chat is not caught. Tell the agent how to work with tasks. Run `workorder init` in every clone: hooks are not cloned, even when the agent instructions are already committed. It is idempotent. It adds this block to both `CLAUDE.md` (Claude Code) and `AGENTS.md` (Codex), installs the hook, and writes the workflow below. Existing instructions stay in place and the block is appended once. An existing workflow is skipped; `init --update-workflow` rewrites it and shows a diff. A different hook is refused unless you pass `--force`. `workorder init --check` changes nothing and exits 1 if setup is missing. You can also add the block yourself:
 
 ```markdown
 ## Tasks
 - Start every session from the task: if the repository has an origin remote, update first: `git pull --rebase origin main` (or your branch's upstream). Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - Work on a branch and open a pull request for review.
-- After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If it refuses, report its Missing lines instead of saying the task is done. Acceptance lists are not checked by Workorder.
+- After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
 - Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 ```
@@ -147,7 +149,7 @@ workorder done --task TASK-1 --note "add() works; next: subtraction"
 workorder show --task TASK-1
 ```
 
-`done` refuses uncommitted code and empty or template-only Scope or Acceptance: `fill in Scope and Acceptance first`. It records implementation when needed, runs the declared test, and reminds you to confirm Acceptance yourself. On success it says `TASK-1 DONE: its declared test passed on this code; still owes: merge of the tested code` when a merge is pending, then asks you to commit tasks/ and .workorder/ (and push when origin exists). It never commits or pushes. On refusal it preserves status and any `--note`, and prints the Missing lines. When origin/main is available locally, test-change refusals become warnings before DONE; a missing clone hook also gets a warning. [Details](docs/reference.md#task-files).
+`done` refuses uncommitted code and empty or template-only Scope or Acceptance: `fill in Scope and Acceptance first`. It records implementation when needed, runs the declared test, and reminds you to confirm Acceptance yourself. On success it says `TASK-1 DONE: its declared test passed on this code; still owes: merge of the tested code` when a merge is pending, then asks you to commit tasks/ and .workorder/ (and push when origin exists). It never commits or pushes. On refusal it preserves status and any `--note`, and prints the Missing lines. When origin/main is available locally, test-change problems refuse DONE with reviewer-label advice; a missing clone hook gets a warning. A passing run that does not count names the changed files and suggests ignoring generated files. [Details](docs/reference.md#task-files).
 
 `show` and `check` use `Claimed` and `Evidence` for finished claims. A successful check says `Result: the declared test passed on this code`. For an unfinished task it starts with, for example, `TASK-1 IN_PROGRESS (not claimed finished); its test evidence is in place`. Passing tests alone do not mean every Acceptance item is met. Without a contract, supported claims rest on declared tests only; Workorder does not check the Acceptance list.
 
@@ -320,9 +322,9 @@ Critical criteria must be met before DONE. This contract fails: a mock result ca
 
 [Shortcuts Workorder refuses](docs/shortcuts.md): runnable examples and their actual output.
 
-The hook and a local `workorder check` judge recorded evidence. Plain `check`
-reads every task. The hook checks staged task files, receipts, contracts and
-evidence, plus their dependents. The generated workflow runs
+Plain `workorder check` reads recorded evidence for every task. The hook checks
+staged task files, receipts, contracts and evidence, plus their dependents.
+With origin/main available locally, it also checks test changes and reruns tests. The generated workflow runs
 `check --base origin/<base> --run-tests --all-tests --require-task`.
 Test review covers tasks whose file or receipts changed. A reviewer can accept
 changes to a task's requirements with a `workorder-allow:<ID>` pull request
@@ -342,7 +344,7 @@ EOF
 chmod +x .git/hooks/pre-commit
 ```
 
-`init` reports its chosen test dependencies: the project's `test` extra, then requirements-dev.txt or requirements.txt, then pytest when a task uses it. Workorder is pinned to the running version, or its exact Git commit from PEP 610 metadata. This example uses a `test` extra; existing workflows stay untouched. [Setup details](docs/reference.md#team-setup).
+`init` reports its chosen test dependencies: the project's `test` extra, then requirements-dev.txt or requirements.txt, then pytest when a task uses it. Workorder is pinned to the running version, or its exact Git commit from PEP 610 metadata. Without detected dependencies or a pytest task, it writes a failing step marked `add your test dependencies here`. This example uses a `test` extra; `init --update-workflow` refreshes existing workflows with a diff. [Setup details](docs/reference.md#team-setup).
 
 GitHub Actions (`.github/workflows/workorder.yml` in your project):
 
@@ -406,6 +408,8 @@ configuration changes also need acceptance. Other tasks are covered by
 The workflow enables `--all-tests` and `--require-task`. Running every distinct test command costs more time as completed tasks accumulate, but catches current regressions outside the changed tasks. Code changes need a new implemented or test receipt; notes and status edits alone are insufficient. Documentation paths are exempt. [Options and exclusions](docs/reference.md#checks-against-a-base).
 
 ## Limitations
+
+[One page of guarantees and limits](docs/guarantees.md).
 
 - Anyone who can write files and compute SHA-256 can create a receipt. Rewriting Git history also rewrites its record. `--run-tests` runs the declared tests during the check.
 - A passing test is only as good as its assertions, and the task's `test` is part of the task file: `workorder check --base` refuses a change to it until a reviewer allows it.

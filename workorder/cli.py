@@ -30,6 +30,7 @@ def parser():
     init.add_argument("--check", action="store_true", help="report missing setup without changing files")
     init.add_argument("--force", action="store_true", help="replace a different pre-commit hook")
     init.add_argument("--claude", action="store_true", help="also install Claude Code project hooks")
+    init.add_argument("--update-workflow", action="store_true", help="rewrite the workflow and show its diff; --check previews only")
     hook = commands.add_parser("hook", help="run a local agent session or stop check")
     hook.add_argument("event", choices=["session-start", "stop"])
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
@@ -80,6 +81,7 @@ def parser():
                        help="explain one task, by id (TASK-1) or path (tasks/TASK-1.md)")
     check.add_argument("--task", dest="named_task", help="explain one task (also accepts a positional id)")
     check.add_argument("--staged", action="store_true", help="check the staged files (pre-commit)")
+    check.add_argument("--verbose", action="store_true", help="print every task note instead of grouping similar notes")
     check.add_argument("--allow", metavar="TASKS", default="",
                        help="with --base: accept definition/test edits, REF-test failures, reduced pytest outcomes or complete removal"
                             " (comma-separated ids, for a reviewer to pass)")
@@ -146,6 +148,9 @@ def finish_task(root, tid, note=None, timeout=None):
         command = gate.declared_test(record)
         if not command:
             raise s.Refused(f"{tid} needs a declared test command; add test: to tasks/{tid}.md")
+        wrapper = gate.wrapper_note(record)
+        if wrapper:
+            print(f'Note: {wrapper}')
         sections = s.task_body_sections(s.read_text(root, f"tasks/{tid}.md"))
         filled = {heading: re.sub(r'<!--.*?-->', '', '\n'.join(body), flags=re.S).strip()
                   for heading, body in sections}
@@ -160,6 +165,10 @@ def finish_task(root, tid, note=None, timeout=None):
             print(f"{tid} implemented {item['commit'][:7]} - recorded")
         item = s.receipt(root, tid, "test", command, timeout=timeout)
         print(f"{tid} test {item['commit'][:7]} exit {item['exit_code']} - recorded")
+        if item['exit_code'] == 0 and not item['valid']:
+            print('recorded, but does not count: ' + invalid_reason(root, item))
+            if s.dirty_paths(root):
+                print('Add generated files such as __pycache__/ to .gitignore; commit the change and run done again.')
         lines, refused = gate.explain(root, tid, claim="DONE")
         if refused or item["exit_code"] or not item["valid"]:
             done_refusal(tid, status, lines)
@@ -167,16 +176,16 @@ def finish_task(root, tid, note=None, timeout=None):
         print("Acceptance:")
         print(filled["Acceptance"])
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
-        for branch in ('main', 'master'):
-            base = f'origin/{branch}'
-            if not s.git(root, 'rev-parse', '--verify', '--quiet', f'refs/remotes/{base}^{{commit}}',
-                         required=False).returncode:
-                notes = []
-                for problem in gate.test_change_problems(root, base, record, timeout=timeout, notes=notes):
-                    print(f"Warning: {problem}")
-                for note in notes:
+        base = gate.local_test_base(root, record)
+        if base:
+            notes = []
+            problems = gate.local_test_problems(root, base, record, timeout=timeout, notes=notes)
+            for note in notes:
+                if note != wrapper:
                     print(f"Note: {note}")
-                break
+            if problems:
+                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in problems])
+                return 1
         else:
             print('Note: REF comparison skipped: origin/main and origin/master are not available locally')
         path = s.local_path(root, f"tasks/{tid}.md")
@@ -234,7 +243,8 @@ def main(argv=None):
             raise s.Refused("this command does not accept a command after --")
         if options.action == "init":
             from .bootstrap import initialize
-            return initialize(root, options.check, options.force, claude=options.claude)
+            return initialize(root, options.check, options.force, claude=options.claude,
+                              update_workflow=options.update_workflow)
         elif options.action == "hook":
             from .hooks import run
             return run(root, options.event)
@@ -342,7 +352,7 @@ def main(argv=None):
                 return 0
             print("\n".join(problems) if problems else "check: OK")
             if notes:
-                print("\n".join(f"Note: {note}" for note in notes))
+                print("\n".join(f"Note: {note}" for note in gate.summarize_notes(notes, options.verbose)))
             if options.run_tests and counts["tests"] == 0:
                 print("no declared test ran in this check")
             print(gate.check_summary(counts, options.run_tests))

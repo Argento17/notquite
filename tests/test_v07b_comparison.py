@@ -202,7 +202,7 @@ def test_explicit_test_paths_restore_base_bytes(local_repo, kind):
     path.write_bytes(after)
     result = checked(root, base, '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f'its tests from {base} fail on this code' in result.stdout
+    assert f'its tests already fail on {base} code' in result.stdout
     assert path.read_bytes() == after
 
 
@@ -212,7 +212,7 @@ def test_deleted_test_files_are_restored_for_comparison(local_repo):
     probe.unlink()
     (probe.parent / 'test_new.py').write_text('def test_new():\n    assert True\n')
     result = checked(root, base, '--allow', 'TASK-1')
-    assert result.returncode == 0 and f'its tests from {base} fail on this code' in result.stdout
+    assert result.returncode == 0 and f'its tests already fail on {base} code' in result.stdout
     assert not probe.exists()
 
 
@@ -249,7 +249,7 @@ def test_base_test_timeout_refuses_and_preserves_files(local_repo):
     notes = []
     problems = gate.check(root, base=base, run_tests=True, allow={'TASK-1'}, timeout=0.2, notes=notes)
     assert not problems
-    assert any(f'its tests from {base} fail on this code' in line for line in notes)
+    assert any(f'its tests already fail on {base} code' in line for line in notes)
     assert probe.read_text() == 'print("current completed")\n'
 
 
@@ -282,7 +282,7 @@ def test_comparison_discovers_absolute_internal_command_paths(local_repo):
     probe.write_text('assert True\n')
     result = checked(root, base, '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f'its tests from {base} fail on this code' in result.stdout
+    assert f'its tests already fail on {base} code' in result.stdout
 
 
 def test_pytest_markers_in_custom_test_commands_still_need_acceptance(local_repo):

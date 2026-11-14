@@ -117,16 +117,35 @@ def run(root, event):
         raise s.Refused('Stop hook input must be a JSON object')
     if payload.get('stop_hook_active') is True:
         return 0
-    claimed = completion_claims(root, relevant_tasks(root))
-    if not claimed:
-        return 0
+    relevant = relevant_tasks(root)
+    claimed = completion_claims(root, relevant)
     problems = []
-    for line in gate.check(root):
-        owner = re.match(r'(?:NOT QUITE\s+)?([A-Z][A-Z0-9]*-[1-9][0-9]*)\b', line)
-        if owner and owner[1] in claimed:
-            problems.append(line)
+    if claimed:
+        for line in gate.check(root):
+            owner = re.match(r'(?:NOT QUITE\s+)?([A-Z][A-Z0-9]*-[1-9][0-9]*)\b', line)
+            if owner and owner[1] in claimed:
+                problems.append(line)
+    _, owned = local_claims(root)
+    notes, results = [], {}
+    for tid in sorted(relevant):
+        try:
+            record = s.record(root, tid)
+        except s.Refused:
+            continue  # readable completion claims already received their parse error above
+        base = gate.local_test_base(root, record)
+        if record['status'] == 'CANCELLED' and tid in owned:
+            target = gate.merge_target(root, record)
+            previous = gate.committed_status(root, tid, base or (target[1] if target else 'HEAD'))
+            if previous != 'CANCELLED':
+                problems.append(gate.reviewer_label(
+                    f'{tid}: status changed: {previous or "new task"} -> CANCELLED; '
+                    f'a reviewer accepts closing a task without finishing it with --allow {tid}', tid))
+        if tid in claimed and base:
+            problems += gate.local_test_problems(root, base, record, notes=notes, results=results)
+    for note in gate.summarize_notes(notes):
+        print(f'Note: {note}')
     if problems:
         print('\n'.join(line if line.startswith('NOT QUITE') else 'NOT QUITE  ' + line
                         for line in problems), file=sys.stderr)
-        return 2
+        return 1
     return 0
