@@ -1,0 +1,41 @@
+name: Publish to PyPI
+# Uploads the files attached to a GitHub release, exactly as tested; nothing is rebuilt.
+# Uses PyPI Trusted Publishing (OIDC), so no API token is stored anywhere.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag whose attached files to publish, for example v0.1.0
+        required: true
+permissions: {}
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/notquite/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download the release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist --pattern 'notquite-*'
+      - name: Refuse anything but the tested files
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          case "$TAG" in
+            v0.1.0)
+              printf '%s\n' \
+                "4a3ccae8f1e00130dd9fd56617d4e57b2b407803142213e49fe21f3c56bd5f67  notquite-0.1.0-py3-none-any.whl" \
+                "37139120d47142a2d3c64108bbd5f12cb6206f7a884f6f34c39bf023c4144805  notquite-0.1.0.tar.gz" \
+                > expected.sha256 ;;
+            *) echo "No tested checksums recorded for $TAG"; exit 1 ;;
+          esac
+          cd dist
+          test "$(ls | wc -l)" = 2
+          sha256sum -c ../expected.sha256
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
