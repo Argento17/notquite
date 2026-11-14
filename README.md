@@ -3,7 +3,7 @@
 ![NotQuite rejecting a DONE task whose last passing test ran on an older commit](https://raw.githubusercontent.com/Argento17/notquite/main/docs/notquite-demo.gif)
 
 ```sh
-python -m pip install git+https://github.com/Argento17/notquite@v0.1.0
+pipx install notquite
 ```
 
 - A task's status is a claim; its actual state is computed from recorded evidence.
@@ -65,7 +65,7 @@ Requires Git and Python 3.10 or newer. This uses a throwaway folder and needs no
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-python -m pip install git+https://github.com/Argento17/notquite@v0.1.0
+python -m pip install notquite
 
 mkdir demo && cd demo
 git init -q -b main
@@ -203,7 +203,7 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install git+https://github.com/Argento17/notquite@v0.1.0
+      - run: python -m pip install notquite==0.1.0
       - run: notquite check
 ```
 
