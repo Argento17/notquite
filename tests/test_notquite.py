@@ -1,0 +1,835 @@
+"""Exercise the public commands against real, disposable Git remotes."""
+
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import sysconfig
+import threading
+
+import pytest
+
+from notquite import gate, store
+
+PACKAGE = Path(__file__).resolve().parents[1]
+PYTHON = sys.executable
+
+
+def git(root, *args):
+    result = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args], cwd=root,
+                            capture_output=True, encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def cli(root, *args):
+    env = dict(os.environ, PYTHONPATH=str(PACKAGE), GIT_TERMINAL_PROMPT="0")
+    return subprocess.run([PYTHON, "-m", "notquite", *args], cwd=root, env=env,
+                          capture_output=True, encoding="utf-8", timeout=30)
+
+
+def ok(root, *args):
+    result = cli(root, *args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout
+
+
+def task(root, tid="TASK-1", status="IN_PROGRESS", ships="repo", waits=(), contract="none"):
+    fields = dict(id=tid, title="Add a list filter", owner="alex", status=status,
+                  ships=ships, waits_on=list(waits), contract=contract)
+    path = root / "tasks" / f"{tid}.md"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("---\n" + "".join(f"{k}: {json.dumps(v)}\n" for k, v in fields.items())
+                    + f"---\n\n# {tid}\n", encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def clones(tmp_path):
+    remote, seed = tmp_path / "remote.git", tmp_path / "seed"
+    git(tmp_path, "init", "--bare", "-q", "--initial-branch=main", str(remote))
+    git(tmp_path, "clone", "-q", str(remote), str(seed))
+    git(seed, "config", "user.name", "alex")
+    git(seed, "config", "user.email", "alex@example.com")
+    (seed / "app.py").write_text("items = []\n", encoding="utf-8")
+    task(seed)
+    git(seed, "add", "app.py", "tasks/TASK-1.md")
+    git(seed, "commit", "-qm", "Start the sample list app")
+    git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+    result = []
+    for name in ("one", "two"):
+        path = tmp_path / name
+        git(tmp_path, "clone", "-q", str(remote), str(path))
+        git(path, "config", "user.name", name)
+        git(path, "config", "user.email", f"{name}@example.com")
+        result.append(path)
+    return result
+
+
+def implement(root):
+    ok(root, "receipt", "implemented", "--task", "TASK-1")
+    return store.head(root)
+
+
+def passed(root):
+    return ok(root, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "pass")
+
+
+def merge(root):
+    git(root, "push", "-q", "origin", "HEAD:refs/heads/main")
+    ok(root, "receipt", "merged", "--task", "TASK-1")
+
+
+def readback(root, kind, stamp=None, target="demo"):
+    return cli(root, "receipt", kind, "--task", "TASK-1", "--target", target,
+               "--", PYTHON, "-c", f"print({(stamp or store.head(root))!r})")
+
+
+def test_two_clones_reserve_different_ids_without_pushing_records(clones):
+    one, two = clones
+    assert "TASK-2 opened" in ok(one, "new", "--title", "Store items", "--owner", "alex")
+    assert "TASK-3 opened" in ok(two, "new", "--title", "Remove items", "--owner", "bo")
+    assert not (two / "tasks/TASK-2.md").exists()
+
+
+def test_simultaneous_id_allocation_retries_the_losing_push(clones, monkeypatch):
+    barrier = threading.Barrier(2)
+    original = store.reserve
+    first = set()
+
+    def race(root, ref, value):
+        if root not in first:
+            first.add(root)
+            barrier.wait(timeout=10)
+        return original(root, ref, value)
+
+    monkeypatch.setattr(store, "reserve", race)
+    with ThreadPoolExecutor(2) as pool:
+        ids = list(pool.map(lambda root: store.new(root, "Pin an item", "alex"), clones))
+    assert set(ids) == {"TASK-2", "TASK-3"}
+
+
+def test_new_refuses_an_unreachable_remote(clones):
+    one, _ = clones
+    git(one, "remote", "set-url", "origin", str(one / "missing.git"))
+    result = cli(one, "new", "--title", "Pin an item", "--owner", "alex")
+    assert result.returncode == 1
+    assert not (one / "tasks/TASK-2.md").exists()
+
+
+def test_second_claim_refused_and_only_holder_releases(clones):
+    one, two = clones
+    assert "held by one@" in ok(one, "claim", "--task", "TASK-1")
+    denied = cli(two, "claim", "--task", "TASK-1")
+    assert denied.returncode == 1 and "held by one@" in denied.stderr
+    assert cli(two, "release", "--task", "TASK-1").returncode == 1
+    assert "TASK-1 held by one@" in ok(two, "claims")
+    ok(one, "claim", "--task", "TASK-1")  # same clone can retry safely
+    ok(one, "release", "--task", "TASK-1")
+    assert ok(two, "claims").strip() == "no active claims"
+    ok(two, "claim", "--task", "TASK-1")
+    assert "held by two@" in ok(one, "claims")
+    assert len([r for r in store.remote_refs(one) if "/claims/" in r]) == 2
+
+
+def test_simultaneous_claim_has_one_winner(clones, monkeypatch):
+    barrier = threading.Barrier(2)
+    original = store.reserve
+
+    def race(root, ref, value):
+        barrier.wait(timeout=10)
+        return original(root, ref, value)
+
+    monkeypatch.setattr(store, "reserve", race)
+
+    def take(root):
+        try:
+            store.claim(root, "TASK-1")
+            return True
+        except store.Refused:
+            return False
+
+    with ThreadPoolExecutor(2) as pool:
+        assert sorted(pool.map(take, clones)) == [False, True]
+
+
+def test_test_receipt_runs_command_and_keeps_the_real_failure(clones):
+    one, _ = clones
+    commit = implement(one)
+    result = cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "raise SystemExit(7)")
+    assert result.returncode == 1 and "exit 7 - recorded" in result.stdout
+    receipt = store.entries(one, "TASK-1")[-1]
+    assert receipt["exit_code"] == 7 and not receipt["valid"]
+    assert receipt["commit"] == commit and receipt["command"][-1] == "raise SystemExit(7)"
+    assert receipt["who"].startswith("one@") and receipt["at"]
+    task(one, status="DONE")
+    assert cli(one, "check").returncode == 1
+    assert "computed IN_PROGRESS" in ok(one, "show", "--task", "TASK-1")
+
+
+def test_done_needs_a_test_on_the_implemented_commit(clones):
+    one, _ = clones
+    old = implement(one)
+    passed(one)
+    task(one, status="DONE")
+    assert ok(one, "check").strip() == "check: OK"
+    (one / "app.py").write_text("items = ['new']\n", encoding="utf-8")
+    git(one, "add", "app.py")
+    git(one, "commit", "-qm", "Add a starter item", "--", "app.py")
+    assert implement(one) != old
+    result = cli(one, "check")
+    assert result.returncode == 1 and "passing test on" in result.stdout
+    passed(one)
+    ok(one, "check")
+
+
+def test_done_with_only_implementation_is_refused(clones):
+    one, _ = clones
+    commit = implement(one)
+    task(one, status="DONE")
+    result = cli(one, "check")
+    assert result.returncode == 1 and commit[:7] in result.stdout
+
+
+@pytest.mark.parametrize("mutation", [
+    "from pathlib import Path; Path('app.py').write_text('changed')",
+    "from pathlib import Path; Path('extra.py').write_text('changed')",
+    "import subprocess; subprocess.run(['git','commit','--allow-empty','-qm','another commit'], check=True)",
+])
+def test_code_or_commit_changed_by_test_cannot_pass(clones, mutation):
+    one, _ = clones
+    implement(one)
+    result = cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", mutation)
+    assert result.returncode == 1
+    receipt = store.entries(one, "TASK-1")[-1]
+    assert receipt["exit_code"] == 0 and not receipt["valid"]
+    task(one, status="DONE")
+    assert cli(one, "check").returncode == 1
+
+
+def test_uncommitted_code_cannot_be_recorded(clones):
+    one, _ = clones
+    (one / "app.py").write_text("changed\n", encoding="utf-8")
+    assert cli(one, "receipt", "implemented", "--task", "TASK-1").returncode == 1
+    assert cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "pass").returncode == 1
+    assert not store.entries(one, "TASK-1")
+
+
+def test_missing_test_executable_is_recorded_as_failure(clones):
+    one, _ = clones
+    implement(one)
+    assert cli(one, "receipt", "test", "--task", "TASK-1", "--", "missing-notquite-command").returncode == 1
+    assert store.entries(one, "TASK-1")[-1]["exit_code"] == 127
+
+
+@pytest.mark.parametrize("ships,computed", [("none", "CLOSED"), ("repo", "DONE"), ("live", "DONE")])
+def test_delivery_rules_are_computed(clones, ships, computed):
+    one, _ = clones
+    task(one, ships=ships)
+    implement(one)
+    passed(one)
+    assert f"computed {computed}" in ok(one, "show", "--task", "TASK-1")
+    task(one, ships=ships, status="CLOSED")
+    assert cli(one, "check").returncode == (0 if ships == "none" else 1)
+
+
+def test_repo_closes_only_after_merge_of_tested_code(clones):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    task(one, status="CLOSED")
+    assert cli(one, "check").returncode == 1
+    merge(one)
+    assert "computed CLOSED" in ok(one, "show", "--task", "TASK-1")
+    ok(one, "check")
+
+
+def test_merge_of_different_code_is_not_delivery(clones):
+    one, two = clones
+    implement(one)
+    passed(one)
+    (two / "app.py").write_text("items = ['other']\n", encoding="utf-8")
+    git(two, "add", "app.py")
+    git(two, "commit", "-qm", "Change the initial list")
+    git(two, "push", "-q", "origin", "HEAD:refs/heads/main")
+    ok(one, "receipt", "merged", "--task", "TASK-1")
+    task(one, status="CLOSED")
+    assert "merge of the tested code" in cli(one, "check").stdout
+
+
+def test_live_needs_successful_readback_after_deployment(clones):
+    one, _ = clones
+    task(one, ships="live")
+    implement(one)
+    passed(one)
+    merge(one)
+    assert readback(one, "live").returncode == 0  # too early; cannot discharge later delivery
+    assert readback(one, "deployed").returncode == 0
+    task(one, status="CLOSED", ships="live")
+    denied = cli(one, "check")
+    assert denied.returncode == 1 and "live read-back" in denied.stdout
+    assert readback(one, "live", stamp="no version here").returncode == 1
+    assert cli(one, "check").returncode == 1
+    assert readback(one, "live", target="other").returncode == 0
+    assert cli(one, "check").returncode == 1
+    assert readback(one, "live").returncode == 0
+    ok(one, "check")
+    assert "computed CLOSED" in ok(one, "show", "--task", "TASK-1")
+
+
+def test_failed_or_wrong_stamp_deploy_cannot_close(clones):
+    one, _ = clones
+    task(one, ships="live")
+    implement(one)
+    passed(one)
+    merge(one)
+    result = readback(one, "deployed", stamp=store.head(one)[:7])
+    assert result.returncode == 1
+    assert readback(one, "live").returncode == 0
+    task(one, ships="live", status="CLOSED")
+    assert "deployment read-back" in cli(one, "check").stdout
+
+
+def contract(root, provenance="MOCK", requires="REAL", ref="sample-output", critical=True):
+    path = root / ".notquite/contract.json"
+    path.parent.mkdir(exist_ok=True)
+    evidence = [{"provenance": provenance, "ref": ref}]
+    if provenance == "REAL":
+        artifact = root / ref
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("An observed result.\n", encoding="utf-8")
+        evidence[0]["sha256"] = store.digest(artifact.read_bytes())
+    value = {"task": "TASK-1", "criteria": [{"id": "C1", "ask": "Show stored items", "critical": critical,
+                                          "requires": requires, "evidence": evidence}]}
+    path.write_text(json.dumps(value), encoding="utf-8")
+    task(root, status="DONE", contract=".notquite/contract.json")
+    return path
+
+
+@pytest.mark.parametrize("provenance", ["MOCK", "SYNTHETIC", "UNKNOWN", "TEST"])
+def test_real_requirement_rejects_other_provenance(clones, provenance):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    contract(one, provenance)
+    result = cli(one, "check")
+    assert result.returncode == 1 and "contract C1: REAL evidence" in result.stdout
+
+
+def test_critical_test_evidence_must_reference_a_passing_receipt(clones):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    entry = store.entries(one, "TASK-1")[-1]
+    path = contract(one, "TEST", "REAL_OR_TEST", "receipt:" + entry["hash"])
+    ok(one, "check")
+    value = json.loads(path.read_text())
+    value["criteria"][0]["evidence"][0]["ref"] = "receipt:invented"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    assert cli(one, "check").returncode == 1
+
+
+def test_real_artifact_is_checked_against_its_hash(clones):
+    one, _ = clones
+    contract(one, "REAL", ref=".notquite/evidence/observed.txt")
+    implement(one)
+    passed(one)
+    ok(one, "check")
+    (one / ".notquite/evidence/observed.txt").write_text("changed", encoding="utf-8")
+    assert cli(one, "check").returncode == 1
+
+
+@pytest.mark.parametrize("value", [{}, {"task": "TASK-1", "criteria": [None]},
+                                  {"task": "TASK-1", "criteria": []}])
+def test_malformed_contract_is_refused(clones, value):
+    one, _ = clones
+    path = one / ".notquite/contract.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(value), encoding="utf-8")
+    task(one, contract=".notquite/contract.json")
+    assert cli(one, "check").returncode == 1
+
+
+def test_ready_reports_free_held_blocked_and_delivery(clones):
+    one, _ = clones
+    task(one, "TASK-2", waits=["task:TASK-1", "person:bo"], status="BLOCKED")
+    task(one, "TASK-3")
+    assert "TASK-1 free" in ok(one, "ready")
+    assert "TASK-2 blocked: task:TASK-1, person:bo" in ok(one, "ready")
+    ok(one, "claim", "--task", "TASK-1")
+    assert "TASK-1 held by one@" in ok(one, "ready")
+    ok(one, "release", "--task", "TASK-1")
+    implement(one)
+    passed(one)
+    output = ok(one, "ready")
+    assert "TASK-1 waiting for delivery" in output
+    assert "TASK-2 blocked: person:bo" in output
+    assert "TASK-3 free" in output
+
+
+def test_dependency_cycle_and_missing_task_are_refused(clones):
+    one, _ = clones
+    task(one, waits=["task:TASK-2"])
+    assert "missing dependency TASK-2" in cli(one, "check").stdout
+    task(one, "TASK-2", waits=["task:TASK-1"])
+    assert "dependency cycle" in cli(one, "check").stderr
+
+
+def test_finished_record_cannot_owe_a_person(clones):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    task(one, status="DONE", waits=["person:bo"])
+    assert cli(one, "check").returncode == 1
+
+
+def test_committed_receipts_cannot_be_rewritten_or_deleted(clones):
+    one, _ = clones
+    implement(one)
+    path = store.ledger_path("TASK-1")
+    git(one, "add", path)
+    git(one, "commit", "-qm", "Record implementation", "--", path)
+    (one / path).write_text("", encoding="utf-8")
+    assert "append-only" in cli(one, "check").stderr
+    (one / path).unlink()
+    assert "append-only" in cli(one, "check").stderr
+
+
+def test_hand_edit_breaks_receipt_chain(clones):
+    one, _ = clones
+    implement(one)
+    path = one / store.ledger_path("TASK-1")
+    value = json.loads(path.read_text())
+    value["commit"] = "0" * 40
+    path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+    assert "broken receipt chain" in cli(one, "check").stderr
+
+
+def test_staged_check_uses_index_and_hook_refuses_false_done(clones):
+    one, _ = clones
+    task(one, status="DONE")
+    git(one, "add", "tasks/TASK-1.md")
+    task(one)  # working file is valid, staged file is not
+    ok(one, "check")
+    assert cli(one, "check", "--staged").returncode == 1
+    git(one, "config", "core.hooksPath", str(PACKAGE / "hooks"))
+    env = dict(os.environ, PYTHONPATH=str(PACKAGE))
+    result = subprocess.run(["git", "commit", "-qm", "Try a false completion"], cwd=one,
+                            env=env, capture_output=True, encoding="utf-8")
+    assert result.returncode != 0 and "says DONE" in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("identifier", ["../escape", "TASK-0", "a-1", "TASK-1/other"])
+def test_task_ids_cannot_escape_paths(clones, identifier):
+    assert cli(clones[0], "show", "--task", identifier).returncode == 1
+
+
+def test_contract_cannot_read_outside_repository(clones):
+    one, _ = clones
+    task(one, contract="../outside.json")
+    assert "inside this repository" in cli(one, "check").stderr
+
+
+def test_invented_examples_are_readable_and_false_done_is_explicit(clones):
+    one, _ = clones
+    for source in (PACKAGE / "examples/tasks").glob("*.md"):
+        (one / "tasks" / source.name).write_bytes(source.read_bytes())
+    records = gate.records(one)
+    assert {records[f"TASK-{n}"]["status"] for n in (1, 2, 3)} == {"IN_PROGRESS", "BLOCKED", "DONE"}
+    assert "TASK-3 says DONE" in cli(one, "check").stdout
+
+
+def test_workflow_installs_kit_runs_tests_and_checker():
+    steps = [line.strip() for line in
+             (PACKAGE / ".github/workflows/check.yml").read_text().splitlines()
+             if line.strip().startswith("- run:")]
+    assert steps == ["- run: python -m pip install -e '.[test]'",
+                     "- run: python -m pytest", "- run: notquite check"]
+
+
+def test_test_before_implementation_does_not_complete_task(clones):
+    one, _ = clones
+    passed(one)
+    implement(one)
+    task(one, status="DONE")
+    assert "passing test on" in cli(one, "check").stdout
+
+
+def test_recomputed_hash_cannot_hide_wrong_code_digest(clones):
+    one, _ = clones
+    implement(one)
+    path = one / store.ledger_path("TASK-1")
+    value = json.loads(path.read_text())
+    value.pop("hash")
+    value["code"] = "0" * 64
+    value["hash"] = store.digest(store.packed(value).encode())
+    path.write_text(store.packed(value) + "\n", encoding="utf-8")
+    assert "code does not match" in cli(one, "check").stderr
+
+
+def test_contract_rejects_failed_test_even_when_receipt_exists(clones):
+    one, _ = clones
+    implement(one)
+    cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "raise SystemExit(1)")
+    failed = store.entries(one, "TASK-1")[-1]
+    passed(one)
+    contract(one, "TEST", "REAL_OR_TEST", "receipt:" + failed["hash"])
+    assert "contract C1" in cli(one, "check").stdout
+
+
+def test_critical_criterion_with_no_evidence_is_refused(clones):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    path = contract(one)
+    value = json.loads(path.read_text())
+    value["criteria"][0]["evidence"] = []
+    path.write_text(json.dumps(value), encoding="utf-8")
+    assert "contract C1" in cli(one, "check").stdout
+
+
+def test_staged_contract_reads_the_staged_binary_artifact(clones):
+    one, _ = clones
+    path = contract(one, "REAL", ref=".notquite/evidence/observed.bin")
+    artifact = one / ".notquite/evidence/observed.bin"
+    artifact.write_bytes(b"\x89\x00\xff")
+    value = json.loads(path.read_text())
+    value["criteria"][0]["evidence"][0]["sha256"] = store.digest(artifact.read_bytes())
+    path.write_text(json.dumps(value), encoding="utf-8")
+    implement(one)
+    passed(one)
+    git(one, "add", "tasks/TASK-1.md", ".notquite")
+    artifact.write_bytes(b"changed after staging")
+    assert cli(one, "check").returncode == 1
+    ok(one, "check", "--staged")
+
+
+def test_unstaged_passing_receipt_cannot_validate_staged_done(clones):
+    one, _ = clones
+    implement(one)
+    task(one, status="DONE")
+    git(one, "add", "tasks/TASK-1.md", ".notquite")
+    passed(one)
+    ok(one, "check")
+    assert "passing test on" in cli(one, "check", "--staged").stdout
+
+
+def test_check_from_a_subdirectory_cannot_report_false_success(clones):
+    one, _ = clones
+    task(one, status="DONE")
+    directory = one / "nested"
+    directory.mkdir()
+    result = cli(directory, "check")
+    assert result.returncode == 1 and "repository root" in result.stderr
+
+
+# Regression tests for the NotQuite name, packaging and the per-task explanation.
+
+def test_package_imports_under_its_name_and_versions_agree():
+    import notquite
+    tomllib = pytest.importorskip("tomllib")  # new in Python 3.11
+    project = tomllib.loads((PACKAGE / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert project["name"] == "notquite"
+    assert project["scripts"] == {"notquite": "notquite.cli:main"}
+    assert project["dependencies"] == []
+    assert notquite.__version__ == project["version"]
+
+
+def test_module_and_installed_command_report_the_version(tmp_path):
+    import notquite
+    result = subprocess.run([PYTHON, "-m", "notquite", "--version"], capture_output=True,
+                            encoding="utf-8", cwd=tmp_path)
+    assert result.stdout.strip() == f"notquite {notquite.__version__}"
+    script = Path(sysconfig.get_path("scripts")) / ("notquite.exe" if os.name == "nt" else "notquite")
+    if not script.exists():
+        pytest.skip("notquite is not installed next to this Python")
+    result = subprocess.run([str(script), "--version"], capture_output=True, encoding="utf-8")
+    assert result.returncode == 0 and result.stdout.strip() == f"notquite {notquite.__version__}"
+
+
+def test_no_old_project_names_remain():
+    old = ("task" + "kit", "agent-task-" + "kit", "Agent Task " + "Kit")
+    for path in PACKAGE.rglob("*"):
+        if path.is_file() and not {".git", ".venv", "__pycache__"} & set(path.parts) \
+                and ".egg-info" not in str(path):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            assert not any(name in text for name in old), path
+
+
+def test_explain_refuses_false_done_and_says_what_to_do(clones):
+    one, _ = clones
+    task(one, status="DONE")
+    result = cli(one, "check", "TASK-1")
+    assert result.returncode == 1
+    assert result.stdout.startswith("NOT QUITE  TASK-1")
+    assert "Claimed:  DONE" in result.stdout and "Missing:  implementation" in result.stdout
+    assert "Next:     commit the code, then: notquite receipt implemented --task TASK-1" in result.stdout
+    assert "Result: NOT DONE" in result.stdout
+
+
+def test_explain_rejects_a_test_from_an_older_commit(clones):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    old = store.head(one)[:7]
+    (one / "app.py").write_text("items = ['new']\n", encoding="utf-8")
+    git(one, "commit", "-qam", "Change the list")
+    new = implement(one)[:7]
+    task(one, status="DONE")
+    result = cli(one, "check", "tasks/TASK-1.md")
+    assert result.returncode == 1
+    assert f"the last test ran on {old}" in result.stdout
+    assert f"Missing:  a passing test on {new}" in result.stdout
+
+
+def test_explain_accepts_valid_done_and_shows_the_passing_test(clones):
+    one, _ = clones
+    commit = implement(one)[:7]
+    passed(one)
+    task(one, status="DONE")
+    result = cli(one, "check", "TASK-1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.startswith("DONE  TASK-1")
+    assert f"Test:     PASS (exit 0, {commit})" in result.stdout
+    assert "Owes:     merge of the tested code" in result.stdout
+
+
+def test_explain_refuses_closed_without_merge(clones):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    task(one, status="CLOSED")
+    result = cli(one, "check", "TASK-1")
+    assert result.returncode == 1 and "Result: NOT CLOSED" in result.stdout
+    assert "Next:     merge the tested commit, then: notquite receipt merged --task TASK-1" in result.stdout
+    merge(one)
+    assert cli(one, "check", "TASK-1").returncode == 0
+
+
+def test_explain_reports_a_failed_test(clones):
+    one, _ = clones
+    commit = implement(one)[:7]
+    cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "raise SystemExit(3)")
+    task(one, status="DONE")
+    assert f"Test:     FAIL (exit 3, {commit})" in cli(one, "check", "TASK-1").stdout
+
+
+@pytest.mark.parametrize("argument", ["elsewhere/TASK-1.md", "../TASK-1", "TASK-0"])
+def test_explain_rejects_bad_task_arguments(clones, argument):
+    one, _ = clones
+    result = cli(one, "check", argument)
+    assert result.returncode == 1 and result.stderr.startswith("notquite: ")
+
+
+def test_explain_cannot_be_combined_with_staged(clones):
+    one, _ = clones
+    assert cli(one, "check", "TASK-1", "--staged").returncode == 1
+
+
+def test_untracked_output_during_a_test_is_named(clones):
+    one, _ = clones
+    implement(one)
+    result = cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c",
+                 "open('build.log', 'w').write('x')")
+    assert result.returncode == 1
+    assert "not counted: files changed while the command ran" in result.stdout
+    assert "build.log" in result.stdout and ".gitignore" in result.stdout
+    refused = cli(one, "receipt", "implemented", "--task", "TASK-1")
+    assert refused.returncode == 1 and "build.log" in refused.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="builds a POSIX PATH; the hook itself is tested above")
+def test_hook_works_without_a_python_named_python(clones, tmp_path):
+    one, _ = clones
+    task(one, status="DONE")
+    git(one, "add", "tasks/TASK-1.md")
+    git(one, "config", "core.hooksPath", str(PACKAGE / "hooks"))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(PYTHON)
+    (bin_dir / "git").symlink_to(subprocess.run(["sh", "-c", "command -v git"], capture_output=True,
+                                                encoding="utf-8").stdout.strip())
+    env = dict(os.environ, PATH=f"{bin_dir}:/bin:/usr/bin", PYTHONPATH=str(PACKAGE))
+    env.pop("VIRTUAL_ENV", None)
+    result = subprocess.run(["git", "commit", "-qm", "False completion"], cwd=one, env=env,
+                            capture_output=True, encoding="utf-8")
+    assert result.returncode != 0 and "says DONE" in result.stdout + result.stderr
+
+
+def test_shallow_clone_explains_missing_history(clones, tmp_path):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    task(one, status="DONE")
+    git(one, "add", "tasks", ".notquite")
+    git(one, "commit", "-qm", "Record the evidence")
+    (one / "app.py").write_text("items = ['later']\n", encoding="utf-8")
+    git(one, "commit", "-qam", "Later work")
+    git(one, "push", "-q", "origin", "HEAD:refs/heads/main")
+    remote = git(one, "remote", "get-url", "origin")
+    shallow = tmp_path / "shallow"
+    git(tmp_path, "clone", "-q", "--depth", "1", Path(remote).resolve().as_uri(), str(shallow))
+    result = cli(shallow, "check")
+    assert result.returncode == 1 and "fetch-depth: 0" in result.stderr
+
+
+def test_latest_test_run_decides_and_history_is_kept(clones):
+    one, _ = clones
+    commit = implement(one)[:7]
+    task(one, status="DONE")
+    fail = [PYTHON, "-c", "raise SystemExit(2)"]
+    passed(one)
+    assert "computed DONE" in ok(one, "show", "--task", "TASK-1")
+    ok(one, "check")
+    cli(one, "receipt", "test", "--task", "TASK-1", "--", *fail)
+    assert "computed IN_PROGRESS" in ok(one, "show", "--task", "TASK-1")
+    refused = cli(one, "check", "TASK-1")
+    assert refused.returncode == 1 and "Result: NOT DONE" in refused.stdout
+    assert (f"Test:     FAIL (exit 2, {commit}); an earlier run passed, but the latest run decides"
+            in refused.stdout)
+    assert cli(one, "check").returncode == 1
+    passed(one)
+    assert "computed DONE" in ok(one, "show", "--task", "TASK-1")
+    ok(one, "check")
+    kinds = [(e["kind"], e.get("exit_code")) for e in store.entries(one, "TASK-1")]
+    assert kinds == [("implemented", None), ("test", 0), ("test", 2), ("test", 0)]
+
+
+def test_a_later_uncounted_run_also_revokes_done(clones):
+    one, _ = clones
+    implement(one)
+    passed(one)
+    cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c",
+        "open('build.log', 'w').write('x')")
+    assert "computed IN_PROGRESS" in ok(one, "show", "--task", "TASK-1")
+
+
+def test_a_failure_before_a_new_implementation_does_not_count_against_it(clones):
+    one, _ = clones
+    implement(one)
+    cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "raise SystemExit(1)")
+    (one / "app.py").write_text("items = ['fixed']\n", encoding="utf-8")
+    git(one, "commit", "-qam", "Fix the list")
+    implement(one)
+    passed(one)
+    assert "computed DONE" in ok(one, "show", "--task", "TASK-1")
+
+@pytest.fixture
+def local_repo(tmp_path):
+    root = tmp_path / "local"
+    root.mkdir()
+    git(root, "init", "-q", "-b", "main")
+    git(root, "config", "user.name", "solo")
+    git(root, "config", "user.email", "solo@example.com")
+    (root / "app.py").write_text("items = []\n", encoding="utf-8")
+    git(root, "add", "app.py")
+    git(root, "commit", "-qm", "Start")
+    return root
+
+
+def test_without_a_remote_tasks_are_local_and_checks_work(local_repo):
+    opened = ok(local_repo, "new", "--title", "Solo work", "--owner", "solo", "--ships", "none")
+    assert "TASK-1 opened" in opened and "local id: no origin remote" in opened
+    assert "TASK-2 opened" in ok(local_repo, "new", "--title", "More", "--owner", "solo")
+    ok(local_repo, "receipt", "implemented", "--task", "TASK-1")
+    ok(local_repo, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "pass")
+    assert "computed CLOSED" in ok(local_repo, "show", "--task", "TASK-1")
+    assert ok(local_repo, "check").strip() == "check: OK"
+    assert "TASK-2 free" in ok(local_repo, "ready")
+
+
+@pytest.mark.parametrize("args", [("claim", "--task", "TASK-1"), ("release", "--task", "TASK-1"),
+                                  ("claims",), ("receipt", "merged", "--task", "TASK-1")])
+def test_without_a_remote_claims_and_merges_are_refused(local_repo, args):
+    ok(local_repo, "new", "--title", "Solo work", "--owner", "solo")
+    result = cli(local_repo, *args)
+    assert result.returncode == 1 and "origin remote" in result.stderr
+    assert not list(local_repo.joinpath(".git").glob("notquite-claims/*"))
+
+
+def test_missing_git_user_name_gets_a_clear_message(clones):
+    one, _ = clones
+    git(one, "config", "--unset", "user.name")
+    env = dict(os.environ, PYTHONPATH=str(PACKAGE), HOME=str(one), XDG_CONFIG_HOME=str(one),
+               GIT_CONFIG_NOSYSTEM="1")
+    result = subprocess.run([PYTHON, "-m", "notquite", "claim", "--task", "TASK-1"], cwd=one,
+                            env=env, capture_output=True, encoding="utf-8")
+    assert result.returncode == 1 and "set git user.name first" in result.stderr
+
+
+def test_records_and_receipts_are_written_with_lf_on_every_platform(clones):
+    one, _ = clones
+    ok(one, "new", "--title", "Line endings", "--owner", "alex")
+    implement(one)
+    passed(one)
+    for path in ("tasks/TASK-2.md", store.ledger_path("TASK-1")):
+        assert b"\r\n" not in (one / path).read_bytes(), path
+
+
+def test_crlf_checkout_of_committed_records_still_verifies(clones):
+    """What Git on Windows with core.autocrlf does to committed text files."""
+    one, _ = clones
+    implement(one)
+    passed(one)
+    task(one, status="DONE")
+    git(one, "add", "tasks", ".notquite")
+    git(one, "commit", "-qm", "Record the evidence")
+    for path in ("tasks/TASK-1.md", store.ledger_path("TASK-1")):
+        data = (one / path).read_bytes()
+        (one / path).write_bytes(data.replace(b"\n", b"\r\n"))
+    assert ok(one, "check").strip() == "check: OK"
+    passed(one)
+    assert "computed DONE" in ok(one, "show", "--task", "TASK-1")
+
+
+def claim_tag_value(root, tid="TASK-1", generation=1):
+    ref = f"{store.NAMESPACE}claims/{tid}/{generation}"
+    return store.remote_value(root, ref, store.remote_refs(root)[ref])
+
+
+def test_claim_tag_holds_only_a_hash_of_the_private_token(clones):
+    one, _ = clones
+    ok(one, "claim", "--task", "TASK-1")
+    token = store.claim_token_path(one, "TASK-1").read_text(encoding="utf-8")
+    value = claim_tag_value(one)
+    assert "token" not in value
+    assert value["token_sha256"] == hashlib.sha256(token.encode()).hexdigest()
+    ref = f"{store.NAMESPACE}claims/TASK-1/1"
+    raw = git(one, "cat-file", "blob", store.remote_refs(one)[ref])
+    assert token not in raw
+    path = store.claim_token_path(one, "TASK-1").resolve()
+    assert path.is_relative_to((one / ".git").resolve())  # inside .git: never tracked or pushed
+
+
+def test_another_clone_cannot_release_by_copying_what_the_tag_shows(clones):
+    one, two = clones
+    ok(one, "claim", "--task", "TASK-1")
+    public = claim_tag_value(two)["token_sha256"]
+    forged = store.claim_token_path(two, "TASK-1")
+    forged.parent.mkdir(parents=True, exist_ok=True)
+    for guess in (public, "0" * 32, ""):
+        forged.write_text(guess, encoding="utf-8")
+        refused = cli(two, "release", "--task", "TASK-1")
+        assert refused.returncode == 1 and "only its holder can release it" in refused.stderr
+        denied = cli(two, "claim", "--task", "TASK-1")
+        assert denied.returncode == 1 and "held by one@" in denied.stderr
+    assert "TASK-1 held by one@" in ok(two, "claims")
+
+
+def test_holder_releases_once_and_a_lost_token_cannot_release(clones):
+    one, two = clones
+    ok(one, "claim", "--task", "TASK-1")
+    token_path = store.claim_token_path(one, "TASK-1")
+    token = token_path.read_text(encoding="utf-8")
+    token_path.unlink()
+    lost = cli(one, "release", "--task", "TASK-1")
+    assert lost.returncode == 1 and "only its holder can release it" in lost.stderr
+    token_path.write_text(token, encoding="utf-8")
+    assert "TASK-1 released" in ok(one, "release", "--task", "TASK-1")
+    again = cli(one, "release", "--task", "TASK-1")
+    assert again.returncode == 1 and "no active claim" in again.stderr
+    ok(two, "claim", "--task", "TASK-1")
+    assert claim_tag_value(one, generation=2)["token_sha256"] != claim_tag_value(one)["token_sha256"]

@@ -1,0 +1,14 @@
+{
+  "task": "TASK-3",
+  "criteria": [
+    {
+      "id": "C1",
+      "ask": "Items remain after reloading the running app",
+      "critical": true,
+      "requires": "REAL",
+      "evidence": [
+        {"provenance": "MOCK", "ref": "a simulated browser result"}
+      ]
+    }
+  ]
+}

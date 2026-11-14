@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+if command -v notquite >/dev/null 2>&1; then
+    exec notquite check --staged
+fi
+for python in python3 python; do
+    if command -v "$python" >/dev/null 2>&1; then
+        exec "$python" -m notquite check --staged
+    fi
+done
+echo "notquite pre-commit: install notquite or put python3 on PATH" >&2
+exit 1
