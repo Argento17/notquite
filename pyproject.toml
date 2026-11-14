@@ -3,15 +3,15 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "notquite"
-version = "0.2.0"
-description = "Checks whether DONE actually means done. Git, tests, merges, and deployment evidence."
+name = "workorder"
+version = "0.5.0"
+description = "The task record for coding agents: every task recorded, a clear history, agents always go back to it."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "Tom Bar-Haim"}]
-keywords = ["git", "tasks", "testing", "verification", "coding-agents"]
+keywords = ["tasks", "task-format", "coding-agents", "git", "verification"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -26,14 +26,14 @@ dependencies = []
 test = ["pytest>=7"]
 
 [project.urls]
-Homepage = "https://github.com/Argento17/notquite"
-Issues = "https://github.com/Argento17/notquite/issues"
+Homepage = "https://github.com/Argento17/workorder"
+Issues = "https://github.com/Argento17/workorder/issues"
 
 [project.scripts]
-notquite = "notquite.cli:main"
+workorder = "workorder.cli:main"
 
 [tool.setuptools]
-packages = ["notquite"]
+packages = ["workorder"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

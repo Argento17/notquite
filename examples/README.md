@@ -10,13 +10,13 @@ Invented records for Pocket List, an invented to-do web app. They sit outside
 - `contracts/save-items.json` asks for REAL evidence and offers only a MOCK.
 
 To watch the false DONE fail, from the root of a Git repository with
-notquite installed:
+workorder installed:
 
 ```sh
 mkdir -p tasks && cp examples/tasks/TASK-3.md tasks/
-notquite check TASK-3
+workorder check TASK-3
 ```
 
-To add the contract, copy it to `.notquite/contracts/save-items.json` and set
+To add the contract, copy it to `.workorder/contracts/save-items.json` and set
 TASK-3's `contract` field to that path. It still fails: a mock result cannot
 satisfy a request for real output.

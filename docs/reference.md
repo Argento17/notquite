@@ -1,53 +1,68 @@
 # Reference
 
 Details behind the [README](../README.md). Everything here is read from the
-code in `notquite/`; if the two disagree, the code wins and this file has a bug.
+code in `workorder/`; if the two disagree, the code wins and this file has a bug.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `notquite new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template simple\|extended]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote; writes `tasks/<id>.md` |
-| `notquite receipt implemented --task ID` | Records the current commit as the implementation; refuses uncommitted or untracked code |
-| `notquite receipt test --task ID -- CMD...` | Runs `CMD` (no shell), records its exit code against the current commit |
-| `notquite receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to (needs `origin`) |
-| `notquite receipt deployed --task ID --target NAME -- CMD...` | Runs a read-back command; valid only if it exits 0 and its output contains the full commit ID |
-| `notquite receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
-| `notquite check [ID or tasks/ID.md]` | No argument: one line per refused claim in the repository, or `check: OK`; use this in hooks and CI. With a task: an explanation of that task alone |
-| `notquite check --staged` | Checks the staged versions of task files and receipts (for pre-commit) |
-| `notquite show --task ID` | Recorded status, computed status, what is still owed |
-| `notquite claim --task ID` / `release --task ID` | Takes or gives up a task with a pushed tag |
-| `notquite claims` | Active claims |
-| `notquite ready` | Open tasks: free, held, blocked, or waiting for delivery |
+| `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple] [--test COMMAND] [--local]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote or with `--local` (no tag is pushed); writes `tasks/<id>.md` (extended by default; `simple` writes the seven required fields only). `ships` defaults to `none` |
+| `workorder receipt implemented --task ID` | Records the current commit as the implementation; refuses uncommitted or untracked code |
+| `workorder receipt test --task ID -- CMD...` | Runs `CMD` (no shell), records its exit code against the current commit |
+| `workorder receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to (needs `origin`) |
+| `workorder receipt deployed --task ID --target NAME -- CMD...` | Runs a read-back command; valid only if it exits 0 and its output contains the full commit ID |
+| `workorder receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
+| `workorder check [ID or tasks/ID.md]` | No argument: reads every task; one line per problem, or `check: OK`. With a task: an explanation of that task alone |
+| `workorder check --staged` | For the pre-commit hook: checks the staged versions of the tasks this commit touches (task file, receipts, contract or its evidence) and the tasks that depend on them; refuses a commit that newly claims DONE or CLOSED on code other than the implemented code; notes changes to a task's requirements |
+| `workorder check --base REF [--allow IDS] [--run-tests]` | Checks changed tasks, including their test files, and their dependents. Refuses stale claims, changed receipts, changed requirements or test lines, new finished definitions, and removed tasks. `--allow` accepts definition changes and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
+| `workorder show --task ID` | The task as a record: recorded and computed status, what is still owed, title, mission, next and test, a dated timeline of its receipts, its Progress notes and the next step |
+| `workorder note --task ID TEXT` | Adds `- YYYY-MM-DD: TEXT` at the end of the task's Progress section (creating it if needed) |
+| `workorder renew --task ID [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded by `renew` |
+| `workorder repair --task ID` | Verifies a conflicted legacy append, keeps the common prefix, and converts each side's extra lines to receipt files |
+| `workorder claim --task ID` / `release --task ID [--force]` | Takes or gives up a task with a pushed tag; `--force` releases a claim whose clone or worktree is gone, and records that it was forced |
+| `workorder claims` | Active claims |
+| `workorder ready` | Open tasks: free, held, blocked, or waiting for delivery |
 
 Every command exits 1 when it refuses something, including a command receipt
-whose command failed. Run commands from the repository root.
+whose command failed and a receipt that was recorded but cannot count (it says
+why). Run commands from the repository root.
 
 ## Task files
 
-`tasks/<id>.md` starts with front matter between two `---` lines, one
+Only files named `tasks/<id>.md` are task records; other files in `tasks/`
+(a README, notes, subfolders) are ignored. A task file starts with front
+matter between two `---` lines, one
 `key: value` per line, each key once. These seven fields are required: `id`,
 `title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
 
-A value is plain single-line text, a JSON string, or a list. NotQuite never
-rewrites a task file after `new`, so whatever formatting you use is left alone,
-byte for byte.
+A value is plain single-line text, a JSON string, or a list. Workorder never
+rewrites a task file after `new`, except that `note` appends one line under
+Progress, so whatever formatting you use is left alone, byte for byte. A task
+file that cannot be read is reported as a problem of that task; the other tasks
+are still checked. Fields starting with `x-` (such as `x-issue`) are your own:
+they are kept and never checked.
 
 ### What YAML is read
 
-Front matter is not parsed as YAML. NotQuite reads this subset and refuses
+Front matter is not parsed as YAML. Workorder reads this subset and refuses
 everything else with a message naming the line:
 
-- `key: value` on one line: plain text, or a JSON string (`"..."`).
+- `key: value` on one line: plain text, a JSON string (`"..."`), or a single-quoted
+  YAML string (`'...'`, with `''` for a quote).
+- Comment lines starting with `#` at the left margin. A UTF-8 byte order mark
+  at the start of the file is ignored.
 - Lists, on one line: JSON (`["TASK-1", "task:TASK-2"]`) or simple
   (`[TASK-1, task:TASK-2]`, items without spaces or quotes).
-- Indented lists for `depends_on`, `blocks` and `waits_on` only:
+- Indented lists for `depends_on`, `blocks`, `waits_on` and `test_paths` only:
 
   ```yaml
   depends_on:
     - TASK-1
     - "TASK-2"
   ```
+
+  The `- item` lines may also start at the left margin, as YAML allows.
 
   A list field with nothing after the colon and no items is an empty list.
 - `>` (folded) and `|` (literal) blocks for `mission`, `next` and `summary`
@@ -58,38 +73,57 @@ everything else with a message naming the line:
 
 Not read, and refused:
 
-- comment lines (`# ...`), anchors and aliases (`&`, `*`), tags (`!`), nested
-  mappings, and multi-line plain or quoted values. A `#` after a value on the
+- anchors and aliases (`&`, `*`), tags (`!`), nested mappings, and
+  multi-line plain or quoted values. A `#` after a value on the
   same line is not a comment here: it stays part of the value;
 - block text on any field other than `mission`, `next` and `summary`, and
-  indented lists on any field other than the three list fields;
+  indented lists on any field other than the four list fields;
 - block indicators with an explicit indentation number (`|2`);
 - a block line indented less than the block's first line (YAML would end the
-  block or treat it as a comment; NotQuite refuses rather than guess).
+  block or treat it as a comment; Workorder refuses rather than guess).
 
 Block values were checked against PyYAML: for the supported forms they read
-the same, except that NotQuite refuses the less-indented lines above.
+the same, except that Workorder refuses the less-indented lines above.
 
 - `id` matches the file name and the pattern `PREFIX-N`, for example `TASK-12`.
-- `status`: `IN_PROGRESS`, `BLOCKED`, `DONE` or `CLOSED`.
+- `status`: `IN_PROGRESS`, `BLOCKED`, `DONE`, `CLOSED` or `CANCELLED` (needs no
+  evidence, is never a finished dependency, and is left out of `ready`).
 - `ships`: `none`, `repo` or `live`.
 - `waits_on`: a JSON list of `task:<id>` or `person:<name>`.
 - `contract`: `none` or a repository-relative path.
 
 ### Extended fields
 
-`notquite new --template extended` writes these optional fields too, in this
-order: `id`, `title`, `owner`, `business_owner`, `priority`, `created_at`,
+`workorder new` (and `--template extended`) writes these optional fields too,
+in this order: `id`, `title`, `owner`, `business_owner`, `priority`, `created_at`,
 `mission`, `depends_on`, `blocks`, `next`, `summary`, `status`, `ships`,
-`waits_on`, `contract`. The body gets `## Context`, `## Scope`, `## Lanes`,
+`waits_on`, `test`, `contract`. The body gets `## Context`, `## Scope`, `## Lanes`,
 `## Acceptance` and `## Progress` sections. Any subset of the optional fields
-may be used; any other field is refused, so typos are caught.
+may be used; any other field (except `x-` fields) is refused, so typos are caught.
 
 - `business_owner`, `priority`, `mission`, `next`, `summary`: text, may be
   empty. Not used by any check.
 - `created_at`: empty or an ISO date or time (`2026-11-14`,
   `2026-11-14T09:30:00Z`). `new` fills in today's UTC date.
 - `depends_on`: task ids (`TASK-2` or `task:TASK-2`). Not the task itself.
+- `test`: the task's test command as one line, or `any`. A DONE or CLOSED
+  claim needs it set (an empty or missing `test` is owed as "a declared test").
+  A command means only a `test` receipt whose command is exactly this counts,
+  and `receipt test --task ID` with nothing after it runs it; `any` accepts any
+  recorded command. `new --test COMMAND` fills it in. Words split on
+  spaces, quotes group words, backslashes are kept as written, and shell
+  operators (`&&`, `|`, `;`, `>`) are refused: put compound steps in a script.
+- `test_paths`: an optional list of repository paths, for example
+  `["tests/test_list.py", "tests/integration"]`. A folder includes every file
+  below it. Paths must stay inside the repository. If absent, existing file
+  and folder paths in the `test` command are used, including quoted paths and
+  pytest node paths such as `tests/test_list.py::test_sort`. Both the base and
+  current definitions are read, so deleting a file or removing a path from
+  the task cannot hide a change. An explicit empty list selects no test files.
+  Changing `test_paths` itself needs `--allow ID` under `--base`.
+- `merge_ref`: a full branch ref, such as `refs/heads/release` or
+  `refs/remotes/origin/release`. Overrides the computed merge target. Short
+  names and tag refs are refused. An absent target does not prove a merge.
 - `blocks`: task ids. Informational: `check` reports a `blocks` entry that
   names an unknown task, or two tasks that each say they block the other, but
   never makes a task wait because of it.
@@ -99,71 +133,306 @@ may be used; any other field is refused, so typos are caught.
 `waits_on` and `depends_on` form one dependency list: `waits_on` items plus
 `task:<id>` for each `depends_on` id, without repeats. Listing a task in both
 is allowed. A DONE or CLOSED claim is refused until every task dependency
-computes DONE or CLOSED and no `person:` wait remains. A task may not both
+is finished and no `person:` wait remains. A task dependency is finished when
+it says DONE or CLOSED, its evidence computes DONE or CLOSED, and its own
+dependencies are finished, all the way down; a reopened or cancelled task is
+not finished. `ready` lists open dependencies as blocked. A task may not both
 wait for and block the same task. Missing task dependencies and dependency
-cycles, across both fields, make `check` fail.
+cycles, across both fields, make `check` fail. Each cycle is reported on its
+participating tasks. `check` continues checking other tasks, and `ready`
+continues listing them.
 
-None of the extended fields or sections can satisfy or replace evidence; the
-only extended field that affects a verdict is `depends_on`, and it can only
-add requirements.
+Planning fields and sections do not supply evidence. `depends_on` adds
+dependencies, `test` selects the command that counts, and `merge_ref` selects
+the branch used to compute delivery.
 
 ## How the status is computed
 
-- **IN_PROGRESS** until there is an `implemented` receipt, the latest `test`
-  receipt on the same commit and code after it is passing and valid, and every
-  critical contract criterion is met. A later failing or invalid run on that
-  commit revokes an earlier pass; a later passing run restores it. Runs on any
-  other commit are recorded but ignored.
+- **IN_PROGRESS** until the task declares a `test` (or `any`), there is an
+  `implemented` receipt, the latest `test`
+  receipt on the same code after it is passing and valid, and every critical
+  contract criterion is met. A later failing or invalid run on that code
+  revokes an earlier pass; a later passing run restores it. Runs on different
+  code are recorded but ignored, and the receipt command exits 1.
 - **DONE** when that holds.
 - **CLOSED** when DONE and delivery is complete:
   - `ships: none`: nothing more.
-  - `ships: repo`: a `merged` receipt, after the implementation, whose code
-    matches the implemented code.
-  - `ships: live`: also a valid `deployed` receipt after that merge, with the
-    implemented code, then a valid `live` receipt for the same commit and
+  - `ships: repo`: a computed merge (see below), or a `merged` receipt after
+    the implementation, whose commit
+    contains the implemented commit or whose code matches the implemented
+    code. Any such receipt counts; a later one that cannot count does not undo
+    it.
+  - `ships: live`: also a valid `deployed` receipt after that merge, whose
+    commit contains the implemented commit or holds its code, then a valid
+    `live` receipt for the same commit and
     target. "Valid" means the read-back command exited 0 and returned the
     expected commit ID. It does not show which server answered or that it is
-    production.
+    production. With a computed merge, read-backs after the implementation
+    are judged as after the merge. A deployment can also contain the matched
+    squash or rebase commit. The live read-back must still follow deployment
+    and name the same commit and target.
 
 Only receipts after the newest `implemented` receipt count. Recording a new
 implementation starts the evidence again.
 
 A `test` receipt is valid only if the command exited 0, and the working tree
-was still clean with HEAD unchanged when it finished.
+was still clean with HEAD unchanged when it finished. When the task declares a
+`test`, only receipts whose command is exactly that one decide.
 
-"Code" is a SHA-256 over the commit's file listing, leaving out `tasks/` and
-`.notquite/`. Committing task files and receipts does not change it, so they
-can be committed after the evidence is recorded. The commit does change, so a
-test run after that commit does not count, pass or fail, until a new
-`implemented` receipt is recorded on it.
+"Code" is a SHA-256 over the commit's file listing, leaving out `tasks/`,
+`.workorder/` and `.notquite/`. Committing task files and receipts does not change it, so they
+can be committed after the evidence is recorded, and later runs on the same
+code, on any commit, still count.
 
-The verdict looks only at the newest `implemented` receipt, never at HEAD:
-code committed after it without a new `implemented` receipt is not checked.
+The verdict looks only at the newest `implemented` receipt, never at HEAD. A
+DONE or CLOSED claim must therefore be made on the implemented code:
 
-Receipts name commits. If those commits disappear (a squash or rebase merge
-whose branch is then deleted), `check` refuses in any clone that lacks them.
-Use merge commits for branches that carry receipts.
+- An uncommitted claim (the task says DONE or CLOSED, HEAD's copy does not) is
+  compared with HEAD's code, or with the index under `--staged`.
+- A committed claim is traced through the task file's history to the commit
+  that made it (since `REF` with `--base REF`), and that commit's code is
+  compared with the implementation the claim relied on, unless a newer
+  `implemented` receipt was recorded after it. A claim carried into a verified
+  squash or rebase is accepted on that merged change, from any checkout.
+  For all merge methods (ancestry, same code, squash and rebase), a claim on
+  commit C descending from the matched landing M must have the same content
+  as M on every code path changed by the implementation. A revert, overwrite,
+  deletion or rename of those paths before C needs `workorder renew --task ID`
+  on the claimed code. Changes confined to unrelated paths are allowed.
+  Changing DONE to CLOSED makes a new claim, including in the index or
+  working tree; the earlier DONE does not excuse changed code at CLOSED.
+  A valid claim at or before M stays valid when later commits change those paths.
+- After a branch rebase, the claim also counts when its code diff from its
+  merge base with the target has the same `git patch-id --stable` as the
+  implementation's code diff from its own merge base with that target.
+  Both patches must be nonempty. Task files and receipts are excluded.
+  Unrelated changes on main do not invalidate the claim. A changed patch
+  still needs fresh evidence. Merging main into the branch also works.
+
+`check <id>` adds a note when HEAD's code differs, and a `Command:` line naming
+the command behind the deciding test run. Code that lands after a task is DONE
+does not reopen it.
+
+Receipts name commits. A receipt whose commit is not in this clone (after a
+squash merge, a rebase or an amend once the originals are gone, or in a
+shallow clone) is kept. It counts again when a commit in this clone holds
+exactly the code it recorded: HEAD, or a commit that touched the task or its
+receipts, such as the squash commit. Otherwise it does not count, and
+`renew --task ID` records the evidence again on the new commit.
+
+## Computed merges
+
+For `ships: repo` or `live`, no `merged` receipt is needed when Git history
+shows one of these matches:
+
+1. The implemented commit is an ancestor of the target.
+2. A code-changing commit on the target holds exactly the implemented code.
+3. The code diff from the merge base to the implementation has the same
+   `git patch-id --stable` as a commit on the target after that base (squash).
+4. Every code commit from the merge base to the implementation has a patch
+   equivalent on the target after that base (rebase, using `git cherry`
+   semantics). At least one code patch must match. Merge resolutions in the
+   implementation range are not guessed from their separate parent patches.
+
+Code patches exclude `tasks/`, `.workorder/` and `.notquite/`. Empty patches
+and changes confined to those folders cannot supply a patch match. Tests,
+contracts and dependencies still have to pass. An existing `merged` receipt
+continues to count by the original ancestry or code-fingerprint rules.
+
+Ancestry names the first landing on the target's first-parent history;
+same-code and patch searches keep the earliest matching landing within the
+search window. For fast-forwards, Git records no branch boundary: the path
+comparison uses the task's most recent open period before implementation,
+or the implementation's parent if the task was introduced later. This is
+conservative when unrelated work also happened during that open period.
+Without the original history, the available landing tree is protected.
+
+The target is `merge_ref` when set; otherwise the first existing branch in
+this order: `refs/remotes/origin/main`, `refs/remotes/origin/master`,
+`refs/heads/main`, `refs/heads/master`. `origin/HEAD` is ignored, even if it
+points to a feature branch. A remote `merge_ref` must name both the remote
+and its branch (`refs/remotes/<remote>/<branch>`).
+A commit only on local `main` is not merged when `origin/main` exists until
+it is pushed (pushing updates the local copy of `origin/main`). Checks read local refs without
+fetching. Checks use this target from any checkout, including feature
+branches and detached checkouts. The checked-out feature branch is never
+used as its own merge target.
+
+The search examines up to 1,000 target commits after the merge base. Rebase
+comparison also limits the implementation range to 1,000 commits; a partial
+range never proves a rebase. Ancestry is checked before the bounded search.
+Results and code fingerprints are cached in `.git/workorder-digests/`, keyed
+by immutable commit IDs. The cache is local and can be removed. Each command
+also shares receipt and Git reads in memory, then discards those reads.
+Committed metadata blobs are read in batches. Linear task histories share one
+history walk; merge histories retain Git's per-task history rules.
+
+Patch checks need the original implementation history. If it is absent,
+Workorder can still recognise exactly matching code. It does not reconstruct
+a missing patch from the receipt. Fetch that history or renew the evidence.
+When the target's change differs, `next_step` suggests
+`workorder renew --task ID` on main or `workorder receipt merged`. If the
+matching change is on local main but not the selected origin/main, the next
+step says to push main instead.
+`show` and `check` explain a match, for example:
+`merged into main by squash 1a2b3c4, computed`.
+
+## Checks against a base
+
+`check --base REF` selects tasks whose records, receipts, contracts, evidence
+or test files changed since REF, and their dependents. A folder in `test_paths`
+includes all its files. Without `test_paths`, paths named in `test` are used if
+they exist at the base or in the checkout. Plain additions to test files pass.
+Removed or changed lines require reviewer acceptance, even when the task file
+itself did not change. Renames count as deleting the old path and adding the
+new one. Binary edits also need acceptance. A refusal looks like:
+
+```text
+TASK-4: its test files lost or changed 2 lines since origin/main (tests/test_list.py); a reviewer accepts it with --allow TASK-4
+```
+
+A task file absent at the base but claimed DONE or CLOSED in this change
+needs acceptance of its definition:
+
+```text
+TASK-4 was created and claimed DONE in the same change; a reviewer accepts its definition with --allow TASK-4
+```
+
+Removing a task file is refused by default, even if it has no receipts. With
+`--allow ID`, a task that was DONE, CLOSED or CANCELLED at the base may be
+removed together with all its receipts in both receipt folders. Partial
+removal, removal of an unfinished task, and changes to receipts of a retained
+task are still refused. Dependents must still have valid dependencies.
+
+The check also walks every commit in `REF..HEAD` and refuses receipt files
+deleted or modified there, naming the paths in either receipt directory.
+This includes receipts first added after REF and edits later restored, which
+comparing the base and HEAD alone cannot detect. The complete task removal
+exception above also exempts that task's receipts from this history check.
+
+`--allow` takes comma-separated ids. It accepts definition changes and the
+complete removal described above. It does not excuse missing evidence,
+unfinished dependencies or failing tests.
+
+Every check mode prints a summary after its result and notes:
+
+```text
+checked 3 tasks (2 claimed DONE or CLOSED); ran 2 declared tests
+```
+
+The test count appears only with `--run-tests`. It counts commands actually
+started, including failures. A command that could not start does not count.
+If none ran, another line says `no declared test ran in this check`. A task
+with `test: any` has no declared command to rerun. Only selected tasks with
+supported DONE or CLOSED claims have their tests run. Counts describe the
+selected tasks, including unreadable or removed tasks; unreadable claims are
+not included in the claim count. A single-task check counts that task only.
+Exit codes are unchanged: 0 for acceptance, 1 for refusal.
+
+### GitHub Actions
+
+The hook and plain local checks judge recorded evidence. This workflow runs
+the declared tests again. It reads `workorder-allow:<ID>` labels from the pull
+request event and passes their ids to `--allow`. Only reviewers who may
+accept these changes should apply those labels. Label text is read as data;
+it is never inserted into shell code.
+
+```yaml
+name: Workorder
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+permissions: {contents: read}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}   # receipts refer to earlier commits
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install workorder==0.5.0
+      - name: Check tasks and run their tests
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          # task ids from pull request labels named workorder-allow:<ID>
+          allow=$(jq -r '[.pull_request.labels[].name | select(test("^workorder-allow:[A-Z][A-Z0-9]*-[1-9][0-9]*$")) | sub("^workorder-allow:"; "")] | join(",")' "$GITHUB_EVENT_PATH")
+          workorder check --base "$BASE" --run-tests ${allow:+--allow "$allow"}
+```
 
 ## Receipts
 
-`.notquite/receipts/<id>.jsonl` holds one JSON object per line. Every receipt
-has `task`, `kind`, `at`, `who` (`user.name@hostname`), `commit`, `code`,
-`previous` (the hash of the receipt before it, or empty) and `hash` (SHA-256 of
-the receipt without `hash`). Command receipts add `command`, `exit_code` and
-`valid`. Read-backs add `target` and `output_sha256`. Merges add `ref`.
+New receipts use this layout:
 
-The checker refuses a broken chain, a receipt whose `code` does not match its
-commit, and any change to receipts already in `HEAD` other than appending.
-A ledger without a matching task file is reported.
+```text
+.workorder/receipts/TASK-1/20261114T093000.123456Z-a1b2c3d4e5f6.json
+```
 
-The append-only rule compares the working tree or the index with `HEAD` only.
-It protects receipts while you commit, through `check --staged` in the
-pre-commit hook. Once a commit that drops receipts exists (for example one made
-with `git commit --no-verify`), `check` on that commit compares it with itself
-and passes; it does not look at earlier commits.
+Each file holds one packed JSON object and ends with LF. Its name is the UTC
+time followed by the first 12 hex digits of its hash. Every receipt has
+`task`, `kind`, `at`, `who` (Git `user.name`), `commit`, `code`, `parents` and
+`hash`. The hash is SHA-256 of the packed object without `hash`. Command
+receipts add `command`, `exit_code` and `valid`. Read-backs add `target` and
+`output_sha256`. Recorded merges add `ref`.
 
-None of this is signed. Anyone who can write the file and run SHA-256 can
-create a receipt that passes.
+`parents` lists the hashes of all current heads for that task: receipts no
+other receipt follows. The first receipt has no parents. Branches can add
+files independently; the next receipt after merging follows both heads.
+Writers for one task in one clone take the lock in `.git/workorder-locks/`.
+
+Old `.workorder/receipts/<ID>.jsonl` and `.notquite/receipts/<ID>.jsonl` files
+are still read and verified as `previous` chains. Leave them in place. If
+both folders contain a chain for one task, one must be a prefix of the other.
+New receipts never append to either file. The first new receipt follows the
+last legacy hash. `entries()` returns the legacy chain first, then new
+receipts with parents before children. Among available receipts it orders
+by `at`, then hash. The last entry in that order is the newest. Each returned
+object also has a read-only `missing` flag for an absent commit.
+
+The checker refuses:
+
+- Content whose hash does not match, or a filename that disagrees with the
+  hash or UTC time.
+- A missing parent: "a receipt this one follows is missing: removed or not
+  yet merged". Invalid parents and cycles are refused too.
+- A receipt whose code fingerprint disagrees with its commit.
+- A committed receipt file that changed or disappeared. New files are
+  allowed. A legacy ledger must retain its committed text as a prefix.
+- A receipt ledger without its task file.
+
+These rules apply to the working tree against HEAD, the index under
+`check --staged`, and the base revision under `check --base REF`.
+Line-ending conversion from LF to CRLF is allowed. A deletion already
+committed with hooks skipped cannot be found by comparing HEAD with itself;
+use `--base` to check both the earlier revision and intervening commits for
+receipt-file deletions or modifications. The complete removal of
+a finished or cancelled task has the explicit exception below.
+
+### Repair
+
+Run `workorder repair --task ID` on a legacy ledger with Git conflict markers
+from two branches appending receipts. It accepts one complete append conflict,
+including diff3 markers with an empty base part. It verifies the common prefix
+and each side's full chain before writing anything. Ambiguous markers, changed
+hashes, broken chains and lines after the conflict are refused.
+
+Repair keeps the common prefix in the JSONL file. It converts each side's
+extra receipts into files, preserving each side's order. The first on each
+side follows the prefix's last hash, or has no parents for an empty prefix.
+Hashes change because `parents` replaces `previous`. Contract references to
+the original test hashes still count. Each converted receipt
+also includes its original object in `legacy`. This lets HEAD and `--base`
+verify an exact move of a committed legacy tail in the current snapshot.
+The separate `--base` history check still refuses committed modifications
+to the JSONL file anywhere in `REF..HEAD`, including appends or repairs;
+new receipt files avoid modifying that ledger. This verified conversion is
+the only exception to the legacy prefix rule; dropping or changing a receipt
+is still refused. Repair prints the counts. Stage the prefix and new files
+to finish resolving the conflict.
+
+Anyone who can write files and compute SHA-256 can create a receipt that
+passes these checks.
 
 ## Contracts
 
@@ -193,27 +462,59 @@ All are tags on `origin` pointing at small JSON blobs. Without an `origin`
 remote, `new` numbers ids locally (nothing is reserved) and `claim`, `release`
 and `claims` refuse; there is no local claim.
 
-- `refs/tags/notquite/ids/<id>`: the id reservation made by `new`.
-- `refs/tags/notquite/claims/<id>/<n>`: claim number `n`.
-- `refs/tags/notquite/releases/<id>/<claim object>`: the release of that claim.
+- `refs/tags/workorder/ids/<id>`: the id reservation made by `new`.
+- `refs/tags/workorder/claims/<id>/<n>`: claim number `n`.
+- `refs/tags/workorder/releases/<id>/<claim object>`: the release of that claim.
 
 A push that would replace an existing tag is rejected by Git, so the first
-clone to push wins. The claim token is kept in `.git/notquite-claims/<id>` and
+clone to push wins. The claim token is kept in `.git/workorder-claims/<id>` and
 is never committed or pushed. The claim tag stores only its SHA-256 hash
 (`token_sha256`); `claim` and `release` compare against that hash.
+
+`claim` and `ready` also fetch origin's main branch (master if main is absent)
+into the private `refs/workorder/upstream` ref in the same fetch as missing
+claim tags. They refresh it even when all tags are already cached, without
+changing the checkout or remote-tracking branches. `claim` refuses a task
+whose upstream record is DONE, CLOSED or CANCELLED, for example:
+`TASK-2 is already DONE on origin/main (by agent-b); pull to update`.
+The name is the author of the latest commit touching that task record.
+`ready` lists an outdated open task as
+`finished on origin/main; pull to update`, even after its claim was released.
+When origin is unreachable, `ready` uses local records and its existing
+offline note; it never reuses an old upstream snapshot. `claim` still refuses
+when origin cannot be reached.
 Force-pushes and tag deletion by anyone with push access bypass all of this;
-protect `notquite/*` tags if it matters.
+protect `workorder/*` tags if it matters.
 
 ## Compatibility
 
-- Task files in the seven-field format read exactly as in 0.1.0, and plain
-  `notquite new` writes the same bytes as 0.1.0.
+- Workorder was called NotQuite up to 0.2.0 (PyPI `notquite`). From 0.3.0 the
+  command, the package and the data paths are `workorder`: receipts in
+  `.workorder/`, ids and claims under `refs/tags/workorder/`, claim tokens in
+  `.git/workorder-claims/`. Earlier releases used `git mv .notquite .workorder`
+  to move receipts. Version 0.4 also reads `.notquite/receipts/` in place;
+  leave committed ledgers there. `.notquite/` stays outside the code fingerprint. Ids and
+  claims made under `refs/tags/notquite/` are not read; task numbering
+  continues from the task files.
+- Task files in the seven-field format read exactly as in 0.1.0, and
+  `workorder new --template simple` writes the same bytes as 0.1.0. From 0.3.0,
+  plain `workorder new` writes the extended format.
 - 0.1.0 refuses any task file that uses an extended field or the YAML forms
   above. Once one task uses them, every clone, hook and CI pin needs 0.2.0 or
   later.
-- Receipts are unchanged. Task files are left out of the code fingerprint, so
+- Version 0.4 writes separate receipt files and still reads legacy JSONL
+  chains. Upgrade every writer and checker before using the new layout.
+  Task files are left out of the code fingerprint, so
   switching a task from the simple to the extended format, in either YAML or
   JSON style, keeps its receipts valid.
+- 0.3.0 requires a declared `test` for DONE and CLOSED. Tasks from earlier
+  versions keep their receipts; add `test: "<command>"`, or `test: any` to keep
+  the old behaviour, before claiming DONE.
+- 0.3.0 reads the same receipts with three differences. A test run counts when
+  its code matches the implemented code, on any commit, so a DONE that was
+  hiding a later failing run on the same code becomes IN_PROGRESS. A receipt
+  that is recorded but cannot count exits 1. New receipts and claims record
+  only `user.name`.
 
 ## Line endings
 
