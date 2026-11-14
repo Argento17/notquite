@@ -888,9 +888,17 @@ def extended(root, tid="TASK-1", status="IN_PROGRESS", ships="repo", body=None, 
     return path
 
 
-def test_default_new_output_is_byte_identical_to_v010(local_repo):
-    ok(local_repo, "new", "--title", "Solo work", "--owner", "solo")
+def test_simple_template_output_is_byte_identical_to_v010(local_repo):
+    ok(local_repo, "new", "--title", "Solo work", "--owner", "solo", "--template", "simple")
     assert (local_repo / "tasks/TASK-1.md").read_text(encoding="utf-8") == V010_SIMPLE
+
+
+def test_new_writes_the_extended_task_by_default(local_repo):
+    ok(local_repo, "new", "--title", "Solo work", "--owner", "solo")
+    text = (local_repo / "tasks/TASK-1.md").read_text(encoding="utf-8")
+    assert list(store.record(local_repo, "TASK-1")) == list(store.EXTENDED_ORDER)
+    for section in ("Context", "Scope", "Lanes", "Acceptance", "Progress"):
+        assert f"\n## {section}\n" in text
 
 
 def test_v010_plain_scalar_records_still_read(clones):

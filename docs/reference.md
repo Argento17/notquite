@@ -7,7 +7,7 @@ code in `notquite/`; if the two disagree, the code wins and this file has a bug.
 
 | Command | What it does |
 |---|---|
-| `notquite new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template simple\|extended]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote; writes `tasks/<id>.md` |
+| `notquite new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote; writes `tasks/<id>.md` (extended by default; `simple` writes the seven required fields only) |
 | `notquite receipt implemented --task ID` | Records the current commit as the implementation; refuses uncommitted or untracked code |
 | `notquite receipt test --task ID -- CMD...` | Runs `CMD` (no shell), records its exit code against the current commit |
 | `notquite receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to (needs `origin`) |
@@ -80,8 +80,8 @@ the same, except that NotQuite refuses the less-indented lines above.
 
 ### Extended fields
 
-`notquite new --template extended` writes these optional fields too, in this
-order: `id`, `title`, `owner`, `business_owner`, `priority`, `created_at`,
+`notquite new` (and `--template extended`) writes these optional fields too,
+in this order: `id`, `title`, `owner`, `business_owner`, `priority`, `created_at`,
 `mission`, `depends_on`, `blocks`, `next`, `summary`, `status`, `ships`,
 `waits_on`, `contract`. The body gets `## Context`, `## Scope`, `## Lanes`,
 `## Acceptance` and `## Progress` sections. Any subset of the optional fields
@@ -213,8 +213,9 @@ protect `notquite/*` tags if it matters.
 
 ## Compatibility
 
-- Task files in the seven-field format read exactly as in 0.1.0, and plain
-  `notquite new` writes the same bytes as 0.1.0.
+- Task files in the seven-field format read exactly as in 0.1.0, and
+  `notquite new --template simple` writes the same bytes as 0.1.0. From 0.2.1,
+  plain `notquite new` writes the extended format.
 - 0.1.0 refuses any task file that uses an extended field or the YAML forms
   above. Once one task uses them, every clone, hook and CI pin needs 0.2.0 or
   later.

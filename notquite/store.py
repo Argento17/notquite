@@ -349,7 +349,7 @@ def task_text(tid, data, template):
             + f"---\n\n# {tid}\n" + EXTENDED_BODY)
 
 
-def new(root, title, owner, ships="repo", prefix="TASK", template="simple"):
+def new(root, title, owner, ships="repo", prefix="TASK", template="extended"):
     repository(root)
     if template not in {"simple", "extended"}:
         raise Refused("template must be simple or extended")

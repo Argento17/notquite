@@ -14,7 +14,7 @@ from . import store as s
 
 def parser():
     result = argparse.ArgumentParser(
-        prog="notquite", description="Checks whether DONE actually means done.",
+        prog="notquite", description="A task format for coding agents: define the work, track the evidence, verify DONE.",
         epilog="Pass a test or read-back command after --, for example: "
                "notquite receipt test --task TASK-1 -- python -m pytest")
     result.add_argument("--version", action="version", version=f"notquite {__version__}")
@@ -25,9 +25,9 @@ def parser():
     new.add_argument("--ships", choices=["none", "repo", "live"], default="repo",
                      help="what CLOSED needs beyond DONE (default: repo)")
     new.add_argument("--prefix", default="TASK", help="id prefix (default: TASK)")
-    new.add_argument("--template", choices=["simple", "extended"], default="simple",
-                     help="extended adds planning fields and Context/Scope/Lanes/Acceptance/Progress"
-                          " sections (default: simple)")
+    new.add_argument("--template", choices=["extended", "simple"], default="extended",
+                     help="extended: planning fields and Context/Scope/Lanes/Acceptance/Progress sections;"
+                          " simple: the seven required fields only, as in 0.1.0 (default: extended)")
     receipt = commands.add_parser("receipt", help="record evidence: implemented, test, merged, deployed, live")
     receipt.add_argument("kind", choices=sorted(s.KINDS))
     receipt.add_argument("--task", required=True)

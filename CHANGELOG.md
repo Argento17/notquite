@@ -2,6 +2,13 @@
 
 ## 0.2.1
 
+NotQuite is described as what it is: a task format for coding agents (define
+the work, track the evidence, verify DONE), with the DONE check as one part.
+It works alongside CI, not instead of it.
+
+- `notquite new` writes the extended task by default; `--template simple`
+  writes the 0.1.0 seven-field format. The README leads with the task format.
+
 Fixes for what an independent review found; every finding below is now a
 regression test.
 

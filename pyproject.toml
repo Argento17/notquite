@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "notquite"
 version = "0.2.1"
-description = "Checks whether DONE actually means done. Git, tests, merges, and deployment evidence."
+description = "A task format for coding agents: define the work, track the evidence, verify DONE."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "Tom Bar-Haim"}]
-keywords = ["git", "tasks", "testing", "verification", "coding-agents"]
+keywords = ["tasks", "task-format", "coding-agents", "git", "verification"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
