@@ -29,11 +29,46 @@ whose command failed. Run commands from the repository root.
 `key: value` per line, each key once. These seven fields are required: `id`,
 `title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
 
-A value is plain single-line text, a JSON string, or a list. Lists can be JSON
-(`["TASK-1", "task:TASK-2"]`) or simple (`[TASK-1, task:TASK-2]`, items without
-spaces or quotes). This is not YAML: indented `- item` lists and multi-line
-values are refused with an explanation. NotQuite never rewrites a task file
-after `new`, so whatever formatting you use is left alone.
+A value is plain single-line text, a JSON string, or a list. NotQuite never
+rewrites a task file after `new`, so whatever formatting you use is left alone,
+byte for byte.
+
+### What YAML is read
+
+Front matter is not parsed as YAML. NotQuite reads this subset and refuses
+everything else with a message naming the line:
+
+- `key: value` on one line: plain text, or a JSON string (`"..."`).
+- Lists, on one line: JSON (`["TASK-1", "task:TASK-2"]`) or simple
+  (`[TASK-1, task:TASK-2]`, items without spaces or quotes).
+- Indented lists for `depends_on`, `blocks` and `waits_on` only:
+
+  ```yaml
+  depends_on:
+    - TASK-1
+    - "TASK-2"
+  ```
+
+  A list field with nothing after the colon and no items is an empty list.
+- `>` (folded) and `|` (literal) blocks for `mission`, `next` and `summary`
+  only, with optional `-` (strip) or `+` (keep) chomping. They follow YAML:
+  `>` joins lines with spaces, keeps empty lines as line breaks and keeps lines
+  indented further than the block on their own lines.
+- Empty lines between fields.
+
+Not read, and refused:
+
+- comment lines (`# ...`), anchors and aliases (`&`, `*`), tags (`!`), nested
+  mappings, and multi-line plain or quoted values. A `#` after a value on the
+  same line is not a comment here: it stays part of the value;
+- block text on any field other than `mission`, `next` and `summary`, and
+  indented lists on any field other than the three list fields;
+- block indicators with an explicit indentation number (`|2`);
+- a block line indented less than the block's first line (YAML would end the
+  block or treat it as a comment; NotQuite refuses rather than guess).
+
+Block values were checked against PyYAML: for the supported forms they read
+the same, except that NotQuite refuses the less-indented lines above.
 
 - `id` matches the file name and the pattern `PREFIX-N`, for example `TASK-12`.
 - `status`: `IN_PROGRESS`, `BLOCKED`, `DONE` or `CLOSED`.
@@ -152,6 +187,17 @@ is never committed or pushed. The claim tag stores only its SHA-256 hash
 (`token_sha256`); `claim` and `release` compare against that hash.
 Force-pushes and tag deletion by anyone with push access bypass all of this;
 protect `notquite/*` tags if it matters.
+
+## Compatibility
+
+- Task files in the seven-field format read exactly as in 0.1.0, and plain
+  `notquite new` writes the same bytes as 0.1.0.
+- 0.1.0 refuses any task file that uses an extended field or the YAML forms
+  above. Once one task uses them, every clone, hook and CI pin needs 0.2.0 or
+  later.
+- Receipts are unchanged. Task files are left out of the code fingerprint, so
+  switching a task from the simple to the extended format, in either YAML or
+  JSON style, keeps its receipts valid.
 
 ## Line endings
 

@@ -8,8 +8,10 @@
   Progress sections. The default seven-field format is unchanged.
 - `depends_on` and `waits_on` form one dependency list. `blocks` is checked
   for consistency but never enforced. Extended fields never count as evidence.
-- Lists may also be written as `[TASK-1, TASK-2]`. Unsupported YAML, such as
-  indented lists and multi-line values, is refused with an explanation.
+- A small YAML subset is read: `>` and `|` blocks for `mission`, `next` and
+  `summary`, indented `- item` lists for `depends_on`, `blocks` and
+  `waits_on`, simple `[TASK-1, TASK-2]` lists and empty lines between fields.
+  Other YAML is refused with an explanation (see docs/reference.md).
 - Compatibility: v0.1.0 refuses task files that use extended fields. Once any
   task uses them, run v0.2.0 everywhere, including CI pins.
 

@@ -143,7 +143,8 @@ contract: "none"
 - `depends_on` lists tasks this one needs. It means the same as `task:` items in `waits_on`; NotQuite treats both as one dependency list.
 - `blocks` is informational. It is checked against the other tasks but never enforced; to make a task wait, list the dependency on the waiting task.
 - Priority, owners, mission, next, summary and the sections are for people. They never count as evidence: DONE and CLOSED need the same receipts as before.
-- Unknown fields are refused, so a typo cannot quietly drop a dependency. Values stay on one line; longer text goes in the sections.
+- `mission`, `next` and `summary` may be `>` or `|` blocks, and `depends_on`, `blocks` and `waits_on` may be indented `- TASK-1` lists. Other YAML, and unknown fields, are refused, so a typo cannot quietly drop a dependency. The [reference](https://github.com/Argento17/notquite/blob/main/docs/reference.md#what-yaml-is-read) lists exactly what is read.
+- Extended fields need NotQuite 0.2.0 or later. Version 0.1.0 refuses task files that use them, so upgrade every clone and CI pin before adding them.
 
 ## What counts as DONE
 

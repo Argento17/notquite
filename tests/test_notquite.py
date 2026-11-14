@@ -962,8 +962,13 @@ def test_simple_yaml_style_lists_are_read(clones):
 
 
 @pytest.mark.parametrize("change,message", [
-    (("depends_on: []", "depends_on:\n  - TASK-2"), "one `key: value` per line"),
-    (('summary: "A filter button"', "summary: |\n  A filter\n  button"), "one `key: value` per line"),
+    (('priority: "P1"', "priority: |\n  P1"), "priority cannot be a > or | block"),
+    (('summary: "A filter button"', "summary: A filter\n  button"), "indented lines belong only under"),
+    (("depends_on: []", "depends_on:\n  - id: TASK-2"), 'list lines look like "  - TASK-1"'),
+    (('priority: "P1"', '# note: urgent\npriority: "P1"'), "line 6:"),
+    (("depends_on: []", "depends_on: &deps [TASK-2]"), "depends_on must be a list of task ids"),
+    (('summary: "A filter button"', "summary: |2\n    text"), "indented lines belong only under"),
+    (('summary: "A filter button"', 'summary: "A filter\n  button"'), "indented lines belong only under"),
     (('priority: "P1"', 'priorty: "P1"'), "unknown priorty"),
     (('created_at: "2026-11-14"', 'created_at: "14/11/2026"'), "ISO date"),
     (("depends_on: []", 'depends_on: ["person:alex"]'), "people waits go in waits_on"),
@@ -1037,3 +1042,119 @@ def test_blocks_is_informational_but_checked(clones):
     extended(one, "TASK-2", blocks=["TASK-3"])
     extended(one, "TASK-3", blocks=["TASK-2"])
     assert "TASK-2 and TASK-3 each say they block the other" in cli(one, "check").stdout
+
+
+# The YAML subset: > and | blocks for mission/next/summary, indented lists for list fields.
+
+FIXTURES = PACKAGE / "tests/fixtures/yaml-style"
+
+
+def load_fixtures(root):
+    for source in FIXTURES.glob("*.md"):
+        (root / "tasks" / source.name).write_bytes(source.read_bytes())
+
+
+def test_yaml_style_fixtures_read_to_the_expected_values(clones):
+    one, _ = clones
+    load_fixtures(one)
+    records = gate.records(one)
+    full = records["TASK-11"]
+    assert list(full) == list(store.EXTENDED_ORDER)
+    assert full["mission"] == "Let a user share a read-only list with someone else.\nNobody else can edit it.\n"
+    assert full["next"] == "Agree how long a shared link stays valid before building the share button."
+    assert full["summary"] == ("A share button creates a read-only link to the list.\n"
+                               "Links expire, and the owner can revoke them.\n")
+    assert full["depends_on"] == ["TASK-10", "TASK-12"] and full["blocks"] == ["TASK-13"]
+    assert full["waits_on"] == ["person:sam"] and full["created_at"] == "2026-11-14T09:30:00Z"
+    assert store.dependencies(full) == ["person:sam", "task:TASK-10", "task:TASK-12"]
+    partial = records["TASK-12"]
+    assert partial["depends_on"] == [] and partial["blocks"] == ["TASK-11"]
+    assert partial["summary"] == "A list view without edit controls."
+    assert records["TASK-10"]["waits_on"] == [] and "depends_on" not in records["TASK-10"]
+    assert ok(one, "check").strip() == "check: OK"
+    output = ok(one, "ready")
+    assert "TASK-11 blocked: person:sam, task:TASK-10, task:TASK-12" in output
+    assert "TASK-10 free" in output and "TASK-12 free" in output
+
+
+def test_yaml_style_files_are_never_rewritten(clones):
+    one, _ = clones
+    load_fixtures(one)
+    before = {p.name: p.read_bytes() for p in (one / "tasks").glob("TASK-1?.md")}
+    ok(one, "receipt", "implemented", "--task", "TASK-11")
+    ok(one, "receipt", "test", "--task", "TASK-11", "--", PYTHON, "-c", "pass")
+    for args in (("check",), ("check", "TASK-11"), ("show", "--task", "TASK-11"), ("ready",),
+                 ("claim", "--task", "TASK-11"), ("release", "--task", "TASK-11")):
+        ok(one, *args)
+    assert {p.name: p.read_bytes() for p in (one / "tasks").glob("TASK-1?.md")} == before
+
+
+def test_yaml_style_dependencies_hold_back_a_done_claim(clones):
+    one, _ = clones
+    load_fixtures(one)
+    path = one / "tasks/TASK-11.md"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("status: IN_PROGRESS", "status: DONE").replace("ships: live", "ships: none")
+                    .replace("waits_on:\n  - person:sam\n", "waits_on: []\n"), encoding="utf-8")
+    ok(one, "receipt", "implemented", "--task", "TASK-11")
+    ok(one, "receipt", "test", "--task", "TASK-11", "--", PYTHON, "-c", "pass")
+    refused = cli(one, "check", "TASK-11")
+    assert refused.returncode == 1
+    assert "Missing:  task:TASK-10" in refused.stdout and "Missing:  task:TASK-12" in refused.stdout
+
+
+@pytest.mark.parametrize("indicator,expected", [
+    ("|", "one\n  two\n\nthree\n"),
+    ("|-", "one\n  two\n\nthree"),
+    ("|+", "one\n  two\n\nthree\n\n"),
+    (">", "one\n  two\n\nthree\n"),
+    (">-", "one\n  two\n\nthree"),
+    (">+", "one\n  two\n\nthree\n\n"),
+])
+def test_block_text_follows_yaml_for_the_supported_forms(indicator, expected):
+    block = ["    one", "      two", "", "    three", ""]
+    assert store.block_text("TASK-1", "summary", indicator, block) == expected
+
+
+def test_folded_block_joins_ordinary_lines_and_keeps_paragraphs():
+    block = ["  A share button", "  creates a link.", "", "  Links expire."]
+    assert store.block_text("TASK-1", "summary", ">", block) == "A share button creates a link.\nLinks expire.\n"
+
+
+def test_block_text_edge_cases():
+    assert store.block_text("TASK-1", "summary", ">", []) == ""
+    assert store.block_text("TASK-1", "summary", "|", ["", ""]) == ""
+    with pytest.raises(store.Refused, match="keep the indentation"):
+        store.block_text("TASK-1", "summary", "|", ["    one", "  two"])
+
+
+def test_switching_a_simple_task_to_yaml_style_extended_keeps_its_receipts(clones, tmp_path):
+    one, _ = clones
+    task(one, status="IN_PROGRESS", ships="none")
+    commit = implement(one)
+    passed(one)
+    git(one, "add", "tasks", ".notquite")
+    git(one, "commit", "-qm", "Record the evidence")
+    (one / "tasks/TASK-1.md").write_text(
+        "---\nid: TASK-1\ntitle: Add a list filter\nowner: alex\nbusiness_owner: sam\npriority: P1\n"
+        "created_at: 2026-11-14\nsummary: >\n  A filter button that hides\n  completed items.\n"
+        "depends_on:\nblocks:\n  - TASK-2\nstatus: DONE\nships: none\nwaits_on: []\ncontract: none\n"
+        "---\n\n# TASK-1\n\n## Progress\n\n- 2026-11-14: switched to the extended format.\n", encoding="utf-8")
+    task(one, "TASK-2")
+    git(one, "add", "tasks")
+    git(one, "commit", "-qm", "Switch TASK-1 to the extended format")
+    git(one, "push", "-q", "origin", "HEAD:refs/heads/main")
+    fresh = tmp_path / "fresh"
+    git(tmp_path, "clone", "-q", str(Path(git(one, "remote", "get-url", "origin"))), str(fresh))
+    assert ok(fresh, "check").strip() == "check: OK"
+    explained = ok(fresh, "check", "TASK-1")
+    assert explained.startswith("DONE  TASK-1") and f"PASS (exit 0, {commit[:7]})" in explained
+    assert store.entries(fresh, "TASK-1")[0]["commit"] == commit
+
+
+def test_a_hash_after_a_value_stays_part_of_the_value(clones):
+    one, _ = clones
+    path = extended(one)
+    path.write_text(path.read_text(encoding="utf-8").replace('priority: "P1"', "priority: P1 # soon"),
+                    encoding="utf-8")
+    assert store.record(one, "TASK-1")["priority"] == "P1 # soon"
