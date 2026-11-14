@@ -258,6 +258,8 @@ def implementation_at(root, rev, tid):
 
 
 FINISHED = {"DONE", "CLOSED"}
+ACCEPTANCE_NOTE = ("the evidence covers the task's test only, not its Acceptance list;"
+                   " finish every Acceptance item before claiming DONE")
 
 
 def stale_claim(root, record, staged=False, base=None):
@@ -709,6 +711,9 @@ def record_lines(root, tid):
         computed = "IN_PROGRESS"
     lines = [f"{tid} recorded {record['status']}; computed {computed}",
              "still owes: " + (", ".join(stale + done + delivery + open_waits) or "nothing")]
+    if record["status"] not in FINISHED and computed in FINISHED:
+        # Found in the handoff trial: "computed CLOSED, owes nothing" on a half-done task misleads.
+        lines.append("note:     " + ACCEPTANCE_NOTE)
     if s.dependencies(record):
         lines.append("waits_on: " + ", ".join(s.dependencies(record)))
     lines += ["", f"title:    {record['title']}", f"owner:    {record['owner']}"]
@@ -777,6 +782,8 @@ def explain(root, tid):
         lines.append(f"  Note:     the code has changed since {commit}; this verdict is about {commit}")
     if code_note:
         lines.append(f"  Note:     {code_note}")
+    if not debt and claimed not in FINISHED and computed in FINISHED:
+        lines.append(f"  Note:     {ACCEPTANCE_NOTE}")
     if debt:
         lines += [f"  Missing:  {item}" for item in debt]
         lines += [f"  Next:     {next_step(item, record, code_changed)}" for item in debt]

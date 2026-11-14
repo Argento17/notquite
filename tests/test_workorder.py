@@ -1930,3 +1930,12 @@ def test_show_owes_what_check_owes_for_a_stale_claim(local_repo):
     shown = ok(local_repo, "show", "--task", "TASK-1")
     assert "computed IN_PROGRESS" in shown and "a passing test on the code marked DONE" in shown
     assert cli(local_repo, "check").returncode == 1
+
+
+def test_a_half_done_task_with_passing_tests_is_not_presented_as_finished(local_repo):
+    ok(local_repo, "new", "--title", "Calc", "--owner", "solo", "--test", f"{PYTHON} -c pass")
+    finish_with_evidence(local_repo, "TASK-1")
+    shown = ok(local_repo, "show", "--task", "TASK-1")
+    assert "computed CLOSED" in shown
+    assert "note:     the evidence covers the task's test only, not its Acceptance list" in shown
+    assert "not its Acceptance list" in ok(local_repo, "check", "TASK-1")

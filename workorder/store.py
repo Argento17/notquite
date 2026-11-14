@@ -419,10 +419,15 @@ def active_claims(root):
             if int(generation) > latest.get(tid, (0, "", ""))[0]:
                 latest[tid] = (int(generation), ref, oid)
     result = {}
+    # One fetch for every claim that matters, instead of one network round trip per task.
+    wanted = [ref for _, ref, oid in latest.values()
+              if git(root, "cat-file", "-e", oid, required=False).returncode]
+    for start in range(0, len(wanted), 200):
+        git(root, "fetch", "--no-tags", "origin", *wanted[start:start + 200], required=False)
     for tid, (generation, ref, oid) in latest.items():
         released = NAMESPACE + f"releases/{tid}/{oid}" in refs
         try:
-            value = remote_value(root, ref, oid)
+            value = json.loads(git(root, "cat-file", "blob", oid).stdout)
         except (Refused, ValueError):
             continue
         if not isinstance(value, dict):
