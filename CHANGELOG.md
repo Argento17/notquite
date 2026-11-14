@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Documentation corrections; no code change.
+
+- "A later failing run revokes DONE" holds only for runs on the implemented
+  commit. A run after the task file and receipts are committed is recorded but
+  ignored; record `implemented` again before testing again.
+- The verdict follows the newest `implemented` receipt, not HEAD: code committed
+  later without a new receipt is not checked.
+- Append-only is enforced against `HEAD` by the pre-commit hook only. A commit
+  made with `--no-verify` can drop receipts, and `check` in CI does not notice.
+- Squash and rebase merges are not supported: they remove the commits receipts
+  name, and `check` then refuses in fresh clones. Use merge commits.
+
 ## 0.2.0
 
 - Optional extended task format. `notquite new --template extended` adds

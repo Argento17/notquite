@@ -111,8 +111,9 @@ add requirements.
 
 - **IN_PROGRESS** until there is an `implemented` receipt, the latest `test`
   receipt on the same commit and code after it is passing and valid, and every
-  critical contract criterion is met. A later failing or invalid run revokes an
-  earlier pass; a later passing run restores it. No receipt is ever removed.
+  critical contract criterion is met. A later failing or invalid run on that
+  commit revokes an earlier pass; a later passing run restores it. Runs on any
+  other commit are recorded but ignored.
 - **DONE** when that holds.
 - **CLOSED** when DONE and delivery is complete:
   - `ships: none`: nothing more.
@@ -132,7 +133,16 @@ was still clean with HEAD unchanged when it finished.
 
 "Code" is a SHA-256 over the commit's file listing, leaving out `tasks/` and
 `.notquite/`. Committing task files and receipts does not change it, so they
-can be committed after the evidence is recorded.
+can be committed after the evidence is recorded. The commit does change, so a
+test run after that commit does not count, pass or fail, until a new
+`implemented` receipt is recorded on it.
+
+The verdict looks only at the newest `implemented` receipt, never at HEAD:
+code committed after it without a new `implemented` receipt is not checked.
+
+Receipts name commits. If those commits disappear (a squash or rebase merge
+whose branch is then deleted), `check` refuses in any clone that lacks them.
+Use merge commits for branches that carry receipts.
 
 ## Receipts
 
@@ -145,6 +155,12 @@ the receipt without `hash`). Command receipts add `command`, `exit_code` and
 The checker refuses a broken chain, a receipt whose `code` does not match its
 commit, and any change to receipts already in `HEAD` other than appending.
 A ledger without a matching task file is reported.
+
+The append-only rule compares the working tree or the index with `HEAD` only.
+It protects receipts while you commit, through `check --staged` in the
+pre-commit hook. Once a commit that drops receipts exists (for example one made
+with `git commit --no-verify`), `check` on that commit compares it with itself
+and passes; it does not look at earlier commits.
 
 None of this is signed. Anyone who can write the file and run SHA-256 can
 create a receipt that passes.

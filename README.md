@@ -9,9 +9,9 @@ pipx install notquite
 No pipx? On Ubuntu or Debian: `sudo apt install pipx && pipx ensurepath`. Other systems: see the [pipx install guide](https://pipx.pypa.io/stable/how-to/install-pipx.html). Plain `pip install` outside a virtual environment is blocked on recent Ubuntu; the [quick start](#quick-start) uses one.
 
 - A task's status is a claim; its actual state is computed from recorded evidence.
-- DONE needs an implementation on a clean commit plus a passing latest test run on that exact commit. A later failing run revokes it.
+- DONE needs an implementation on a clean commit plus a passing latest test run on that exact commit. A later failing run on that commit revokes it.
 - CLOSED can also require merge and deploy read-back evidence.
-- Three lines in `CLAUDE.md` / `AGENTS.md` hook it into Claude Code or Codex ([see below](#using-it-with-coding-agents)).
+- Three lines in `CLAUDE.md` / `AGENTS.md` tell Claude Code or Codex to use it ([see below](#using-it-with-coding-agents)).
 
 ## Why
 
@@ -21,7 +21,7 @@ Or the tests passed and the code was merged, then came a deploy nobody read back
 
 **NotQuite checks the evidence behind task status.**
 
-Tasks are Markdown files. Each implementation is tied to a Git commit, and test results are recorded against that exact commit. If the required evidence is missing or outdated, DONE fails.
+Tasks are Markdown files. Each implementation is tied to a Git commit, and test results are recorded against that exact commit. If the required evidence is missing, or older than the last recorded implementation, DONE fails.
 
 CLOSED can require more: a merge, a deployment check, and a live read-back command that returned the expected commit ID.
 
@@ -151,11 +151,16 @@ contract: "none"
 ## What counts as DONE
 
 1. `notquite receipt implemented` on a clean, committed tree. Uncommitted or untracked code is refused, so build output belongs in `.gitignore`.
-2. The latest `notquite receipt test -- <command>` on that same commit exited 0, with nothing changed while it ran. A later failure revokes DONE until a later run passes; every run stays in the receipts.
+2. The latest `notquite receipt test -- <command>` on that same commit exited 0, with nothing changed while it ran. A later failure on that commit revokes DONE until a later run passes; every run stays in the receipts.
 3. Every critical contract criterion met, if there is a contract.
 4. Nothing left in `waits_on` or `depends_on`: each task dependency computes DONE or CLOSED, and no `person:` wait remains.
 
 A test recorded before the latest implementation, on another commit, or while files or HEAD changed does not count. Each `receipt test` runs the command itself and records the real exit code. A failed command makes `notquite` exit 1.
+
+NotQuite checks the last recorded implementation, not your latest commit:
+
+- Code committed later without a new `notquite receipt implemented` is not checked.
+- Committing the task file and receipts makes a new commit, so a test run after that is recorded but does not count, pass or fail. To test again, run `notquite receipt implemented` first, then the test.
 
 ## What counts as CLOSED
 
@@ -239,6 +244,8 @@ jobs:
       - run: notquite check
 ```
 
+Use merge commits for branches that carry receipts. Receipts name the commits they were recorded on. A squash or rebase merge followed by deleting the branch removes those commits, and `notquite check` then refuses in every fresh clone.
+
 Pre-commit hook, to refuse committing a false DONE:
 
 ```sh
@@ -248,7 +255,9 @@ chmod +x .git/hooks/pre-commit
 
 ## Limitations
 
-- Receipts are hash-chained and append-only against committed history. They are not signed. Anyone who can write files can forge one, and rewriting Git history rewrites the proof. NotQuite catches missing and stale evidence, not deliberate forgery.
+- Receipts are hash-chained, not signed. Anyone who can write files can forge one, and rewriting Git history rewrites the proof. NotQuite catches missing and stale evidence, not deliberate forgery.
+- Receipts already committed can only be appended to, but only the pre-commit hook enforces this, against the previous commit. `git commit --no-verify` skips the hook, and `notquite check` in CI does not compare the receipts with earlier commits, so a removed receipt goes unnoticed.
+- Squash and rebase merges are not supported yet (see [CI and hooks](#ci-and-hooks)).
 - A passing test is only as good as its assertions.
 - Only task files are checked. Claims made in chat, issues or pull request text are not.
 - Receipts and claims record your Git `user.name` and your computer's hostname, and both are pushed.
