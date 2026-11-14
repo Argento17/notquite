@@ -7,7 +7,7 @@ code in `notquite/`; if the two disagree, the code wins and this file has a bug.
 
 | Command | What it does |
 |---|---|
-| `notquite new --title T --owner O [--ships none\|repo\|live] [--prefix TASK]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote; writes `tasks/<id>.md` |
+| `notquite new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template simple\|extended]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote; writes `tasks/<id>.md` |
 | `notquite receipt implemented --task ID` | Records the current commit as the implementation; refuses uncommitted or untracked code |
 | `notquite receipt test --task ID -- CMD...` | Runs `CMD` (no shell), records its exit code against the current commit |
 | `notquite receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to (needs `origin`) |
@@ -25,10 +25,15 @@ whose command failed. Run commands from the repository root.
 
 ## Task files
 
-`tasks/<id>.md` starts with front matter between two `---` lines. Exactly these
-fields, each once: `id`, `title`, `owner`, `status`, `ships`, `waits_on`,
-`contract`. A value is either plain single-line text or JSON (a value starting
-with `"` or `[` is parsed as JSON). This is not YAML.
+`tasks/<id>.md` starts with front matter between two `---` lines, one
+`key: value` per line, each key once. These seven fields are required: `id`,
+`title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
+
+A value is plain single-line text, a JSON string, or a list. Lists can be JSON
+(`["TASK-1", "task:TASK-2"]`) or simple (`[TASK-1, task:TASK-2]`, items without
+spaces or quotes). This is not YAML: indented `- item` lists and multi-line
+values are refused with an explanation. NotQuite never rewrites a task file
+after `new`, so whatever formatting you use is left alone.
 
 - `id` matches the file name and the pattern `PREFIX-N`, for example `TASK-12`.
 - `status`: `IN_PROGRESS`, `BLOCKED`, `DONE` or `CLOSED`.
@@ -36,7 +41,36 @@ with `"` or `[` is parsed as JSON). This is not YAML.
 - `waits_on`: a JSON list of `task:<id>` or `person:<name>`.
 - `contract`: `none` or a repository-relative path.
 
-Missing task dependencies and dependency cycles make `check` fail.
+### Extended fields
+
+`notquite new --template extended` writes these optional fields too, in this
+order: `id`, `title`, `owner`, `business_owner`, `priority`, `created_at`,
+`mission`, `depends_on`, `blocks`, `next`, `summary`, `status`, `ships`,
+`waits_on`, `contract`. The body gets `## Context`, `## Scope`, `## Lanes`,
+`## Acceptance` and `## Progress` sections. Any subset of the optional fields
+may be used; any other field is refused, so typos are caught.
+
+- `business_owner`, `priority`, `mission`, `next`, `summary`: text, may be
+  empty. Not used by any check.
+- `created_at`: empty or an ISO date or time (`2026-11-14`,
+  `2026-11-14T09:30:00Z`). `new` fills in today's UTC date.
+- `depends_on`: task ids (`TASK-2` or `task:TASK-2`). Not the task itself.
+- `blocks`: task ids. Informational: `check` reports a `blocks` entry that
+  names an unknown task, or two tasks that each say they block the other, but
+  never makes a task wait because of it.
+
+### Dependencies
+
+`waits_on` and `depends_on` form one dependency list: `waits_on` items plus
+`task:<id>` for each `depends_on` id, without repeats. Listing a task in both
+is allowed. A DONE or CLOSED claim is refused until every task dependency
+computes DONE or CLOSED and no `person:` wait remains. A task may not both
+wait for and block the same task. Missing task dependencies and dependency
+cycles, across both fields, make `check` fail.
+
+None of the extended fields or sections can satisfy or replace evidence; the
+only extended field that affects a verdict is `depends_on`, and it can only
+add requirements.
 
 ## How the status is computed
 

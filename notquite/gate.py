@@ -100,7 +100,7 @@ def records(root, staged=False):
 
 def waits(record, all_records, views):
     result = []
-    for wait in record["waits_on"]:
+    for wait in s.dependencies(record):
         kind, value = wait.split(":", 1)
         if kind == "person" or value not in all_records or views[value][0] not in {"DONE", "CLOSED"}:
             result.append(wait)
@@ -127,7 +127,7 @@ def check(root, staged=False):
         if tid in visited:
             return
         visiting.add(tid)
-        for wait in all_records[tid]["waits_on"]:
+        for wait in s.dependencies(all_records[tid]):
             if wait.startswith("task:"):
                 other = wait[5:]
                 if other not in all_records:
@@ -139,6 +139,12 @@ def check(root, staged=False):
 
     for tid, record in all_records.items():
         walk(tid)
+        # blocks is informational: it is checked for consistency but never enforced.
+        for other in record.get("blocks", []):
+            if other not in all_records:
+                problems.append(f"{tid}: blocks unknown task {other}")
+            elif tid in all_records[other].get("blocks", []) and tid < other:
+                problems.append(f"{tid} and {other} each say they block the other")
         debt = claim_debt(record, all_records, views)
         if debt:
             problems.append(f"NOT QUITE  {tid} says {record['status']} but owes: {', '.join(debt)}."
@@ -172,7 +178,8 @@ def next_step(item, record):
         return (f"notquite receipt live --task {tid} --target <name>"
                 " -- <command that prints the commit the live system reports>")
     if item.startswith("task:"):
-        return f"finish {item[5:]} first, or remove {item} from waits_on"
+        field = "depends_on" if item[5:] in record.get("depends_on", []) else "waits_on"
+        return f"finish {item[5:]} first, or remove it from {field}"
     return f"remove {item} from waits_on once it is answered"
 
 

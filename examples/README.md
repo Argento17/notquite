@@ -6,6 +6,7 @@ Invented records for Pocket List, an invented to-do web app. They sit outside
 - `tasks/TASK-1.md` is being built.
 - `tasks/TASK-2.md` waits for a person to supply text.
 - `tasks/TASK-3.md` says DONE with no receipts at all.
+- `tasks/TASK-4.md` uses the extended format and depends on TASK-1.
 - `contracts/save-items.json` asks for REAL evidence and offers only a MOCK.
 
 To watch the false DONE fail, from the root of a Git repository with

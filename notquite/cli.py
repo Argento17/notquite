@@ -25,6 +25,9 @@ def parser():
     new.add_argument("--ships", choices=["none", "repo", "live"], default="repo",
                      help="what CLOSED needs beyond DONE (default: repo)")
     new.add_argument("--prefix", default="TASK", help="id prefix (default: TASK)")
+    new.add_argument("--template", choices=["simple", "extended"], default="simple",
+                     help="extended adds planning fields and Context/Scope/Lanes/Acceptance/Progress"
+                          " sections (default: simple)")
     receipt = commands.add_parser("receipt", help="record evidence: implemented, test, merged, deployed, live")
     receipt.add_argument("kind", choices=sorted(s.KINDS))
     receipt.add_argument("--task", required=True)
@@ -79,7 +82,8 @@ def main(argv=None):
             raise s.Refused("this command does not accept a command after --")
         if options.action == "new":
             shared = s.has_origin(root)
-            tid = s.new(root, options.title, options.owner, options.ships, options.prefix)
+            tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
+                        options.template)
             where = ("reserved on origin" if shared
                      else "local id: no origin remote, so other clones could pick the same id")
             print(f"{tid} opened: tasks/{tid}.md ({where})")
@@ -99,8 +103,9 @@ def main(argv=None):
             computed, done, delivery = gate.verdict(root, record)
             print(f"{options.task} recorded {record['status']}; computed {computed}")
             print("still owes: " + (", ".join(done + delivery) or "nothing"))
-            if record["waits_on"]:
-                print("waits_on: " + ", ".join(record["waits_on"]))
+            needs = s.dependencies(record)
+            if needs:
+                print("waits_on: " + ", ".join(needs))
         elif options.action == "claim":
             held = s.claim(root, options.task)
             print(f"{options.task} held by {held['who']} since {held['at']}")

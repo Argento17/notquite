@@ -114,14 +114,43 @@ Write the original ask here.
 - `waits_on` lists `task:TASK-2` (met when that task computes DONE or CLOSED) or `person:alex` (remove it when answered).
 - `contract` is `none` or a path to a contract file (see below).
 
-Front matter is a small subset: single-line text, JSON strings and JSON lists, not full YAML. Details are in [docs/reference.md](https://github.com/Argento17/notquite/blob/main/docs/reference.md).
+Front matter is a small subset: single-line text, JSON strings and lists, not full YAML. Details are in [docs/reference.md](https://github.com/Argento17/notquite/blob/main/docs/reference.md).
+
+### Extended tasks
+
+For larger work, `notquite new --template extended` adds planning fields and five body sections: Context, Scope, Lanes, Acceptance and Progress. The default stays the seven-field format above, and both formats can sit in the same repository.
+
+```markdown
+---
+id: "TASK-4"
+title: "Sort items by due date"
+owner: "alex"
+business_owner: "sam"
+priority: "P2"
+created_at: "2026-11-14"
+mission: "Show what is due first"
+depends_on: ["TASK-1"]
+blocks: []
+next: "Agree the order for items without a date"
+summary: "A sort option on the list view"
+status: "IN_PROGRESS"
+ships: "repo"
+waits_on: []
+contract: "none"
+---
+```
+
+- `depends_on` lists tasks this one needs. It means the same as `task:` items in `waits_on`; NotQuite treats both as one dependency list.
+- `blocks` is informational. It is checked against the other tasks but never enforced; to make a task wait, list the dependency on the waiting task.
+- Priority, owners, mission, next, summary and the sections are for people. They never count as evidence: DONE and CLOSED need the same receipts as before.
+- Unknown fields are refused, so a typo cannot quietly drop a dependency. Values stay on one line; longer text goes in the sections.
 
 ## What counts as DONE
 
 1. `notquite receipt implemented` on a clean, committed tree. Uncommitted or untracked code is refused, so build output belongs in `.gitignore`.
 2. The latest `notquite receipt test -- <command>` on that same commit exited 0, with nothing changed while it ran. A later failure revokes DONE until a later run passes; every run stays in the receipts.
 3. Every critical contract criterion met, if there is a contract.
-4. Nothing left in `waits_on`: each `task:` wait computes DONE or CLOSED, and no `person:` wait remains.
+4. Nothing left in `waits_on` or `depends_on`: each task dependency computes DONE or CLOSED, and no `person:` wait remains.
 
 A test recorded before the latest implementation, on another commit, or while files or HEAD changed does not count. Each `receipt test` runs the command itself and records the real exit code. A failed command makes `notquite` exit 1.
 
