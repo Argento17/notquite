@@ -235,7 +235,7 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install notquite==0.1.0
+      - run: python -m pip install notquite==0.2.0
       - run: notquite check
 ```
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (proposed, unreleased)
+## 0.2.0
 
 - Optional extended task format. `notquite new --template extended` adds
   `business_owner`, `priority`, `created_at`, `mission`, `depends_on`,
