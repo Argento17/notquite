@@ -1044,7 +1044,12 @@ def ledger_lock(root, tid):
             try:
                 handle = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 break
-            except FileExistsError:
+            except (FileExistsError, PermissionError) as error:
+                # On Windows a lock file that another writer is deleting refuses a new create with
+                # "permission denied" instead of "exists"; both mean the lock is busy. Elsewhere a
+                # permission error is real and is raised.
+                if isinstance(error, PermissionError) and os.name != "nt":
+                    raise
                 if time.monotonic() > deadline:
                     raise Refused(f"{tid}: another receipt is being written; if no workorder command is"
                                   f" running, remove {lock}") from None

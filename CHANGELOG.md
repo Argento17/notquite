@@ -2,6 +2,10 @@
 
 ## 0.6.0 (14 Nov 2026)
 
+- On Windows, receipt writers for one task no longer fail with "permission denied"
+  while another writer releases the task's lock.
+- `init --check` accepts a hook without an executable bit on Windows, where Git
+  runs it anyway.
 - Add idempotent `init`, its read-only `--check`, and `--force` for a different hook.
 - Add `done --task ID [--note TEXT]`: record changed implementation, run the declared test, show Acceptance for confirmation, and set DONE only when supported. Preserve status on refusal; never commit or push.
 - Add opt-in `check --strict-tests`: require acceptance for additions and pytest configuration changes as well as removed or changed test lines. Refuse pytest reruns reporting no passed tests; ordinary reruns note skipped-only output.
