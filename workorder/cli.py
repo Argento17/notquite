@@ -22,7 +22,7 @@ def parser():
     new.add_argument("--title", required=True)
     new.add_argument("--owner", required=True)
     new.add_argument("--ships", choices=["none", "repo", "live"], default="none",
-                     help="what CLOSED needs beyond DONE: nothing, a merge receipt, or also deployment"
+                     help="what CLOSED needs beyond DONE: nothing, a merge, or also deployment"
                           " read-backs (default: none)")
     new.add_argument("--prefix", default="TASK", help="id prefix (default: TASK)")
     new.add_argument("--local", action="store_true",
@@ -53,6 +53,8 @@ def parser():
     note = commands.add_parser("note", help="add a dated line under the task's Progress section")
     note.add_argument("--task", required=True)
     note.add_argument("text", help="what was done, or what is next")
+    repair = commands.add_parser("repair", help="convert a verified legacy append conflict to receipt files")
+    repair.add_argument("--task", required=True)
     commands.add_parser("ready", help="list open work: free, held, blocked or awaiting delivery")
     check = commands.add_parser(
         "check", help="refuse DONE/CLOSED claims the evidence does not support")
@@ -132,6 +134,8 @@ def main(argv=None):
             print("\n".join(gate.record_lines(root, s.task_id(options.task))))
         elif options.action == "note":
             print(f"{options.task}: {s.add_note(root, options.task, options.text)}")
+        elif options.action == "repair":
+            print(s.repair(root, options.task))
         elif options.action == "renew":
             record = s.record(root, options.task)
             command = command or gate.declared_test(record)

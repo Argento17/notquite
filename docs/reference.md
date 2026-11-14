@@ -19,6 +19,7 @@ code in `workorder/`; if the two disagree, the code wins and this file has a bug
 | `workorder show --task ID` | The task as a record: recorded and computed status, what is still owed, title, mission, next and test, a dated timeline of its receipts, its Progress notes and the next step |
 | `workorder note --task ID TEXT` | Adds `- YYYY-MM-DD: TEXT` at the end of the task's Progress section (creating it if needed) |
 | `workorder renew --task ID [-- CMD...]` | Records `implemented` and the task's test again on the current commit, and `merged` if the task ships and there is an `origin`: one step after a squash merge or rebase |
+| `workorder repair --task ID` | Verifies a conflicted legacy append, keeps the common prefix, and converts each side's extra lines to receipt files |
 | `workorder claim --task ID` / `release --task ID [--force]` | Takes or gives up a task with a pushed tag; `--force` releases a claim whose clone or worktree is gone, and records that it was forced |
 | `workorder claims` | Active claims |
 | `workorder ready` | Open tasks: free, held, blocked, or waiting for delivery |
@@ -112,6 +113,9 @@ may be used; any other field (except `x-` fields) is refused, so typos are caugh
   recorded command. `new --test COMMAND` fills it in. Words split on
   spaces, quotes group words, backslashes are kept as written, and shell
   operators (`&&`, `|`, `;`, `>`) are refused: put compound steps in a script.
+- `merge_ref`: a full branch ref, such as `refs/heads/release` or
+  `refs/remotes/origin/release`. Overrides the computed merge target. Short
+  names and tag refs are refused. An absent target does not prove a merge.
 - `blocks`: task ids. Informational: `check` reports a `blocks` entry that
   names an unknown task, or two tasks that each say they block the other, but
   never makes a task wait because of it.
@@ -128,9 +132,9 @@ not finished. `ready` lists open dependencies as blocked. A task may not both
 wait for and block the same task. Missing task dependencies and dependency
 cycles, across both fields, make `check` fail.
 
-None of the extended fields or sections can satisfy or replace evidence. Two
-extended fields affect a verdict, and both can only add requirements:
-`depends_on` (more dependencies) and `test` (only that command counts).
+Planning fields and sections do not supply evidence. `depends_on` adds
+dependencies, `test` selects the command that counts, and `merge_ref` selects
+the branch used to compute delivery.
 
 ## How the status is computed
 
@@ -143,7 +147,8 @@ extended fields affect a verdict, and both can only add requirements:
 - **DONE** when that holds.
 - **CLOSED** when DONE and delivery is complete:
   - `ships: none`: nothing more.
-  - `ships: repo`: a `merged` receipt, after the implementation, whose commit
+  - `ships: repo`: a computed merge (see below), or a `merged` receipt after
+    the implementation, whose commit
     contains the implemented commit or whose code matches the implemented
     code. Any such receipt counts; a later one that cannot count does not undo
     it.
@@ -152,7 +157,10 @@ extended fields affect a verdict, and both can only add requirements:
     `live` receipt for the same commit and
     target. "Valid" means the read-back command exited 0 and returned the
     expected commit ID. It does not show which server answered or that it is
-    production.
+    production. With a computed merge, read-backs after the implementation
+    are judged as after the merge. A deployment can also contain the matched
+    squash or rebase commit. The live read-back must still follow deployment
+    and name the same commit and target.
 
 Only receipts after the newest `implemented` receipt count. Recording a new
 implementation starts the evidence again.
@@ -161,8 +169,8 @@ A `test` receipt is valid only if the command exited 0, and the working tree
 was still clean with HEAD unchanged when it finished. When the task declares a
 `test`, only receipts whose command is exactly that one decide.
 
-"Code" is a SHA-256 over the commit's file listing, leaving out `tasks/` and
-`.workorder/`. Committing task files and receipts does not change it, so they
+"Code" is a SHA-256 over the commit's file listing, leaving out `tasks/`,
+`.workorder/` and `.notquite/`. Committing task files and receipts does not change it, so they
 can be committed after the evidence is recorded, and later runs on the same
 code, on any commit, still count.
 
@@ -174,7 +182,8 @@ DONE or CLOSED claim must therefore be made on the implemented code:
 - A committed claim is traced through the task file's history to the commit
   that made it (since `REF` with `--base REF`), and that commit's code is
   compared with the implementation the claim relied on, unless a newer
-  `implemented` receipt was recorded after it.
+  `implemented` receipt was recorded after it. A claim carried into a verified
+  squash or rebase is accepted on that merged change.
 
 `check <id>` adds a note when HEAD's code differs, and a `Command:` line naming
 the command behind the deciding test run. Code that lands after a task is DONE
@@ -187,31 +196,115 @@ exactly the code it recorded: HEAD, or a commit that touched the task or its
 receipts, such as the squash commit. Otherwise it does not count, and
 `renew --task ID` records the evidence again on the new commit.
 
+## Computed merges
+
+For `ships: repo` or `live`, no `merged` receipt is needed when Git history
+shows one of these matches:
+
+1. The implemented commit is an ancestor of the target.
+2. A code-changing commit on the target holds exactly the implemented code.
+3. The code diff from the merge base to the implementation has the same
+   `git patch-id --stable` as a commit on the target after that base (squash).
+4. Every code commit from the merge base to the implementation has a patch
+   equivalent on the target after that base (rebase, using `git cherry`
+   semantics). At least one code patch must match. Merge resolutions in the
+   implementation range are not guessed from their separate parent patches.
+
+Code patches exclude `tasks/`, `.workorder/` and `.notquite/`. Empty patches
+and changes confined to those folders cannot supply a patch match. Tests,
+contracts and dependencies still have to pass. An existing `merged` receipt
+continues to count by the original ancestry or code-fingerprint rules.
+
+The target is the pushed branch: the branch `refs/remotes/origin/HEAD` points
+to, else `refs/remotes/origin/main`. A repository with neither uses
+`refs/heads/main`. A commit only on local `main` is not merged until it is
+pushed (pushing updates the local copy of `origin/main`).
+A task's `merge_ref` overrides this order. Checks read local refs without
+fetching. A named checkout must be the target branch (or the local branch
+corresponding to an `origin` ref). A detached checkout must be contained in
+the target. A check on a feature branch does not compute its own merge.
+
+The search examines up to 1,000 target commits after the merge base. Rebase
+comparison also limits the implementation range to 1,000 commits; a partial
+range never proves a rebase. Ancestry is checked before the bounded search.
+Results and code fingerprints are cached in `.git/workorder-digests/`, keyed
+by immutable commit IDs. The cache is local and can be removed.
+
+Patch checks need the original implementation history. If it is absent,
+Workorder can still recognise exactly matching code. It does not reconstruct
+a missing patch from the receipt. Fetch that history or renew the evidence.
+When the target's change differs, `next_step` suggests
+`workorder renew --task ID` on main or `workorder receipt merged`.
+`show` and `check` explain a match, for example:
+`merged into main by squash 1a2b3c4, computed`.
+
 ## Receipts
 
-`.workorder/receipts/<id>.jsonl` holds one JSON object per line. Every receipt
-has `task`, `kind`, `at`, `who` (Git `user.name`; receipts written by 0.2.0 or
-earlier carry `user.name@hostname`), `commit`, `code`,
-`previous` (the hash of the receipt before it, or empty) and `hash` (SHA-256 of
-the receipt without `hash`). Command receipts add `command`, `exit_code` and
-`valid`. Read-backs add `target` and `output_sha256`. Merges add `ref`.
+New receipts use this layout:
 
-The checker refuses a broken chain, a receipt whose `code` does not match its
-commit, and any change to receipts already in `HEAD` other than appending.
-A ledger without a matching task file is reported.
+```text
+.workorder/receipts/TASK-1/20261114T093000.123456Z-a1b2c3d4e5f6.json
+```
 
-Receipt commands for one task take a lock in `.git/workorder-locks/`, so two
-at once are written one after the other. The append-only rule compares the
-working tree or the index with `HEAD` only.
-It protects receipts while you commit, through `check --staged` in the
-pre-commit hook. Once a commit that drops receipts exists (for example one made
-with `git commit --no-verify`), plain `check` on that commit compares it with
-itself and passes. `check --base REF` compares every ledger committed on `REF`
-with the current one and refuses if any receipt was removed or changed; run it
-in CI against the pull request's base branch.
+Each file holds one packed JSON object and ends with LF. Its name is the UTC
+time followed by the first 12 hex digits of its hash. Every receipt has
+`task`, `kind`, `at`, `who` (Git `user.name`), `commit`, `code`, `parents` and
+`hash`. The hash is SHA-256 of the packed object without `hash`. Command
+receipts add `command`, `exit_code` and `valid`. Read-backs add `target` and
+`output_sha256`. Recorded merges add `ref`.
 
-None of this is signed. Anyone who can write the file and run SHA-256 can
-create a receipt that passes.
+`parents` lists the hashes of all current heads for that task: receipts no
+other receipt follows. The first receipt has no parents. Branches can add
+files independently; the next receipt after merging follows both heads.
+Writers for one task in one clone take the lock in `.git/workorder-locks/`.
+
+Old `.workorder/receipts/<ID>.jsonl` and `.notquite/receipts/<ID>.jsonl` files
+are still read and verified as `previous` chains. Leave them in place. If
+both folders contain a chain for one task, one must be a prefix of the other.
+New receipts never append to either file. The first new receipt follows the
+last legacy hash. `entries()` returns the legacy chain first, then new
+receipts with parents before children. Among available receipts it orders
+by `at`, then hash. The last entry in that order is the newest. Each returned
+object also has a read-only `missing` flag for an absent commit.
+
+The checker refuses:
+
+- Content whose hash does not match, or a filename that disagrees with the
+  hash or UTC time.
+- A missing parent: "a receipt this one follows is missing: removed or not
+  yet merged". Invalid parents and cycles are refused too.
+- A receipt whose code fingerprint disagrees with its commit.
+- A committed receipt file that changed or disappeared. New files are
+  allowed. A legacy ledger must retain its committed text as a prefix.
+- A receipt ledger without its task file.
+
+These rules apply to the working tree against HEAD, the index under
+`check --staged`, and the base revision under `check --base REF`.
+Line-ending conversion from LF to CRLF is allowed. A deletion already
+committed with hooks skipped cannot be found by comparing HEAD with itself;
+use `--base` to check against the earlier revision.
+
+### Repair
+
+Run `workorder repair --task ID` on a legacy ledger with Git conflict markers
+from two branches appending receipts. It accepts one complete append conflict,
+including diff3 markers with an empty base part. It verifies the common prefix
+and each side's full chain before writing anything. Ambiguous markers, changed
+hashes, broken chains and lines after the conflict are refused.
+
+Repair keeps the common prefix in the JSONL file. It converts each side's
+extra receipts into files, preserving each side's order. The first on each
+side follows the prefix's last hash, or has no parents for an empty prefix.
+Hashes change because `parents` replaces `previous`. Contract references to
+the original test hashes still count. Each converted receipt
+also includes its original object in `legacy`. This lets HEAD and `--base`
+verify an exact move of a committed legacy tail. This verified conversion is
+the only exception to the legacy prefix rule; dropping or changing a receipt
+is still refused. Repair prints the counts. Stage the prefix and new files
+to finish resolving the conflict.
+
+Anyone who can write files and compute SHA-256 can create a receipt that
+passes these checks.
 
 ## Contracts
 
@@ -257,9 +350,9 @@ protect `workorder/*` tags if it matters.
 - Workorder was called NotQuite up to 0.2.0 (PyPI `notquite`). From 0.3.0 the
   command, the package and the data paths are `workorder`: receipts in
   `.workorder/`, ids and claims under `refs/tags/workorder/`, claim tokens in
-  `.git/workorder-claims/`. To carry a NotQuite repository over, move the
-  folder with `git mv .notquite .workorder` and commit. Old receipts still
-  verify, because `.notquite/` stays outside the code fingerprint. Ids and
+  `.git/workorder-claims/`. Earlier releases used `git mv .notquite .workorder`
+  to move receipts. Version 0.4 also reads `.notquite/receipts/` in place;
+  leave committed ledgers there. `.notquite/` stays outside the code fingerprint. Ids and
   claims made under `refs/tags/notquite/` are not read; task numbering
   continues from the task files.
 - Task files in the seven-field format read exactly as in 0.1.0, and
@@ -268,7 +361,9 @@ protect `workorder/*` tags if it matters.
 - 0.1.0 refuses any task file that uses an extended field or the YAML forms
   above. Once one task uses them, every clone, hook and CI pin needs 0.2.0 or
   later.
-- Receipts are unchanged. Task files are left out of the code fingerprint, so
+- Version 0.4 writes separate receipt files and still reads legacy JSONL
+  chains. Upgrade every writer and checker before using the new layout.
+  Task files are left out of the code fingerprint, so
   switching a task from the simple to the extended format, in either YAML or
   JSON style, keeps its receipts valid.
 - 0.3.0 requires a declared `test` for DONE and CLOSED. Tasks from earlier

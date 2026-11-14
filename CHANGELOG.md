@@ -1,12 +1,26 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+- Write one file per receipt. Parent hashes let branches add receipts for the
+  same task and merge without editing one shared file. Legacy JSONL chains
+  still verify, including receipts kept under `.notquite/`.
+- Refuse changed or deleted committed receipt files in plain, staged and
+  base checks. Verify file names, hashes and missing parents.
+- Add `workorder repair --task ID` for verified legacy append conflicts.
+- Compute merges from ancestry, identical code, squash patches and rebased
+  patches. No merge receipt or extra commit on main is needed.
+- Select the target from origin/HEAD or origin/main, else local main; allow a task
+  to override it with `merge_ref`. Checks do not fetch.
+- Bound and cache merge searches. Show the match in `show` and `check`, and
+  explain how to renew evidence when the merged code differs.
+- Count deployment and live read-backs after a computed merge.
+
 ## 0.3.0
 
 NotQuite is now **Workorder: the task record for coding agents**. Every task is
 recorded in the repository with a clear history, agents go back to it at the
-start of every session, and DONE is checked against that history. It works
-alongside CI, not instead of it. The check still says NOT QUITE when it refuses
-a claim.
+start of every session, and DONE is checked against that history. The check still says NOT QUITE when it refuses a claim.
 
 Name and format
 - New name everywhere: PyPI project `workorder`, the `workorder` command and

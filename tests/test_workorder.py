@@ -92,6 +92,10 @@ def readback(root, kind, stamp=None, target="demo"):
                "--", PYTHON, "-c", f"print({(stamp or store.head(root))!r})")
 
 
+def receipt_files(root):
+    return sorted((root / ".workorder/receipts/TASK-1").glob("*.json"))
+
+
 def test_two_clones_reserve_different_ids_without_pushing_records(clones):
     one, two = clones
     assert "TASK-2 opened" in ok(one, "new", "--title", "Store items", "--owner", "alex")
@@ -176,6 +180,7 @@ def test_test_receipt_runs_command_and_keeps_the_real_failure(clones):
 
 def test_done_needs_a_test_on_the_implemented_commit(clones):
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     old = implement(one)
     passed(one)
     task(one, status="DONE")
@@ -232,6 +237,7 @@ def test_missing_test_executable_is_recorded_as_failure(clones):
 @pytest.mark.parametrize("ships,computed", [("none", "CLOSED"), ("repo", "DONE"), ("live", "DONE")])
 def test_delivery_rules_are_computed(clones, ships, computed):
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     task(one, ships=ships)
     implement(one)
     passed(one)
@@ -242,6 +248,7 @@ def test_delivery_rules_are_computed(clones, ships, computed):
 
 def test_repo_closes_only_after_merge_of_tested_code(clones):
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     implement(one)
     passed(one)
     task(one, status="CLOSED")
@@ -253,6 +260,7 @@ def test_repo_closes_only_after_merge_of_tested_code(clones):
 
 def test_merge_of_different_code_is_not_delivery(clones):
     one, two = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     (one / "app.py").write_text("items = ['mine']\n", encoding="utf-8")
     git(one, "commit", "-qam", "My change, not pushed")
     implement(one)
@@ -392,6 +400,7 @@ def test_malformed_contract_is_refused(clones, value):
 
 def test_ready_reports_free_held_blocked_and_delivery(clones):
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     task(one, "TASK-2", waits=["task:TASK-1", "person:bo"], status="BLOCKED")
     task(one, "TASK-3")
     assert "TASK-1 free" in ok(one, "ready")
@@ -427,26 +436,26 @@ def test_finished_record_cannot_owe_a_person(clones):
 def test_committed_receipts_cannot_be_rewritten_or_deleted(clones):
     one, _ = clones
     implement(one)
-    path = store.ledger_path("TASK-1")
+    path = receipt_files(one)[0].relative_to(one).as_posix()
     git(one, "add", path)
     git(one, "commit", "-qm", "Record implementation", "--", path)
     (one / path).write_text("", encoding="utf-8")
     found = cli(one, "check")
-    assert "append-only" in found.stdout + found.stderr
+    assert "committed receipt file removed or changed" in found.stdout + found.stderr
     (one / path).unlink()
     found = cli(one, "check")
-    assert "append-only" in found.stdout + found.stderr
+    assert "committed receipt file removed or changed" in found.stdout + found.stderr
 
 
 def test_hand_edit_breaks_receipt_chain(clones):
     one, _ = clones
     implement(one)
-    path = one / store.ledger_path("TASK-1")
+    path = receipt_files(one)[0]
     value = json.loads(path.read_text())
     value["commit"] = "0" * 40
     path.write_text(json.dumps(value) + "\n", encoding="utf-8")
     found = cli(one, "check")
-    assert "broken receipt chain" in found.stdout + found.stderr
+    assert "receipt content does not match its hash" in found.stdout + found.stderr
 
 
 def test_staged_check_uses_index_and_hook_refuses_false_done(clones):
@@ -515,12 +524,13 @@ def test_test_before_implementation_does_not_complete_task(clones):
 def test_recomputed_hash_cannot_hide_wrong_code_digest(clones):
     one, _ = clones
     implement(one)
-    path = one / store.ledger_path("TASK-1")
+    path = receipt_files(one)[0]
     value = json.loads(path.read_text())
     value.pop("hash")
     value["code"] = "0" * 64
     value["hash"] = store.digest(store.packed(value).encode())
     path.write_text(store.packed(value) + "\n", encoding="utf-8")
+    path.rename(path.with_name(store.receipt_name(value)))
     found = cli(one, "check")
     assert "code does not match" in found.stdout + found.stderr
 
@@ -643,6 +653,7 @@ def test_explain_rejects_a_test_from_an_older_commit(clones):
 
 def test_explain_accepts_valid_done_and_shows_the_passing_test(clones):
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     commit = implement(one)[:7]
     passed(one)
     task(one, status="DONE")
@@ -655,12 +666,13 @@ def test_explain_accepts_valid_done_and_shows_the_passing_test(clones):
 
 def test_explain_refuses_closed_without_merge(clones):
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     implement(one)
     passed(one)
     task(one, status="CLOSED")
     result = cli(one, "check", "TASK-1")
     assert result.returncode == 1 and "Result: NOT CLOSED" in result.stdout
-    assert "Next:     merge the tested commit, then: workorder receipt merged --task TASK-1" in result.stdout
+    assert "workorder renew --task TASK-1 on main, or record workorder receipt merged --task TASK-1" in result.stdout
     merge(one)
     assert cli(one, "check", "TASK-1").returncode == 0
 
@@ -736,6 +748,7 @@ def test_shallow_clone_explains_missing_history(clones, tmp_path):
 
 def test_latest_test_run_decides_and_history_is_kept(clones):
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     commit = implement(one)[:7]
     task(one, status="DONE")
     fail = [PYTHON, "-c", "raise SystemExit(2)"]
@@ -767,6 +780,7 @@ def test_a_later_uncounted_run_also_revokes_done(clones):
 
 def test_a_failure_before_a_new_implementation_does_not_count_against_it(clones):
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     implement(one)
     cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "raise SystemExit(1)")
     (one / "app.py").write_text("items = ['fixed']\n", encoding="utf-8")
@@ -823,19 +837,20 @@ def test_records_and_receipts_are_written_with_lf_on_every_platform(clones):
     ok(one, "new", "--title", "Line endings", "--owner", "alex")
     implement(one)
     passed(one)
-    for path in ("tasks/TASK-2.md", store.ledger_path("TASK-1")):
+    for path in ("tasks/TASK-2.md", *receipt_files(one)):
         assert b"\r\n" not in (one / path).read_bytes(), path
 
 
 def test_crlf_checkout_of_committed_records_still_verifies(clones):
     """What Git on Windows with core.autocrlf does to committed text files."""
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     implement(one)
     passed(one)
     task(one, status="DONE")
     git(one, "add", "tasks", ".workorder")
     git(one, "commit", "-qm", "Record the evidence")
-    for path in ("tasks/TASK-1.md", store.ledger_path("TASK-1")):
+    for path in ("tasks/TASK-1.md", *receipt_files(one)):
         data = (one / path).read_bytes()
         (one / path).write_bytes(data.replace(b"\n", b"\r\n"))
     assert ok(one, "check").strip() == "check: OK"
@@ -970,6 +985,7 @@ def test_extended_template_writes_every_field_and_section(local_repo):
 
 def test_extended_fields_never_stand_in_for_evidence(clones):
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     extended(one, status="DONE", ships="none", priority="P0", summary="Done and shipped",
              next="nothing left", business_owner="the whole company")
     refused = cli(one, "check", "TASK-1")
@@ -1318,8 +1334,8 @@ def test_check_base_finds_receipts_dropped_in_a_later_commit(clones):
     cli(one, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "raise SystemExit(1)")
     base = commit_receipts(one)
     ok(one, "check", "--base", base)
-    ledger = one / store.ledger_path("TASK-1")
-    ledger.write_text(ledger.read_text(encoding="utf-8").splitlines(keepends=True)[0], encoding="utf-8")
+    ledger = receipt_files(one)[0]
+    receipt_files(one)[-1].unlink()
     git(one, "commit", "-qam", "Drop the failing run")  # the helper skips hooks, like --no-verify
     ok(one, "check")  # without a base, the commit is compared only with itself
     refused = cli(one, "check", "--base", base)
@@ -1339,7 +1355,7 @@ def test_receipts_and_claims_no_longer_carry_the_hostname(clones):
     ok(one, "claim", "--task", "TASK-1")
     host = socket.gethostname()
     assert store.entries(one, "TASK-1")[-1]["who"] == "one"
-    assert host not in (one / store.ledger_path("TASK-1")).read_text(encoding="utf-8")
+    assert host not in receipt_files(one)[0].read_text(encoding="utf-8")
     assert claim_tag_value(one)["who"] == "one"
 
 
@@ -1350,6 +1366,7 @@ def test_receipts_and_claims_no_longer_carry_the_hostname(clones):
 ])
 def test_delivery_receipts_that_cannot_count_exit_1_with_a_reason(clones, ships, kind, message):
     one, _ = clones
+    git(one, "checkout", "-q", "-b", "feature")  # main is the computed merge target
     task(one, ships=ships)
     implement(one)
     passed(one)

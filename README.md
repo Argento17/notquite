@@ -13,11 +13,11 @@ No pipx? On Ubuntu or Debian: `sudo apt install pipx && pipx ensurepath`. Other 
 Workorder keeps each task as a record in your repository. A coding agent starts every session from the task, works within it, and leaves it up to date. The next session, or the next agent, picks up where the last one stopped.
 
 - **Recorded:** each task is a Markdown file in `tasks/`. It holds the mission, scope, acceptance criteria, dependencies, the test that proves it, and progress notes, in a format people and agents both read and write.
-- **A clear history:** receipts record what was implemented and tested, on which commit, with which command, by whom. They are chained and never rewritten. `workorder show` prints the task with that history as a timeline.
+- **A clear history:** receipts record what was implemented and tested, on which commit, with which command, by whom. Each receipt is a separate file, linked to the receipts it follows. Committed receipts stay unchanged. `workorder show` prints the task with that history as a timeline.
 - **Agents go back to it:** a short block in `CLAUDE.md` / `AGENTS.md` makes the agent start each session with `workorder show` and end it with `workorder note` ([see below](#working-with-coding-agents)).
 - **DONE is checked:** `status: DONE` is a claim. `workorder check` compares it with the history and says what is missing.
 
-It works alongside your CI and issue tracker, not instead of them. Workorder was called NotQuite up to version 0.2.0.
+Workorder was called NotQuite up to version 0.2.0.
 
 ## Why
 
@@ -81,7 +81,7 @@ Out: changing how dates are entered.
 - **`status`** is the claim: `IN_PROGRESS`, `BLOCKED`, `DONE`, `CLOSED`, or `CANCELLED` for work that will not be done (it needs no evidence and leaves `ready`). You or the agent edit it. Workorder never edits it and never trusts it.
 - **`test`** is the command that proves the task. A task needs one to be DONE: only a run of exactly that command counts, and `workorder receipt test --task <id>` runs it. For work no single command proves, `test: "any"` says so explicitly and accepts any recorded command. No shell runs it: words split on spaces, quotes group words, backslashes stay as written, and `&&` or pipes are refused (use a script).
 - **`depends_on`** lists tasks this one needs. `waits_on` takes `task:TASK-2` or `person:alex` items (remove a person wait when it is answered). Both form one dependency list, and a task cannot be DONE while one is open. A dependency is finished when it says DONE or CLOSED, its evidence supports that, and its own dependencies are finished. `blocks` is informational: it is checked against the other tasks but never enforced.
-- **`ships`** sets what CLOSED needs beyond DONE: `none` (the default), `repo` (a merge receipt) or `live` (also deployment read-backs).
+- **`ships`** sets what CLOSED needs beyond DONE: `none` (the default), `repo` (the tested change on the target branch) or `live` (also deployment read-backs).
 - **`contract`** is `none` or a path to a contract that maps each acceptance criterion to evidence Workorder can check ([see below](#contracts-and-evidence)). Without one, the Acceptance list is for the agent and the reviewer; Workorder does not read it.
 - **Your own fields** start with `x-`, such as `x-issue: "#42"`. They are kept and never checked.
 
@@ -102,7 +102,7 @@ Workorder reads task files and recorded evidence. It does not watch conversation
 - After committing code, run `workorder receipt implemented --task <id>`, then `workorder receipt test --task <id>` (it runs the task's `test`).
 - Set status DONE only when every Acceptance item is met, then run `workorder check <id>`. If it reports NOT QUITE, set the status back and report its Missing lines instead of saying the task is done.
 - Before you stop, record where you are with `workorder note --task <id> "<what was done; what is next>"`, keep `next` current, then commit tasks/ and .workorder/ with your work and push.
-- If the task's `ships` is `repo` or `live`: after the change is merged, on the main branch run `workorder receipt merged --task <id>` (or `workorder renew --task <id>` after a squash merge), set CLOSED only if `workorder check <id>` passes, then commit and push again.
+- If the task's `ships` is `repo` or `live`: after the change is merged, run `workorder check <id>` on main. It computes the merge from Git history. No merge receipt or extra commit is needed. If the merged change differs, run `workorder renew --task <id>` on main and test it again.
 ```
 
 ## Quick start
@@ -188,7 +188,7 @@ Claims always need `origin`. Without a remote there are no claims at all: Workor
 4. Every critical contract criterion met, if there is a contract.
 5. Nothing left in `waits_on` or `depends_on`, and no `person:` wait.
 
-"Code" is every tracked file outside `tasks/` and `.workorder/`, so committing the task file and receipts does not change it: a later run on the same code still counts, pass or fail. A test recorded before the latest implementation, on different code, or while files or HEAD changed does not count. A receipt that is recorded but cannot count, such as a test on code that changed since `receipt implemented`, says why and exits 1. `workorder check <id>` shows the command behind the deciding run.
+"Code" is every tracked file outside `tasks/`, `.workorder/` and `.notquite/`, so committing the task file and receipts does not change it: a later run on the same code still counts, pass or fail. A test recorded before the latest implementation, on different code, or while files or HEAD changed does not count. A receipt that is recorded but cannot count, such as a test on code that changed since `receipt implemented`, says why and exits 1. `workorder check <id>` shows the command behind the deciding run.
 
 A DONE is about the last recorded implementation:
 
@@ -203,16 +203,48 @@ DONE, plus what the task ships:
 | `ships` | Also needs |
 |---|---|
 | `none` | nothing |
-| `repo` | `receipt merged`: the tested code is on `origin`'s `main` (`--ref refs/heads/<branch>` to change) |
+| `repo` | the tested change is on the target branch, or a qualifying `merged` receipt |
 | `live` | the merge, then `receipt deployed --target <name> -- <command>`, then a later `receipt live --target <name> -- <command>` |
 
-`receipt merged` and `receipt deployed` count when that commit contains the implemented commit (a merge commit or a fast-forward, with any other work beside it) or holds exactly its code. A merge receipt that counted stays counted.
+Workorder checks the pushed branch: the one `origin/HEAD` names, else `origin/main`; with no remote, local `main`. A commit only on your local `main` does not count as merged until it is pushed. Set `merge_ref: refs/heads/release` in the task to choose another target. It uses local refs and does not fetch. Checking on the feature branch does not compute a merge.
 
-A deployment or live read-back counts when its command exits 0 and its output contains the expected full commit ID. Workorder reads back; it does not deploy. A passing read-back shows that the command returned that commit ID, nothing more. `receipt merged` reads from `origin`, so `repo` and `live` tasks need a remote.
+A recorded `merged` receipt still counts when its commit contains the implemented commit or holds exactly its code. A merge receipt that counted stays counted. Deployment read-backs can also name a commit containing the computed squash or rebase merge.
+
+A deployment or live read-back counts when its command exits 0 and its output contains the expected full commit ID. Workorder reads back; it does not deploy. A passing read-back shows that the command returned that commit ID, nothing more. `receipt merged` reads from `origin` and needs a remote. Computed merges do not need one.
 
 ## Squash merges and rebases
 
-Receipts name the commits they were recorded on. A squash merge, a rebase or an amend replaces those commits. When the new commit holds exactly the code the receipts recorded (a squash onto an unchanged main), the evidence still counts: Workorder finds that code on the commit that brought the task in. When it does not (main had moved on), `workorder renew --task TASK-1` records `implemented` and the task's test again on the merged code, and the merge if the task ships, in one command. Other tasks are never affected. With merge commits nothing needs renewing.
+Workorder computes the merge without writing a receipt. It checks whether the
+target contains the implemented commit, holds the same code, has the same code
+patch after a squash, or has a patch equivalent to every code commit after a
+rebase. Changes to task files and receipts do not count as code patches.
+`show` and `check` name the matching commit and how it matched.
+
+A squash onto a main that changed other files can count. If main changed the
+same lines and the resulting patch differs, it does not count. Run
+`workorder renew --task TASK-1` on main to record and test the merged code,
+or record `workorder receipt merged` when its commit carries the tested code.
+
+Patch comparisons need the original commits in the clone. When they are gone,
+the same-code check can still work. Otherwise fetch the original history or
+renew the evidence. Searches examine at most 1,000 target commits and 1,000
+implementation commits. Results are cached under `.git/workorder-digests/`.
+
+## Receipt files
+
+New receipts live in
+`.workorder/receipts/<ID>/<UTC time>-<first 12 hash digits>.json`, one packed
+JSON object per file. Each names its `parents`: all current heads for that task.
+Two branches can add receipts for the same task without editing the same file.
+After the branches merge, the next receipt names both heads.
+
+Old `.workorder/receipts/<ID>.jsonl` and `.notquite/receipts/<ID>.jsonl` chains
+still verify. New receipts follow their last hash and leave the old file alone.
+Missing parents, changed hashes, wrong filenames, and changes or deletions to
+committed receipts are refused. `check --base REF` also checks against `REF`.
+For an old append conflict, run `workorder repair --task ID`. It verifies both
+sides, keeps the common prefix, and converts the extra lines into receipt files.
+See the [reference](docs/reference.md#receipts) for the repair rules.
 
 ## Contracts and evidence
 
@@ -271,7 +303,7 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install workorder==0.3.0
+      - run: python -m pip install workorder==0.4.0
       - run: workorder check --base origin/${{ github.base_ref }} --run-tests
 ```
 
@@ -284,9 +316,9 @@ What `--base` adds, beyond what the pre-commit hook can promise (`git commit --n
 
 ## Limitations
 
-- Receipts are hash-chained, not signed. Anyone who can write files can forge one, and rewriting Git history rewrites the proof. Workorder catches missing and stale evidence, not deliberate forgery; `--run-tests` in CI is the answer when that matters.
+- Anyone who can write files and compute SHA-256 can create a receipt. Rewriting Git history also rewrites its record. `--run-tests` runs the declared tests during the check.
 - A passing test is only as good as its assertions, and the task's `test` is part of the task file: `workorder check --base` refuses a change to it until a reviewer allows it.
-- Receipts already committed can only be appended to. The pre-commit hook enforces this against the previous commit, and `workorder check --base <branch>` against the base branch. Without `--base`, a commit made with `git commit --no-verify` can remove receipts unnoticed.
+- Committed receipt files stay unchanged; new files can be added. Legacy ledgers keep their committed prefix. The pre-commit hook enforces this against the previous commit, and `workorder check --base <branch>` against the base branch. Without `--base`, a commit made with `git commit --no-verify` can remove receipts unnoticed.
 - A DONE is about the code that was implemented and tested. Code that lands after a task is DONE does not reopen it; `workorder check <id>` notes the change.
 - Only task files are checked. Claims made in chat, issues or pull request text are not.
 - Receipts and claims record your Git `user.name`, and it is pushed. Receipts written by 0.2.0 or earlier also carry the computer's hostname, and keep it.

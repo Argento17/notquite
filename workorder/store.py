@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import hmac
+import heapq
 import json
 import os
 from pathlib import Path
@@ -109,7 +110,7 @@ CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract"
 # adding requirements (dependencies; the one test command that counts); the rest is information for
 # people and never stands in for evidence.
 EXTENDED_FIELDS = ("business_owner", "priority", "created_at", "mission", "depends_on", "blocks",
-                   "next", "summary", "test")
+                   "next", "summary", "test", "merge_ref")
 EXTENDED_ORDER = ("id", "title", "owner", "business_owner", "priority", "created_at", "mission",
                   "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "test",
                   "contract")
@@ -276,6 +277,11 @@ def record(root, tid, staged=False):
         raise Refused(f"{tid}: unknown status {fields['status']!r}; use {', '.join(STATUSES)}")
     if fields["ships"] not in {"none", "repo", "live"}:
         raise Refused(f"{tid}: ships must be none, repo or live")
+    if "merge_ref" in fields:
+        ref = fields["merge_ref"]
+        if (not isinstance(ref, str) or not ref.startswith(("refs/heads/", "refs/remotes/"))
+                or git(root, "check-ref-format", ref, required=False).returncode):
+            raise Refused(f"{tid}: merge_ref must be a full branch ref")
     waits = fields["waits_on"]
     if not isinstance(waits, list) or any(
         not isinstance(w, str) or not re.fullmatch(rf"(?:task:{TASK_REF}|person:[^:\s][^:]*)", w)
@@ -534,64 +540,276 @@ def ledger_path(tid):
     return f".workorder/receipts/{task_id(tid)}.jsonl"
 
 
-def entries(root, tid, staged=False):
-    path = ledger_path(tid)
-    if staged:
-        present = git(root, "cat-file", "-e", f":{path}", required=False).returncode == 0
-    else:
-        present = local_path(root, path).is_file()
-    text = read_text(root, path, staged) if present else ""
-    # Existing committed receipts are an immutable prefix, including during staging.
-    old = git(root, "show", f"HEAD:{path}", required=False)
-    if old.returncode == 0 and not text.startswith(old.stdout):
-        raise Refused(f"{tid}: ledger is append-only")
+RECEIPT_DIRS = (".workorder/receipts", ".notquite/receipts")
+
+
+def receipt_task(path):
+    """The task owning either receipt layout; ignore notes beside the ledgers."""
+    parts = path.split("/")
+    if len(parts) not in (3, 4) or "/".join(parts[:2]) not in RECEIPT_DIRS:
+        return None
+    tid = parts[2].removesuffix(".jsonl") if len(parts) == 3 else parts[2]
+    if ID.fullmatch(tid) and path.endswith(".jsonl" if len(parts) == 3 else ".json"):
+        return tid
+    return None
+
+
+def receipt_paths(root, staged=False, rev=None):
+    if rev:
+        return git(root, "ls-tree", "-r", "--name-only", rev, "--", *RECEIPT_DIRS,
+                   required=False).stdout.splitlines()
+    return [p for directory in RECEIPT_DIRS for p in files(root, directory, staged)]
+
+
+def receipt_texts(root, tid, staged=False, rev=None):
+    return {p: (git(root, "show", f"{rev}:{p}").stdout.replace("\r\n", "\n") if rev
+                else read_text(root, p, staged))
+            for p in receipt_paths(root, staged, rev) if receipt_task(p) == tid}
+
+
+def verify_receipt(root, tid, value):
+    if not isinstance(value, dict):
+        raise Refused(f"{tid}: receipt must be an object")
+    item = dict(value)
+    checksum = item.pop("hash", None)
+    if checksum != digest(packed(item).encode()):
+        raise Refused(f"{tid}: receipt content does not match its hash")
+    if (item.get("task") != tid or item.get("kind") not in KINDS
+            or not isinstance(item.get("who"), str) or not item["who"].strip()
+            or not isinstance(item.get("at"), str)
+            or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", str(item.get("commit", "")))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("code", "")))):
+        raise Refused(f"{tid}: invalid receipt fields")
+    dt.datetime.fromisoformat(item["at"])
+    present = has_commit(root, item["commit"])
+    if present and code_digest(root, item["commit"]) != item["code"]:
+        raise Refused(f"{tid}: receipt code does not match its commit")
+    if item["kind"] in {"test", "deployed", "live"}:
+        if (type(item.get("exit_code")) is not int or type(item.get("valid")) is not bool
+                or not isinstance(item.get("command"), list) or not item["command"]
+                or any(not isinstance(a, str) for a in item["command"])):
+            raise Refused(f"{tid}: command receipt needs its arguments, exit code and validity")
+    return {**item, "hash": checksum, "missing": not present}
+
+
+def legacy_entries(root, tid, text):
     result, previous = [], ""
     for line in text.splitlines():
-        item = json.loads(line)
-        if not isinstance(item, dict):
-            raise Refused(f"{tid}: receipt must be an object")
-        checksum = item.pop("hash", None)
-        if checksum != digest(packed(item).encode()) or item.get("previous") != previous:
-            raise Refused(f"{tid}: broken receipt chain (receipts edited by hand, or written by two commands"
-                          " at once; drop the uncommitted lines from the first broken one and record again)")
-        if (item.get("task") != tid or item.get("kind") not in KINDS
-                or not isinstance(item.get("who"), str) or not item["who"].strip()
-                or not isinstance(item.get("at"), str)
-                or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", str(item.get("commit", "")))
-                or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("code", "")))):
-            raise Refused(f"{tid}: invalid receipt fields")
-        dt.datetime.fromisoformat(item["at"])
-        # A commit can vanish after a squash merge, a rebase or an amend, or be absent from a shallow
-        # clone. Such a receipt is kept but never counts; it does not block the rest of the repository.
-        present = has_commit(root, item["commit"])
-        if present and code_digest(root, item["commit"]) != item["code"]:
-            raise Refused(f"{tid}: receipt code does not match its commit")
-        if item["kind"] in {"test", "deployed", "live"}:
-            if (type(item.get("exit_code")) is not int or type(item.get("valid")) is not bool
-                    or not isinstance(item.get("command"), list) or not item["command"]
-                    or any(not isinstance(a, str) for a in item["command"])):
-                raise Refused(f"{tid}: command receipt needs its arguments, exit code and validity")
-        item["hash"] = checksum
-        item["missing"] = not present  # read-only marker, never written or hashed
+        try:
+            item = verify_receipt(root, tid, json.loads(line))
+        except (ValueError, TypeError) as error:
+            raise Refused(f"{tid}: broken receipt chain ({error}); conflict markers need"
+                          f" workorder repair --task {tid}") from None
+        if item.get("previous") != previous:
+            raise Refused(f"{tid}: broken receipt chain (receipts edited or not in order)")
         result.append(item)
-        previous = checksum
+        previous = item["hash"]
     return result
+
+
+def receipt_name(item):
+    stamp = dt.datetime.fromisoformat(item["at"])
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=dt.timezone.utc)  # old receipts allowed naive ISO dates
+    stamp = stamp.astimezone(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    return f"{stamp}-{item['hash'][:12]}.json"
+
+
+def ordered_entries(root, tid, texts):
+    legacy = []
+    for path, text in sorted(texts.items()):
+        if path.endswith(".jsonl"):
+            chain = legacy_entries(root, tid, text)
+            overlap = min(len(legacy), len(chain))
+            if [e["hash"] for e in legacy[:overlap]] != [e["hash"] for e in chain[:overlap]]:
+                raise Refused(f"{tid}: legacy receipt chains disagree")
+            if len(chain) > len(legacy):
+                legacy = chain
+    items = {}
+    for path, text in sorted(texts.items()):
+        if not path.endswith(".json"):
+            continue
+        try:
+            item = verify_receipt(root, tid, json.loads(text))
+        except (ValueError, TypeError) as error:
+            raise Refused(f"{tid}: {path}: {error}") from None
+        if Path(path).name != receipt_name(item):
+            raise Refused(f"{tid}: receipt file name does not match its hash or UTC time: {path}")
+        parents = item.get("parents")
+        if (not isinstance(parents, list) or any(not isinstance(p, str) or not re.fullmatch(r"[0-9a-f]{64}", p)
+                                                for p in parents)
+                or len(set(parents)) != len(parents) or "previous" in item):
+            raise Refused(f"{tid}: receipt parents must be distinct hashes")
+        if item["hash"] in items:
+            raise Refused(f"{tid}: duplicate receipt {item['hash']}")
+        items[item["hash"]] = item
+    seen = {e["hash"] for e in legacy}
+    all_hashes = seen | items.keys()
+    converted = {}
+    for item in items.values():
+        if "legacy" in item:
+            original = verify_receipt(root, tid, item["legacy"])
+            if ("previous" not in original or "parents" in original
+                    or any(item.get(k) != v for k, v in original.items()
+                           if k not in {"hash", "previous", "missing"})):
+                raise Refused(f"{tid}: repaired receipt differs from its legacy object")
+            converted[original["hash"]] = item["hash"]
+    for item in items.values():
+        if "legacy" in item:
+            previous = item["legacy"]["previous"]
+            parent = previous if previous in seen else converted.get(previous)
+            if (previous and parent is None) or item["parents"] != ([parent] if previous else []):
+                raise Refused(f"{tid}: repaired receipt does not follow its legacy parent")
+    children, degrees, ready = {}, {}, []
+    for checksum, item in items.items():
+        if any(parent not in all_hashes for parent in item["parents"]):
+            raise Refused(f"{tid}: a receipt this one follows is missing: removed or not yet merged")
+        pending = [parent for parent in item["parents"] if parent not in seen]
+        degrees[checksum] = len(pending)
+        for parent in pending:
+            children.setdefault(parent, []).append(checksum)
+        if not pending:
+            heapq.heappush(ready, (item["at"], checksum))
+    result = list(legacy)
+    while ready:
+        _, checksum = heapq.heappop(ready)
+        result.append(items[checksum])
+        for child in children.get(checksum, []):
+            degrees[child] -= 1
+            if not degrees[child]:
+                heapq.heappush(ready, (items[child]["at"], child))
+    if len(result) != len(legacy) + len(items):
+        raise Refused(f"{tid}: receipt parents form a cycle")
+    return result
+
+
+def repaired_prefix(root, tid, before, after, history):
+    """A repair may move a legacy tail only with an exact, verified copy of every old object.
+
+    The original objects stay inside the new receipts so HEAD and --base can verify the move.
+    No other legacy rewrite is allowed.
+    """
+    if not before.startswith(after):
+        return False
+    old = legacy_entries(root, tid, before)
+    prefix = legacy_entries(root, tid, after)
+    mapping = {e["hash"]: e["hash"] for e in prefix}
+    converted = {e["legacy"]["hash"]: e for e in history
+                 if isinstance(e.get("legacy"), dict) and "hash" in e["legacy"]}
+    for entry in old[len(prefix):]:
+        original = {k: v for k, v in entry.items() if k != "missing"}
+        new = converted.get(entry["hash"])
+        parent = mapping.get(entry["previous"]) if entry["previous"] else None
+        if (new is None or new["legacy"] != original
+                or (entry["previous"] and parent is None)
+                or new["parents"] != ([parent] if parent else [])
+                or any(new.get(k) != v for k, v in original.items() if k not in {"hash", "previous"})):
+            return False
+        mapping[entry["hash"]] = new["hash"]
+    return True
+
+
+def receipt_changes(root, tid, before, after, history=None):
+    changed = []
+    for path, old in before.items():
+        new = after.get(path)
+        if new is not None and (new.startswith(old) if path.endswith(".jsonl") else new == old):
+            continue
+        if path.endswith(".jsonl") and new is not None and history is not None:
+            if repaired_prefix(root, tid, old, new, history):
+                continue
+        changed.append(path)
+    return changed
+
+
+def entries(root, tid, staged=False, rev=None):
+    task_id(tid)
+    texts = receipt_texts(root, tid, staged, rev)
+    old = {} if rev else receipt_texts(root, tid, rev="HEAD")
+    # Report immutable files before trying to parse a damaged object.
+    changed = receipt_changes(root, tid, old, texts)
+    if any(p.endswith(".json") for p in changed):
+        raise Refused(f"{tid}: committed receipt file removed or changed: {changed[0]}")
+    result = ordered_entries(root, tid, texts)
+    if receipt_changes(root, tid, old, texts, result):
+        raise Refused(f"{tid}: ledger is append-only; committed receipts were removed or changed")
+    return result
+
+
+def write_receipt(root, tid, data):
+    path = local_path(root, f".workorder/receipts/{task_id(tid)}/{receipt_name(data)}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(packed(data) + "\n")
+    return path
 
 
 def append(root, tid, item):
     history = entries(root, tid)
-    data = {"task": tid, "at": now(), "who": who(root),
-            "previous": history[-1]["hash"] if history else "", **item}
+    followed = {p for e in history for p in e.get("parents", [e.get("previous", "")])}
+    heads = sorted(e["hash"] for e in history if e["hash"] not in followed)
+    data = {**item, "task": tid, "at": now(), "who": who(root), "parents": heads}
     data["hash"] = digest(packed(data).encode())
-    path = local_path(root, ledger_path(tid))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as stream:
-        stream.write(packed(data) + "\n")
+    write_receipt(root, tid, data)
     return data
 
 
+def repair(root, tid):
+    """Split a verified, two-sided append conflict. Refuse ambiguous or damaged input."""
+    record(root, tid)
+    with ledger_lock(root, tid):
+        texts = receipt_texts(root, tid)
+        conflicts = [p for p, text in texts.items() if p.endswith(".jsonl") and "<<<<<<<" in text]
+        if len(conflicts) != 1:
+            raise Refused(f"{tid}: repair needs one legacy ledger with one append conflict")
+        path = conflicts[0]
+        lines = texts[path].splitlines(keepends=True)
+        markers = [(i, line) for i, line in enumerate(lines)
+                   if line.startswith(("<<<<<<<", "|||||||", "=======", ">>>>>>>"))]
+        kinds = [line[:7] for _, line in markers]
+        if kinds not in (["<<<<<<<", "=======", ">>>>>>>"],
+                          ["<<<<<<<", "|||||||", "=======", ">>>>>>>"]):
+            raise Refused(f"{tid}: repair needs one complete, two-sided append conflict")
+        start, end = markers[0][0], markers[-1][0]
+        split = next(i for i, line in markers if line.startswith("======="))
+        base_start = next((i for i, line in markers if line.startswith("|||||||")), split)
+        if any(line.strip() for line in lines[end + 1:]) or any(line.strip() for line in lines[base_start + 1:split]
+                                                              if base_start != split):
+            raise Refused(f"{tid}: repair only accepts appended lines after a common prefix")
+        prefix = "".join(lines[:start])
+        common = legacy_entries(root, tid, prefix)
+        sides = [legacy_entries(root, tid, prefix + "".join(side))[len(common):]
+                 for side in (lines[start + 1:base_start], lines[split + 1:end])]
+        converted = {}
+        for side in sides:
+            parent = common[-1]["hash"] if common else None
+            for entry in side:
+                original = {k: v for k, v in entry.items() if k != "missing"}
+                data = {k: v for k, v in original.items() if k not in {"hash", "previous"}}
+                data.update(parents=[parent] if parent else [], legacy=original)
+                data["hash"] = digest(packed(data).encode())
+                converted[data["hash"]] = data
+                parent = data["hash"]
+        proposed = {**texts, path: prefix}
+        for data in converted.values():
+            proposed[f".workorder/receipts/{tid}/{receipt_name(data)}"] = packed(data) + "\n"
+        history = ordered_entries(root, tid, proposed)
+        if receipt_changes(root, tid, receipt_texts(root, tid, rev="HEAD"), proposed, history):
+            raise Refused(f"{tid}: repair would lose committed receipts")
+        for data in converted.values():
+            name = f".workorder/receipts/{tid}/{receipt_name(data)}"
+            if name in texts and texts[name] != proposed[name]:
+                raise Refused(f"{tid}: repair destination already exists: {name}")
+        for data in converted.values():
+            if f".workorder/receipts/{tid}/{receipt_name(data)}" not in texts:
+                write_receipt(root, tid, data)
+        local_path(root, path).write_text(prefix, encoding="utf-8", newline="\n")
+        return (f"{tid}: kept {len(common)} legacy receipts in {path}; converted {len(sides[0])} and"
+                f" {len(sides[1])} branch receipts into {len(converted)} files; stage the repaired files")
+
+
 def ledger_lock(root, tid):
-    """Serialise receipt writers for one task in this clone: the chain needs one writer at a time."""
+    """Serialise receipt writers for one task in this clone: each writer must see all current heads."""
     import contextlib
     import time
 

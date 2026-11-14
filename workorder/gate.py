@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import uuid
 
 from . import store as s
 
@@ -49,7 +50,8 @@ def contract_debt(root, record, history, implemented, staged=False):
                     continue  # a missing evidence file proves nothing; the criterion stays owed
                 proved |= s.digest(artifact) == evidence.get("sha256")
             elif provenance == "TEST" and item["requires"] != "REAL":
-                proved |= any(evidence["ref"] == "receipt:" + entry["hash"]
+                proved |= any(evidence["ref"] in {"receipt:" + entry["hash"],
+                                                  "receipt:" + entry.get("legacy", {}).get("hash", "")}
                               and entry["kind"] == "test" and entry["exit_code"] == 0
                               and entry["valid"] and implemented is not None and not entry["missing"]
                               and entry["code"] == implemented["code"] for entry in history)
@@ -88,7 +90,8 @@ def code_seen(root, tid, code, staged=False):
     """A commit in this clone that holds exactly this code: HEAD, or a commit that touched the task or
     its receipts (a squash merge does). None when there is none."""
     candidates = ["HEAD"] + s.git(root, "log", "--format=%H", "-n", "50", "HEAD", "--", f"tasks/{tid}.md",
-                                  s.ledger_path(tid), required=False).stdout.split()
+                                  s.ledger_path(tid), f".workorder/receipts/{tid}",
+                                  f".notquite/receipts/{tid}.jsonl", required=False).stdout.split()
     for commit in candidates:
         found = s.git(root, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}", required=False)
         if found.returncode == 0 and s.code_digest(root, found.stdout.strip()) == code:
@@ -103,10 +106,142 @@ def recognise_squashed(root, tid, history, staged=False):
     if implemented is None or not implemented["missing"]:
         return
     seen = code_seen(root, tid, implemented["code"], staged)
+    if not seen:
+        merged = computed_merge(root, s.record(root, tid, staged), implemented)
+        if merged and merged["method"] == "same code":
+            seen = merged["commit"]
     if seen:
         for item in history:
             if item["missing"] and item["code"] == implemented["code"]:
                 item["missing"], item["seen_on"] = False, seen
+
+
+# Limit both sides of a patch comparison. An incomplete search never proves a rebase.
+MERGE_SEARCH_LIMIT = 1000
+
+
+def merge_target(root, record):
+    # The pushed branch first: a commit only on local main is not merged for anyone else yet.
+    override = record.get("merge_ref")
+    refs = [override] if override else []
+    if not override:
+        symbolic = s.git(root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD", required=False)
+        if symbolic.returncode == 0:
+            refs.append(symbolic.stdout.strip())
+        refs += ["refs/remotes/origin/main", "refs/heads/main"]
+    for ref in refs:
+        found = s.git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", required=False)
+        if found.returncode == 0:
+            return ref, found.stdout.strip()
+    return None
+
+
+def patch_ids(root, revision, commits=None):
+    """git cherry semantics, restricted to code, in two Git calls for the whole range."""
+    selection = (["--no-walk=unsorted", "--diff-merges=first-parent", *commits] if commits is not None
+                 else ["--no-merges", f"--max-count={MERGE_SEARCH_LIMIT + 1}", revision])
+    if commits == []:
+        return {}
+    patches = s.git(root, "log", *selection, "--format=commit %H", "-p", "--binary", "--no-renames",
+                    "--no-ext-diff", "--no-textconv", "--", *s.CODE_PATHS).stdout
+    result = s.git(root, "patch-id", "--stable", data=patches).stdout
+    return {commit: patch for patch, commit in (line.split() for line in result.splitlines())}
+
+
+def merge_match(root, implemented, target):
+    """Evidence from immutable commits, cached independently of branch names and HEAD."""
+    original = implemented["commit"]
+    key = s.digest(s.packed(["merge-v2", original, s.has_commit(root, original), implemented["code"],
+                            target, MERGE_SEARCH_LIMIT]).encode())
+    folder = s._cache_dir(root)
+    cached = folder / ("merge-" + key + ".json") if folder else None
+    try:
+        if cached and cached.is_file():
+            value = json.loads(cached.read_text(encoding="utf-8"))
+            if value is None or (isinstance(value, dict) and value.get("method") in
+                                 {"ancestry", "same code", "squash", "rebase"} and s.has_commit(root, value.get("commit", ""))):
+                return value
+    except (OSError, ValueError):
+        pass
+    result = _merge_match(root, implemented, target)
+    try:
+        if cached:
+            folder.mkdir(exist_ok=True)
+            # Atomic replacement keeps concurrent checks from reading a partial cache file.
+            temporary = cached.with_suffix("." + uuid.uuid4().hex)
+            temporary.write_text(s.packed(result), encoding="utf-8")
+            temporary.replace(cached)
+    except OSError:
+        pass
+    return result
+
+
+def _merge_match(root, implemented, target):
+    original = implemented["commit"]
+    present = s.has_commit(root, original)
+    if present and s.contains(root, original, target):
+        return {"method": "ancestry", "commit": target}
+    base = s.git(root, "merge-base", original, target, required=False).stdout.strip() if present else ""
+    revision = f"{base}..{target}" if base else target
+    # Only code-changing commits can supply a same-code or patch match.
+    candidates = s.git(root, "rev-list", f"--max-count={MERGE_SEARCH_LIMIT}", revision).stdout.split()
+    target_patches = patch_ids(root, revision, candidates)
+    for commit in target_patches:
+        if s.code_digest(root, commit) == implemented["code"]:
+            return {"method": "same code", "commit": commit}
+    if not base:
+        return None
+    combined = s.git(root, "diff", "--binary", "--no-renames", "--no-ext-diff", "--no-textconv",
+                     base, original, "--", *s.CODE_PATHS).stdout
+    combined_id = s.git(root, "patch-id", "--stable", data=combined).stdout.split()
+    if combined_id:
+        for commit, patch in target_patches.items():
+            if patch == combined_id[0]:
+                return {"method": "squash", "commit": commit}
+    # Count all commits (including merges and metadata) so truncation cannot look complete.
+    feature = s.git(root, "rev-list", f"--max-count={MERGE_SEARCH_LIMIT + 1}", f"{base}..{original}").stdout.split()
+    if len(feature) > MERGE_SEARCH_LIMIT:
+        return None
+    feature_patches = patch_ids(root, f"{base}..{original}")
+    # A merge's own resolution is not represented by git cherry; do not silently skip it.
+    merges = s.git(root, "rev-list", "--merges", f"{base}..{original}", "--", *s.CODE_PATHS).stdout.split()
+    available = set(target_patches.values())
+    if not merges and feature_patches and set(feature_patches.values()) <= available:
+        matched = next(commit for commit, patch in target_patches.items() if patch in set(feature_patches.values()))
+        representatives = {patch: commit for commit, patch in reversed(list(target_patches.items()))}
+        if not all(s.contains(root, representatives[patch], matched) for patch in feature_patches.values()):
+            matched = target  # patches on separate merged branches must all be present in a deployment
+        return {"method": "rebase", "commit": matched}
+    return None
+
+
+def computed_merge(root, record, implemented):
+    if record["ships"] == "none" or implemented is None:
+        return None
+    target = merge_target(root, record)
+    if target is None:
+        return None
+    ref, commit = target
+    branch = s.git(root, "symbolic-ref", "-q", "HEAD", required=False).stdout.strip()
+    local_ref = "refs/heads/" + ref.split("/", 3)[3] if ref.startswith("refs/remotes/") else ref
+    if branch and branch != local_ref:
+        return None  # never use the checked-out feature branch as evidence of its own merge
+    if not branch and not s.contains(root, s.head(root), commit):
+        return None
+    match = merge_match(root, implemented, commit)
+    if match:
+        return {**match, "ref": ref, "target": commit}
+    return None
+
+
+def merge_line(merged):
+    ref = merged["ref"].removeprefix("refs/heads/").removeprefix("refs/remotes/")
+    return f"merged into {ref} by {merged['method']} {merged['commit'][:7]}, computed"
+
+
+def delivered_code(root, implemented, item, computed=None):
+    return carries(root, implemented, item) or bool(
+        computed and not item["missing"] and s.contains(root, computed["commit"], item["commit"]))
 
 
 def verdict(root, record, staged=False):
@@ -131,19 +266,20 @@ def verdict(root, record, staged=False):
             done.append(f"a passing test on {implemented['commit'][:7]}")
     done += contract_debt(root, record, current, implemented, staged)
     delivery = []
+    computed = computed_merge(root, record, implemented)
     if record["ships"] != "none":
         # Any merge receipt that carries the tested code counts; a later one that does not, cannot undo it.
         merges = [i for i, e in enumerate(current) if e["kind"] == "merged" and carries(root, implemented, e)]
         merge_index = merges[-1] if merges else -1
-        merged = current[merge_index] if merges else None
+        merged = current[merge_index] if merges else computed
         if not merged:
             delivery.append("merge of the tested code")
         if record["ships"] == "live":
-            after_merge = current[merge_index + 1:] if merged else []
+            after_merge = current if computed else current[merge_index + 1:] if merged else []
             deploy_index = max((i for i, e in enumerate(after_merge) if e["kind"] == "deployed"), default=-1)
             deployed = after_merge[deploy_index] if deploy_index >= 0 else None
             if (not deployed or not deployed["valid"] or deployed["exit_code"] != 0
-                    or not carries(root, implemented, deployed)):
+                    or not delivered_code(root, implemented, deployed, computed)):
                 delivery.append("deployment read-back of the tested code")
             after_deploy = after_merge[deploy_index + 1:] if deployed else []
             if not deployed or not any(e["kind"] == "live" and e["valid"] and e["exit_code"] == 0
@@ -229,32 +365,23 @@ def base_problems(root, base, staged=False):
         raise s.Refused(f"base {base} is not in this clone; fetch it"
                         " (in GitHub Actions: actions/checkout with fetch-depth: 0)")
     commit = found.stdout.strip()
-    listed = s.git(root, "ls-tree", "-r", "--name-only", commit, "--", ".workorder/receipts").stdout
-    present = set(s.files(root, ".workorder/receipts", staged))
     problems = []
-    for path in sorted(p for p in listed.splitlines() if p.endswith(".jsonl")):
-        tid = path.rsplit("/", 1)[-1].removesuffix(".jsonl")
-        if path.count("/") != 2 or not s.ID.fullmatch(tid):
-            continue
-        before = s.git(root, "show", f"{commit}:{path}").stdout.replace("\r\n", "\n")
-        now = s.read_text(root, path, staged) if path in present else None
-        if now is None or not now.startswith(before):
+    tids = {s.receipt_task(p) for p in s.receipt_paths(root, rev=commit)} - {None}
+    for tid in sorted(tids):
+        before = s.receipt_texts(root, tid, rev=commit)
+        after = s.receipt_texts(root, tid, staged)
+        try:
+            history = s.ordered_entries(root, tid, after)
+        except (s.Refused, ValueError):
+            history = None
+        if s.receipt_changes(root, tid, before, after, history):
             problems.append(f"{tid}: receipts recorded on {base} were removed or changed")
     return problems
 
 
 def implementation_at(root, rev, tid):
-    """The newest implemented receipt in tid's ledger as committed at rev, or None."""
-    shown = s.git(root, "show", f"{rev}:{s.ledger_path(tid)}", required=False)
-    found = None
-    for line in shown.stdout.splitlines() if shown.returncode == 0 else []:
-        try:
-            item = json.loads(line)
-        except ValueError:
-            return None
-        if isinstance(item, dict) and item.get("kind") == "implemented":
-            found = item
-    return found
+    """Use the same receipt order for historical claims as for current verdicts."""
+    return newest_implementation(s.entries(root, tid, rev=rev))
 
 
 FINISHED = {"DONE", "CLOSED"}
@@ -303,6 +430,10 @@ def stale_claim(root, record, staged=False, base=None):
     if (relied_on is None or current["hash"] != relied_on.get("hash")
             or s.code_digest(root, claim) == current["code"]):
         return None
+    merged = computed_merge(root, record, current)
+    if (merged and merged["method"] in {"squash", "rebase"}
+            and s.contains(root, merged["commit"], claim)):
+        return None
     return (f"NOT QUITE  {tid} was marked {status} in {claim[:7]} on code other than the implemented"
             f" commit {short}. Record workorder receipt implemented --task {tid} on that code and test again.")
 
@@ -314,7 +445,7 @@ def changed_paths(root, reference, staged=False):
     paths = set(s.git(root, *args).stdout.splitlines())
     if not staged:
         paths |= set(s.git(root, "ls-files", "--others", "--exclude-standard", "--", "tasks",
-                           ".workorder").stdout.splitlines())
+                           ".workorder", ".notquite").stdout.splitlines())
     return paths
 
 
@@ -339,7 +470,8 @@ def scope(root, reference, staged, names, all_records):
     """The tasks a change touches (task file, receipts, contract or its evidence), and every task that
     depends on one of them, directly or not."""
     changed = changed_paths(root, reference, staged)
-    touched = {tid for tid in names if f"tasks/{tid}.md" in changed or s.ledger_path(tid) in changed}
+    touched = {tid for tid in names if f"tasks/{tid}.md" in changed}
+    touched |= {s.receipt_task(path) for path in changed} - {None}
     touched |= {tid for tid, record in all_records.items() if evidence_paths(root, record, staged) & changed}
     growing = True
     while growing:
@@ -452,17 +584,13 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False):
     problems += [f"{path}: only task files belong in tasks/; a file here is outside the code fingerprint,"
                  " so changes to it are never checked" for path in stray]
     if base:
-        problems += [p for p in base_problems(root, base, staged)
-                     if s.ledger_path(p.split(":")[0]) in changed]
+        problems += base_problems(root, base, staged)
     views = Views(root, all_records, staged)
-    # Receipt ledgers, including ones removed from the current snapshot.
-    old = s.git(root, "ls-tree", "-r", "--name-only", "HEAD", "--", ".workorder/receipts", required=False)
-    for path in sorted(set(old.stdout.splitlines()) | set(s.files(root, ".workorder/receipts", staged))):
-        tid = path.rsplit("/", 1)[-1].removesuffix(".jsonl")
-        if not path.endswith(".jsonl") or path.count("/") != 2 or not s.ID.fullmatch(tid):
-            continue  # a .gitkeep or a note in the folder is not a ledger
-        if changed is not None and path not in changed and tid not in selected:
-            continue
+    # Include removed receipts and ledgers whose task file was also removed.
+    paths = set(s.receipt_paths(root, rev="HEAD")) | set(s.receipt_paths(root, staged))
+    tids = {s.receipt_task(path) for path in paths
+            if changed is None or path in changed or s.receipt_task(path) in selected} - {None}
+    for tid in sorted(tids):
         try:
             s.entries(root, tid, staged)
         except s.Refused as error:
@@ -511,6 +639,9 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False):
                      f" Details: workorder check {tid}") if debt else stale_claim(root, record, staged, base)
         except s.Refused as error:  # a dependency that cannot be read
             found = f"{tid}: {error}"
+        merged = computed_merge(root, record, newest_implementation(s.entries(root, tid, staged)))
+        if merged:
+            notes.append(f"{tid}: {merge_line(merged)}")
         if found:
             problems.append(found)
         if base:
@@ -566,7 +697,8 @@ def next_step(item, record, code_changed=False):
     if item.startswith("contract "):
         return f"add qualifying evidence to {record['contract']}"
     if item == "merge of the tested code":
-        return f"merge the tested commit, then: workorder receipt merged --task {tid}"
+        return ("the merged code differs from the tested code or no matching merge was found; "
+                f"run workorder renew --task {tid} on main, or record workorder receipt merged --task {tid}")
     if item.startswith("deployment read-back"):
         return (f"workorder receipt deployed --task {tid} --target <name>"
                 " -- <command that prints the deployed commit>")
@@ -646,15 +778,16 @@ def uncounted(root, record, history):
     if kind == "merged" and not carries(root, implemented, item):
         return (f"{item['ref']} on origin neither contains the implemented commit {short} nor holds exactly its"
                 f" code; after a squash merge, record implemented and test again on the merged code")
-    if kind == "deployed" and not carries(root, implemented, item):
+    computed = computed_merge(root, record, implemented)
+    if kind == "deployed" and not delivered_code(root, implemented, item, computed):
         return f"the deployed commit neither contains the implemented commit {short} nor holds exactly its code"
     current = before[before.index(implemented) + 1:]
     merges = [i for i, e in enumerate(current) if e["kind"] == "merged" and carries(root, implemented, e)]
-    if kind == "deployed" and not merges:
+    if kind == "deployed" and not merges and not computed:
         return (f"no merge of the tested code is recorded since the implementation;"
                 f" run workorder receipt merged --task {tid} first")
     if kind == "live":
-        after_merge = current[merges[-1] + 1:] if merges else []
+        after_merge = current if computed else current[merges[-1] + 1:] if merges else []
         deployed = [e for e in after_merge if e["kind"] == "deployed"]
         if not deployed:
             return "no deployment read-back is recorded after the merge"
@@ -686,6 +819,9 @@ def timeline(root, record, history):
         if item["missing"]:
             what += " (commit not in this clone)"
         lines.append(f"  {when}  {what}  ({item['who']})")
+    computed = computed_merge(root, record, newest_implementation(history))
+    if computed:
+        lines.append("  " + merge_line(computed))
     return lines
 
 
@@ -705,7 +841,7 @@ def record_lines(root, tid):
         computed = "BLOCKED"
     history = s.entries(root, tid)
     recognise_squashed(root, tid, history)
-    stale = [] if done else (["a passing test on the code marked " + record["status"]]
+    stale = [] if done or delivery else (["a passing test on the code marked " + record["status"]]
                              if stale_claim(root, record) else [])
     if stale and computed in FINISHED:
         computed = "IN_PROGRESS"
@@ -756,6 +892,7 @@ def explain(root, tid):
     computed, done, delivery = views[tid]
     debt = claim_debt(record, all_records, views)
     history = s.entries(root, tid)
+    recognise_squashed(root, tid, history)
     commit, test = test_line(record, history)
     implemented = newest_implementation(history)
     runs = (counting_runs(record, history[history.index(implemented) + 1:], implemented)
@@ -776,6 +913,9 @@ def explain(root, tid):
     lines = [f"NOT QUITE  {tid}" if debt else f"{claimed}  {tid}", "",
              f"  Claimed:  {claimed}", f"  Computed: {computed}",
              f"  Commit:   {commit or 'none recorded'}", f"  Test:     {test}"]
+    merged = computed_merge(root, record, implemented)
+    if merged:
+        lines.append("  Merge:    " + merge_line(merged))
     if runs:
         lines.append(f"  Command:  {s.join_command(runs[-1]['command'])}")
     if code_changed:
