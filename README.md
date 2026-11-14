@@ -6,6 +6,8 @@
 pipx install notquite
 ```
 
+No pipx? On Ubuntu or Debian: `sudo apt install pipx && pipx ensurepath`. Other systems: see the [pipx install guide](https://pipx.pypa.io/stable/how-to/install-pipx.html). Plain `pip install` outside a virtual environment is blocked on recent Ubuntu; the [quick start](#quick-start) uses one.
+
 - A task's status is a claim; its actual state is computed from recorded evidence.
 - DONE needs an implementation on a clean commit plus a passing latest test run on that exact commit. A later failing run revokes it.
 - CLOSED can also require merge and deploy read-back evidence.
