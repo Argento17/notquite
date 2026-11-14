@@ -3,7 +3,7 @@
 Details behind the [README](../README.md). Everything here is read from the
 code in `workorder/`; if the two disagree, the code wins and this file has a bug.
 
-**Until 0.6.0 is on PyPI:** install from GitHub with `pipx install "git+https://github.com/Argento17/workorder@v0.6.0"`. Released form: `pipx install workorder`.
+Install: `pipx install workorder`.
 
 ## Commands
 
@@ -345,8 +345,6 @@ the declared tests again. It reads `workorder-allow:<ID>` labels from the pull
 request event and passes their ids to `--allow`. Only reviewers who may
 accept these changes should apply those labels. Label text is read as data;
 it is never inserted into shell code.
-
-**Until 0.6.0 is on PyPI:** replace the released install step below with `python -m pip install "git+https://github.com/Argento17/workorder@v0.6.0"`.
 
 ```yaml
 name: Workorder

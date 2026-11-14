@@ -2,10 +2,6 @@
 
 **Every task recorded. A clear history. Agents always go back to it.**
 
-![Workorder demo: a task is marked DONE, workorder check says NOT QUITE because the last passing test belongs to an older commit.](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)
-
-**Until 0.6.0 is on PyPI:** install from GitHub with `pipx install "git+https://github.com/Argento17/workorder@v0.6.0"`. Released form:
-
 ```sh
 pipx install workorder
 ```
@@ -110,8 +106,6 @@ Workorder reads task files and recorded evidence. It does not watch conversation
 ## Quick start
 
 Requires Git and Python 3.10 or newer. This uses a throwaway folder and needs no remote. On Windows, run the commands in Git Bash and activate with `. .venv/Scripts/activate`.
-
-**Until 0.6.0 is on PyPI:** after activating the virtual environment, replace the released install command below with `python -m pip install "git+https://github.com/Argento17/workorder@v0.6.0"`.
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
@@ -313,8 +307,6 @@ label, passed as `--allow` in the example below.
 
 Pre-commit hook, to refuse committing a false DONE:
 
-**Until 0.6.0 is on PyPI:** install the command with `pipx install "git+https://github.com/Argento17/workorder@v0.6.0"`; the hook's install hint below is the released form.
-
 ```sh
 cat > .git/hooks/pre-commit <<'EOF'
 #!/bin/sh
@@ -326,8 +318,6 @@ chmod +x .git/hooks/pre-commit
 ```
 
 GitHub Actions (`.github/workflows/workorder.yml` in your project):
-
-**Until 0.6.0 is on PyPI:** replace the released install step below with `python -m pip install "git+https://github.com/Argento17/workorder@v0.6.0"`.
 
 ```yaml
 name: Workorder

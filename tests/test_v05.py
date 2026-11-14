@@ -1,4 +1,5 @@
 """Round-seven regressions. All repositories and refs are local."""
+import json
 import shutil
 import subprocess
 
@@ -90,7 +91,7 @@ def test_finished_branch_rebased_over_readme_keeps_claim(local_repo, update):
     root = local_repo
     feature(root, ships='none')
     path = root / 'tasks/TASK-1.md'
-    path.write_text(path.read_text().replace('test: "any"', f'test: "{PYTHON} -c pass"'))
+    path.write_text(path.read_text().replace('test: "any"', 'test: ' + json.dumps(f'{PYTHON} -c pass')))
     git(root, 'commit', '-qam', 'Declare the recorded test')
     git(root, 'checkout', '-q', 'main')
     (root / 'README.md').write_text('An unrelated explanation.\n')

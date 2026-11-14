@@ -13,10 +13,9 @@
 - Give `show` a next step when only unclaimed Acceptance work remains, and
   document which empty planning fields it omits.
 - Reset the unsupported status in the README refusal demo before committing.
-- Document GitHub installation until 0.6.0 is on PyPI, alongside the released
-  commands, and update package versions and install pins to 0.6.0.
+- Update package versions and install pins to 0.6.0.
 
-## 0.5.0 (unreleased)
+## 0.5.0 (14 Nov 2026)
 
 - Check claims after a matched landing against its implementation paths for
   ancestry, same-code, squash and rebase merges. Refuse changed tested paths
@@ -46,7 +45,7 @@
 - Report dependency cycles on their tasks and keep checking and listing the rest.
 - Document reviewer allow labels and declared test reruns in GitHub Actions.
 
-## 0.4.0 (unreleased)
+## 0.4.0 (not released on its own; included in 0.5.0)
 
 - Write one file per receipt. Parent hashes let branches add receipts for the
   same task and merge without editing one shared file. Legacy JSONL chains
@@ -68,7 +67,7 @@
   before it is claimed: they name its Acceptance items and the DONE claim.
 - `claim` says plainly that you now hold the task.
 
-## 0.3.0
+## 0.3.0 (not released on its own; included in 0.5.0)
 
 NotQuite is now **Workorder: the task record for coding agents**. Every task is
 recorded in the repository with a clear history, agents go back to it at the
