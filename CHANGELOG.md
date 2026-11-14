@@ -1,12 +1,17 @@
 # Changelog
 
-## 0.2.1
+## 0.3.0
 
-NotQuite is described as what it is: a task format for coding agents (define
-the work, track the evidence, verify DONE), with the DONE check as one part.
-It works alongside CI, not instead of it.
+NotQuite is now **Workorder**: a task format for coding agents (define the
+work, track the evidence, verify DONE), with the DONE check as one part. It
+works alongside CI, not instead of it. The check still says NOT QUITE when it
+refuses a claim.
 
-- `notquite new` writes the extended task by default; `--template simple`
+- New name everywhere: PyPI project `workorder`, the `workorder` command and
+  package, receipts in `.workorder/`, ids and claims under
+  `refs/tags/workorder/`. A repository with NotQuite receipts carries over with
+  `git mv .notquite .workorder` (see docs/reference.md, Compatibility).
+- `workorder new` writes the extended task by default; `--template simple`
   writes the 0.1.0 seven-field format. The README leads with the task format.
 
 Fixes for what an independent review found; every finding below is now a
@@ -30,7 +35,7 @@ regression test.
 - Documentation states what is not covered yet: squash and rebase merges, and
   `merged`/`deployed` receipts on a branch where other work has landed.
 
-## 0.2.0
+## 0.2.0 (as NotQuite)
 
 - Optional extended task format. `notquite new --template extended` adds
   `business_owner`, `priority`, `created_at`, `mission`, `depends_on`,
@@ -45,7 +50,7 @@ regression test.
 - Compatibility: v0.1.0 refuses task files that use extended fields. Once any
   task uses them, run v0.2.0 everywhere, including CI pins.
 
-## 0.1.0
+## 0.1.0 (as NotQuite)
 
 First public release.
 

@@ -1,4 +1,4 @@
-"""The notquite command."""
+"""The workorder command."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ from . import store as s
 
 def parser():
     result = argparse.ArgumentParser(
-        prog="notquite", description="A task format for coding agents: define the work, track the evidence, verify DONE.",
+        prog="workorder", description="A task format for coding agents: define the work, track the evidence, verify DONE.",
         epilog="Pass a test or read-back command after --, for example: "
-               "notquite receipt test --task TASK-1 -- python -m pytest")
-    result.add_argument("--version", action="version", version=f"notquite {__version__}")
+               "workorder receipt test --task TASK-1 -- python -m pytest")
+    result.add_argument("--version", action="version", version=f"workorder {__version__}")
     commands = result.add_subparsers(dest="action", required=True, metavar="command")
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
@@ -138,5 +138,5 @@ def main(argv=None):
             return int(bool(problems))
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
-        print(f"notquite: {error}", file=sys.stderr)
+        print(f"workorder: {error}", file=sys.stderr)
         return 1

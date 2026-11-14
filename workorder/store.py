@@ -18,7 +18,7 @@ class Refused(ValueError):
 
 ID = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*\Z")
 KINDS = {"implemented", "test", "merged", "deployed", "live"}
-NAMESPACE = "refs/tags/notquite/"
+NAMESPACE = "refs/tags/workorder/"
 
 
 def task_id(value):
@@ -64,7 +64,7 @@ def head(root):
 def repository(root):
     top = Path(git(root, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
     if top != root.resolve():
-        raise Refused("run notquite at the Git repository root")
+        raise Refused("run workorder at the Git repository root")
 
 
 def local_path(root, relative):
@@ -111,7 +111,7 @@ TASK_REF = r"[A-Z][A-Z0-9]*-[1-9][0-9]*"
 FRONT_MATTER_HELP = ("front matter takes `key: value` lines: plain single-line text, a JSON string, or a"
                      ' list such as ["TASK-1"]; mission, next and summary may use > or | blocks, and'
                      " depends_on, blocks and waits_on may use indented - item lines")
-# The small YAML subset NotQuite reads. Anything else is refused rather than guessed.
+# The small YAML subset Workorder reads. Anything else is refused rather than guessed.
 BLOCK_TEXT_FIELDS = ("mission", "next", "summary")
 LIST_FIELDS = ("depends_on", "blocks", "waits_on")
 BLOCK_INDICATORS = (">", "|", ">-", "|-", ">+", "|+")
@@ -330,11 +330,11 @@ EXTENDED_BODY = """
 
 ## Acceptance
 
-<!-- The original ask, criterion by criterion. Evidence NotQuite should check belongs in a contract. -->
+<!-- The original ask, criterion by criterion. Evidence Workorder should check belongs in a contract. -->
 
 ## Progress
 
-<!-- Dated notes. NotQuite does not read this section: status comes from receipts. -->
+<!-- Dated notes. Workorder does not read this section: status comes from receipts. -->
 """
 
 
@@ -397,7 +397,7 @@ def active_claims(root):
 
 
 def claim_token_path(root, tid):
-    relative = git(root, "rev-parse", "--git-path", f"notquite-claims/{tid}").stdout.strip()
+    relative = git(root, "rev-parse", "--git-path", f"workorder-claims/{tid}").stdout.strip()
     return root / relative
 
 
@@ -446,12 +446,12 @@ def release(root, tid):
 
 
 def ledger_path(tid):
-    return f".notquite/receipts/{task_id(tid)}.jsonl"
+    return f".workorder/receipts/{task_id(tid)}.jsonl"
 
 
 def entries(root, tid, staged=False):
     path = ledger_path(tid)
-    available = files(root, ".notquite/receipts", staged)
+    available = files(root, ".workorder/receipts", staged)
     text = read_text(root, path, staged) if path in available else ""
     # Existing committed receipts are an immutable prefix, including during staging.
     old = git(root, "show", f"HEAD:{path}", required=False)
@@ -498,7 +498,10 @@ def append(root, tid, item):
     return data
 
 
-CODE_PATHS = (".", ":(exclude)tasks", ":(exclude).notquite")
+# Releases up to 0.2.0 (named NotQuite) kept receipts in .notquite/. It stays outside the code
+# fingerprint, so a repository that moved its receipts to .workorder/ still verifies old receipts.
+LEGACY_DIR = ".notquite/"
+CODE_PATHS = (".", ":(exclude)tasks", ":(exclude).workorder", ":(exclude).notquite")
 
 
 def code_digest(root, commit):
@@ -508,7 +511,7 @@ def code_digest(root, commit):
                       " (in GitHub Actions: actions/checkout with fetch-depth: 0)")
     tree = listing.stdout
     code = [entry for entry in tree.split("\0") if entry
-            and not entry.partition("\t")[2].startswith(("tasks/", ".notquite/"))]
+            and not entry.partition("\t")[2].startswith(("tasks/", ".workorder/", LEGACY_DIR))]
     return digest("\0".join(code).encode())
 
 

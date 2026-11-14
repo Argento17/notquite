@@ -14,7 +14,7 @@ import threading
 
 import pytest
 
-from notquite import gate, store
+from workorder import gate, store
 
 PACKAGE = Path(__file__).resolve().parents[1]
 PYTHON = sys.executable
@@ -29,7 +29,7 @@ def git(root, *args):
 
 def cli(root, *args):
     env = dict(os.environ, PYTHONPATH=str(PACKAGE), GIT_TERMINAL_PROMPT="0")
-    return subprocess.run([PYTHON, "-m", "notquite", *args], cwd=root, env=env,
+    return subprocess.run([PYTHON, "-m", "workorder", *args], cwd=root, env=env,
                           capture_output=True, encoding="utf-8", timeout=30)
 
 
@@ -223,7 +223,7 @@ def test_uncommitted_code_cannot_be_recorded(clones):
 def test_missing_test_executable_is_recorded_as_failure(clones):
     one, _ = clones
     implement(one)
-    assert cli(one, "receipt", "test", "--task", "TASK-1", "--", "missing-notquite-command").returncode == 1
+    assert cli(one, "receipt", "test", "--task", "TASK-1", "--", "missing-workorder-command").returncode == 1
     assert store.entries(one, "TASK-1")[-1]["exit_code"] == 127
 
 
@@ -301,7 +301,7 @@ def test_failed_or_wrong_stamp_deploy_cannot_close(clones):
 
 
 def contract(root, provenance="MOCK", requires="REAL", ref="sample-output", critical=True):
-    path = root / ".notquite/contract.json"
+    path = root / ".workorder/contract.json"
     path.parent.mkdir(exist_ok=True)
     evidence = [{"provenance": provenance, "ref": ref}]
     if provenance == "REAL":
@@ -312,7 +312,7 @@ def contract(root, provenance="MOCK", requires="REAL", ref="sample-output", crit
     value = {"task": "TASK-1", "criteria": [{"id": "C1", "ask": "Show stored items", "critical": critical,
                                           "requires": requires, "evidence": evidence}]}
     path.write_text(json.dumps(value), encoding="utf-8")
-    task(root, status="DONE", contract=".notquite/contract.json")
+    task(root, status="DONE", contract=".workorder/contract.json")
     return path
 
 
@@ -341,11 +341,11 @@ def test_critical_test_evidence_must_reference_a_passing_receipt(clones):
 
 def test_real_artifact_is_checked_against_its_hash(clones):
     one, _ = clones
-    contract(one, "REAL", ref=".notquite/evidence/observed.txt")
+    contract(one, "REAL", ref=".workorder/evidence/observed.txt")
     implement(one)
     passed(one)
     ok(one, "check")
-    (one / ".notquite/evidence/observed.txt").write_text("changed", encoding="utf-8")
+    (one / ".workorder/evidence/observed.txt").write_text("changed", encoding="utf-8")
     assert cli(one, "check").returncode == 1
 
 
@@ -353,10 +353,10 @@ def test_real_artifact_is_checked_against_its_hash(clones):
                                   {"task": "TASK-1", "criteria": []}])
 def test_malformed_contract_is_refused(clones, value):
     one, _ = clones
-    path = one / ".notquite/contract.json"
+    path = one / ".workorder/contract.json"
     path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps(value), encoding="utf-8")
-    task(one, contract=".notquite/contract.json")
+    task(one, contract=".workorder/contract.json")
     assert cli(one, "check").returncode == 1
 
 
@@ -465,7 +465,7 @@ def test_workflow_installs_kit_runs_tests_and_checker():
              (PACKAGE / ".github/workflows/check.yml").read_text().splitlines()
              if line.strip().startswith("- run:")]
     assert steps == ["- run: python -m pip install -e '.[test]'",
-                     "- run: python -m pytest", "- run: notquite check"]
+                     "- run: python -m pytest", "- run: workorder check"]
 
 
 def test_test_before_implementation_does_not_complete_task(clones):
@@ -512,15 +512,15 @@ def test_critical_criterion_with_no_evidence_is_refused(clones):
 
 def test_staged_contract_reads_the_staged_binary_artifact(clones):
     one, _ = clones
-    path = contract(one, "REAL", ref=".notquite/evidence/observed.bin")
-    artifact = one / ".notquite/evidence/observed.bin"
+    path = contract(one, "REAL", ref=".workorder/evidence/observed.bin")
+    artifact = one / ".workorder/evidence/observed.bin"
     artifact.write_bytes(b"\x89\x00\xff")
     value = json.loads(path.read_text())
     value["criteria"][0]["evidence"][0]["sha256"] = store.digest(artifact.read_bytes())
     path.write_text(json.dumps(value), encoding="utf-8")
     implement(one)
     passed(one)
-    git(one, "add", "tasks/TASK-1.md", ".notquite")
+    git(one, "add", "tasks/TASK-1.md", ".workorder")
     artifact.write_bytes(b"changed after staging")
     assert cli(one, "check").returncode == 1
     ok(one, "check", "--staged")
@@ -530,7 +530,7 @@ def test_unstaged_passing_receipt_cannot_validate_staged_done(clones):
     one, _ = clones
     implement(one)
     task(one, status="DONE")
-    git(one, "add", "tasks/TASK-1.md", ".notquite")
+    git(one, "add", "tasks/TASK-1.md", ".workorder")
     passed(one)
     ok(one, "check")
     assert "passing test on" in cli(one, "check", "--staged").stdout
@@ -545,28 +545,28 @@ def test_check_from_a_subdirectory_cannot_report_false_success(clones):
     assert result.returncode == 1 and "repository root" in result.stderr
 
 
-# Regression tests for the NotQuite name, packaging and the per-task explanation.
+# Regression tests for the Workorder name, packaging and the per-task explanation.
 
 def test_package_imports_under_its_name_and_versions_agree():
-    import notquite
+    import workorder
     tomllib = pytest.importorskip("tomllib")  # new in Python 3.11
     project = tomllib.loads((PACKAGE / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    assert project["name"] == "notquite"
-    assert project["scripts"] == {"notquite": "notquite.cli:main"}
+    assert project["name"] == "workorder"
+    assert project["scripts"] == {"workorder": "workorder.cli:main"}
     assert project["dependencies"] == []
-    assert notquite.__version__ == project["version"]
+    assert workorder.__version__ == project["version"]
 
 
 def test_module_and_installed_command_report_the_version(tmp_path):
-    import notquite
-    result = subprocess.run([PYTHON, "-m", "notquite", "--version"], capture_output=True,
+    import workorder
+    result = subprocess.run([PYTHON, "-m", "workorder", "--version"], capture_output=True,
                             encoding="utf-8", cwd=tmp_path)
-    assert result.stdout.strip() == f"notquite {notquite.__version__}"
-    script = Path(sysconfig.get_path("scripts")) / ("notquite.exe" if os.name == "nt" else "notquite")
+    assert result.stdout.strip() == f"workorder {workorder.__version__}"
+    script = Path(sysconfig.get_path("scripts")) / ("workorder.exe" if os.name == "nt" else "workorder")
     if not script.exists():
-        pytest.skip("notquite is not installed next to this Python")
+        pytest.skip("workorder is not installed next to this Python")
     result = subprocess.run([str(script), "--version"], capture_output=True, encoding="utf-8")
-    assert result.returncode == 0 and result.stdout.strip() == f"notquite {notquite.__version__}"
+    assert result.returncode == 0 and result.stdout.strip() == f"workorder {workorder.__version__}"
 
 
 def test_no_old_project_names_remain():
@@ -585,7 +585,7 @@ def test_explain_refuses_false_done_and_says_what_to_do(clones):
     assert result.returncode == 1
     assert result.stdout.startswith("NOT QUITE  TASK-1")
     assert "Claimed:  DONE" in result.stdout and "Missing:  implementation" in result.stdout
-    assert "Next:     commit the code, then: notquite receipt implemented --task TASK-1" in result.stdout
+    assert "Next:     commit the code, then: workorder receipt implemented --task TASK-1" in result.stdout
     assert "Result: NOT DONE" in result.stdout
 
 
@@ -624,7 +624,7 @@ def test_explain_refuses_closed_without_merge(clones):
     task(one, status="CLOSED")
     result = cli(one, "check", "TASK-1")
     assert result.returncode == 1 and "Result: NOT CLOSED" in result.stdout
-    assert "Next:     merge the tested commit, then: notquite receipt merged --task TASK-1" in result.stdout
+    assert "Next:     merge the tested commit, then: workorder receipt merged --task TASK-1" in result.stdout
     merge(one)
     assert cli(one, "check", "TASK-1").returncode == 0
 
@@ -641,7 +641,7 @@ def test_explain_reports_a_failed_test(clones):
 def test_explain_rejects_bad_task_arguments(clones, argument):
     one, _ = clones
     result = cli(one, "check", argument)
-    assert result.returncode == 1 and result.stderr.startswith("notquite: ")
+    assert result.returncode == 1 and result.stderr.startswith("workorder: ")
 
 
 def test_explain_cannot_be_combined_with_staged(clones):
@@ -684,7 +684,7 @@ def test_shallow_clone_explains_missing_history(clones, tmp_path):
     implement(one)
     passed(one)
     task(one, status="DONE")
-    git(one, "add", "tasks", ".notquite")
+    git(one, "add", "tasks", ".workorder")
     git(one, "commit", "-qm", "Record the evidence")
     (one / "app.py").write_text("items = ['later']\n", encoding="utf-8")
     git(one, "commit", "-qam", "Later work")
@@ -767,7 +767,7 @@ def test_without_a_remote_claims_and_merges_are_refused(local_repo, args):
     ok(local_repo, "new", "--title", "Solo work", "--owner", "solo")
     result = cli(local_repo, *args)
     assert result.returncode == 1 and "origin remote" in result.stderr
-    assert not list(local_repo.joinpath(".git").glob("notquite-claims/*"))
+    assert not list(local_repo.joinpath(".git").glob("workorder-claims/*"))
 
 
 def test_missing_git_user_name_gets_a_clear_message(clones):
@@ -775,7 +775,7 @@ def test_missing_git_user_name_gets_a_clear_message(clones):
     git(one, "config", "--unset", "user.name")
     env = dict(os.environ, PYTHONPATH=str(PACKAGE), HOME=str(one), XDG_CONFIG_HOME=str(one),
                GIT_CONFIG_NOSYSTEM="1")
-    result = subprocess.run([PYTHON, "-m", "notquite", "claim", "--task", "TASK-1"], cwd=one,
+    result = subprocess.run([PYTHON, "-m", "workorder", "claim", "--task", "TASK-1"], cwd=one,
                             env=env, capture_output=True, encoding="utf-8")
     assert result.returncode == 1 and "set git user.name first" in result.stderr
 
@@ -795,7 +795,7 @@ def test_crlf_checkout_of_committed_records_still_verifies(clones):
     implement(one)
     passed(one)
     task(one, status="DONE")
-    git(one, "add", "tasks", ".notquite")
+    git(one, "add", "tasks", ".workorder")
     git(one, "commit", "-qm", "Record the evidence")
     for path in ("tasks/TASK-1.md", store.ledger_path("TASK-1")):
         data = (one / path).read_bytes()
@@ -941,7 +941,7 @@ def test_receipts_recorded_on_a_simple_task_still_count_after_switching_to_exten
     one, _ = clones
     commit = implement(one)
     passed(one)
-    git(one, "add", "tasks", ".notquite")
+    git(one, "add", "tasks", ".workorder")
     git(one, "commit", "-qm", "Record the evidence")
     extended(one, status="DONE", ships="none")
     assert ok(one, "check").strip() == "check: OK"
@@ -1149,7 +1149,7 @@ def test_switching_a_simple_task_to_yaml_style_extended_keeps_its_receipts(clone
     task(one, status="IN_PROGRESS", ships="none")
     commit = implement(one)
     passed(one)
-    git(one, "add", "tasks", ".notquite")
+    git(one, "add", "tasks", ".workorder")
     git(one, "commit", "-qm", "Record the evidence")
     (one / "tasks/TASK-1.md").write_text(
         "---\nid: TASK-1\ntitle: Add a list filter\nowner: alex\nbusiness_owner: sam\npriority: P1\n"
@@ -1176,10 +1176,10 @@ def test_a_hash_after_a_value_stays_part_of_the_value(clones):
     assert store.record(one, "TASK-1")["priority"] == "P1 # soon"
 
 
-# 0.2.1: the independent review's reproductions, kept as regression tests.
+# 0.3.0 (prepared as 0.2.1): the independent review's reproductions, kept as regression tests.
 
 def commit_receipts(root, message="Record receipts"):
-    git(root, "add", "tasks", ".notquite")
+    git(root, "add", "tasks", ".workorder")
     git(root, "commit", "-qm", message)
     return store.head(root)
 
@@ -1223,7 +1223,7 @@ def test_a_test_on_changed_code_does_not_count_and_says_what_to_do(clones):
     explained = cli(one, "check", "TASK-1")
     assert explained.returncode == 1
     assert f"Note:     the code has changed since {old}; this verdict is about {old}" in explained.stdout
-    assert ("Next:     notquite receipt implemented --task TASK-1, then notquite receipt test"
+    assert ("Next:     workorder receipt implemented --task TASK-1, then workorder receipt test"
             in explained.stdout)
 
 
@@ -1313,3 +1313,14 @@ def test_delivery_receipts_that_cannot_count_exit_1_with_a_reason(clones, ships,
         result = readback(one, kind)
     assert result.returncode == 1
     assert "recorded, but does not count: " in result.stdout and message in result.stdout
+
+
+def test_a_legacy_notquite_folder_stays_outside_the_code_fingerprint(local_repo):
+    before = store.code_digest(local_repo, store.head(local_repo))
+    legacy = local_repo / ".notquite" / "receipts"
+    legacy.mkdir(parents=True)
+    (legacy / "TASK-9.jsonl").write_text("{}\n", encoding="utf-8")
+    git(local_repo, "add", ".notquite")
+    git(local_repo, "commit", "-qm", "Receipts from NotQuite")
+    assert store.code_digest(local_repo, store.head(local_repo)) == before
+    assert store.clean_code(local_repo)

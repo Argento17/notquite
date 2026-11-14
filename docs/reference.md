@@ -1,25 +1,25 @@
 # Reference
 
 Details behind the [README](../README.md). Everything here is read from the
-code in `notquite/`; if the two disagree, the code wins and this file has a bug.
+code in `workorder/`; if the two disagree, the code wins and this file has a bug.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `notquite new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote; writes `tasks/<id>.md` (extended by default; `simple` writes the seven required fields only) |
-| `notquite receipt implemented --task ID` | Records the current commit as the implementation; refuses uncommitted or untracked code |
-| `notquite receipt test --task ID -- CMD...` | Runs `CMD` (no shell), records its exit code against the current commit |
-| `notquite receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to (needs `origin`) |
-| `notquite receipt deployed --task ID --target NAME -- CMD...` | Runs a read-back command; valid only if it exits 0 and its output contains the full commit ID |
-| `notquite receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
-| `notquite check [ID or tasks/ID.md]` | No argument: one line per refused claim in the repository, or `check: OK`; use this in hooks and CI. With a task: an explanation of that task alone |
-| `notquite check --staged` | Checks the staged versions of task files and receipts (for pre-commit); also refuses a commit that newly claims DONE or CLOSED on code other than the implemented code |
-| `notquite check --base REF` | Also refuses if receipts committed on `REF` were removed or changed (for CI: the pull request's base branch) |
-| `notquite show --task ID` | Recorded status, computed status, what is still owed |
-| `notquite claim --task ID` / `release --task ID` | Takes or gives up a task with a pushed tag |
-| `notquite claims` | Active claims |
-| `notquite ready` | Open tasks: free, held, blocked, or waiting for delivery |
+| `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote; writes `tasks/<id>.md` (extended by default; `simple` writes the seven required fields only) |
+| `workorder receipt implemented --task ID` | Records the current commit as the implementation; refuses uncommitted or untracked code |
+| `workorder receipt test --task ID -- CMD...` | Runs `CMD` (no shell), records its exit code against the current commit |
+| `workorder receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to (needs `origin`) |
+| `workorder receipt deployed --task ID --target NAME -- CMD...` | Runs a read-back command; valid only if it exits 0 and its output contains the full commit ID |
+| `workorder receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
+| `workorder check [ID or tasks/ID.md]` | No argument: one line per refused claim in the repository, or `check: OK`; use this in hooks and CI. With a task: an explanation of that task alone |
+| `workorder check --staged` | Checks the staged versions of task files and receipts (for pre-commit); also refuses a commit that newly claims DONE or CLOSED on code other than the implemented code |
+| `workorder check --base REF` | Also refuses if receipts committed on `REF` were removed or changed (for CI: the pull request's base branch) |
+| `workorder show --task ID` | Recorded status, computed status, what is still owed |
+| `workorder claim --task ID` / `release --task ID` | Takes or gives up a task with a pushed tag |
+| `workorder claims` | Active claims |
+| `workorder ready` | Open tasks: free, held, blocked, or waiting for delivery |
 
 Every command exits 1 when it refuses something, including a command receipt
 whose command failed and a receipt that was recorded but cannot count (it says
@@ -31,13 +31,13 @@ why). Run commands from the repository root.
 `key: value` per line, each key once. These seven fields are required: `id`,
 `title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
 
-A value is plain single-line text, a JSON string, or a list. NotQuite never
+A value is plain single-line text, a JSON string, or a list. Workorder never
 rewrites a task file after `new`, so whatever formatting you use is left alone,
 byte for byte.
 
 ### What YAML is read
 
-Front matter is not parsed as YAML. NotQuite reads this subset and refuses
+Front matter is not parsed as YAML. Workorder reads this subset and refuses
 everything else with a message naming the line:
 
 - `key: value` on one line: plain text, or a JSON string (`"..."`).
@@ -67,10 +67,10 @@ Not read, and refused:
   indented lists on any field other than the three list fields;
 - block indicators with an explicit indentation number (`|2`);
 - a block line indented less than the block's first line (YAML would end the
-  block or treat it as a comment; NotQuite refuses rather than guess).
+  block or treat it as a comment; Workorder refuses rather than guess).
 
 Block values were checked against PyYAML: for the supported forms they read
-the same, except that NotQuite refuses the less-indented lines above.
+the same, except that Workorder refuses the less-indented lines above.
 
 - `id` matches the file name and the pattern `PREFIX-N`, for example `TASK-12`.
 - `status`: `IN_PROGRESS`, `BLOCKED`, `DONE` or `CLOSED`.
@@ -80,7 +80,7 @@ the same, except that NotQuite refuses the less-indented lines above.
 
 ### Extended fields
 
-`notquite new` (and `--template extended`) writes these optional fields too,
+`workorder new` (and `--template extended`) writes these optional fields too,
 in this order: `id`, `title`, `owner`, `business_owner`, `priority`, `created_at`,
 `mission`, `depends_on`, `blocks`, `next`, `summary`, `status`, `ships`,
 `waits_on`, `contract`. The body gets `## Context`, `## Scope`, `## Lanes`,
@@ -134,7 +134,7 @@ A `test` receipt is valid only if the command exited 0, and the working tree
 was still clean with HEAD unchanged when it finished.
 
 "Code" is a SHA-256 over the commit's file listing, leaving out `tasks/` and
-`.notquite/`. Committing task files and receipts does not change it, so they
+`.workorder/`. Committing task files and receipts does not change it, so they
 can be committed after the evidence is recorded, and later runs on the same
 code, on any commit, still count.
 
@@ -150,7 +150,7 @@ Use merge commits for branches that carry receipts.
 
 ## Receipts
 
-`.notquite/receipts/<id>.jsonl` holds one JSON object per line. Every receipt
+`.workorder/receipts/<id>.jsonl` holds one JSON object per line. Every receipt
 has `task`, `kind`, `at`, `who` (Git `user.name`; receipts written by 0.2.0 or
 earlier carry `user.name@hostname`), `commit`, `code`,
 `previous` (the hash of the receipt before it, or empty) and `hash` (SHA-256 of
@@ -200,29 +200,37 @@ All are tags on `origin` pointing at small JSON blobs. Without an `origin`
 remote, `new` numbers ids locally (nothing is reserved) and `claim`, `release`
 and `claims` refuse; there is no local claim.
 
-- `refs/tags/notquite/ids/<id>`: the id reservation made by `new`.
-- `refs/tags/notquite/claims/<id>/<n>`: claim number `n`.
-- `refs/tags/notquite/releases/<id>/<claim object>`: the release of that claim.
+- `refs/tags/workorder/ids/<id>`: the id reservation made by `new`.
+- `refs/tags/workorder/claims/<id>/<n>`: claim number `n`.
+- `refs/tags/workorder/releases/<id>/<claim object>`: the release of that claim.
 
 A push that would replace an existing tag is rejected by Git, so the first
-clone to push wins. The claim token is kept in `.git/notquite-claims/<id>` and
+clone to push wins. The claim token is kept in `.git/workorder-claims/<id>` and
 is never committed or pushed. The claim tag stores only its SHA-256 hash
 (`token_sha256`); `claim` and `release` compare against that hash.
 Force-pushes and tag deletion by anyone with push access bypass all of this;
-protect `notquite/*` tags if it matters.
+protect `workorder/*` tags if it matters.
 
 ## Compatibility
 
+- Workorder was called NotQuite up to 0.2.0 (PyPI `notquite`). From 0.3.0 the
+  command, the package and the data paths are `workorder`: receipts in
+  `.workorder/`, ids and claims under `refs/tags/workorder/`, claim tokens in
+  `.git/workorder-claims/`. To carry a NotQuite repository over, move the
+  folder with `git mv .notquite .workorder` and commit. Old receipts still
+  verify, because `.notquite/` stays outside the code fingerprint. Ids and
+  claims made under `refs/tags/notquite/` are not read; task numbering
+  continues from the task files.
 - Task files in the seven-field format read exactly as in 0.1.0, and
-  `notquite new --template simple` writes the same bytes as 0.1.0. From 0.2.1,
-  plain `notquite new` writes the extended format.
+  `workorder new --template simple` writes the same bytes as 0.1.0. From 0.3.0,
+  plain `workorder new` writes the extended format.
 - 0.1.0 refuses any task file that uses an extended field or the YAML forms
   above. Once one task uses them, every clone, hook and CI pin needs 0.2.0 or
   later.
 - Receipts are unchanged. Task files are left out of the code fingerprint, so
   switching a task from the simple to the extended format, in either YAML or
   JSON style, keeps its receipts valid.
-- 0.2.1 reads the same receipts with three differences. A test run counts when
+- 0.3.0 reads the same receipts with three differences. A test run counts when
   its code matches the implemented code, on any commit, so a DONE that was
   hiding a later failing run on the same code becomes IN_PROGRESS. A receipt
   that is recorded but cannot count exits 1. New receipts and claims record

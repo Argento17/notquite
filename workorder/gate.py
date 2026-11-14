@@ -61,7 +61,7 @@ def verdict(root, record, staged=False):
         done.append("implementation")
     else:
         # The latest test run on the implemented code decides; a later failure revokes an earlier pass.
-        # Code leaves out tasks/ and .notquite/, so committing the receipts does not hide later runs.
+        # Code leaves out tasks/ and .workorder/, so committing the receipts does not hide later runs.
         runs = [e for e in current if e["kind"] == "test" and e["code"] == implemented["code"]]
         if not runs or runs[-1]["exit_code"] != 0 or not runs[-1]["valid"]:
             done.append(f"a passing test on {implemented['commit'][:7]}")
@@ -132,7 +132,7 @@ def fresh_claim_on_changed_code(root, record):
     if implemented is None or s.index_code(root) == implemented["code"]:
         return None
     return (f"NOT QUITE  {tid} is being marked {record['status']}, but the code in this commit differs"
-            f" from the implemented commit {implemented['commit'][:7]}. Record notquite receipt"
+            f" from the implemented commit {implemented['commit'][:7]}. Record workorder receipt"
             f" implemented --task {tid} and test again.")
 
 
@@ -143,8 +143,8 @@ def base_problems(root, base, staged=False):
         raise s.Refused(f"base {base} is not in this clone; fetch it"
                         " (in GitHub Actions: actions/checkout with fetch-depth: 0)")
     commit = found.stdout.strip()
-    listed = s.git(root, "ls-tree", "-r", "--name-only", commit, "--", ".notquite/receipts").stdout
-    present = set(s.files(root, ".notquite/receipts", staged))
+    listed = s.git(root, "ls-tree", "-r", "--name-only", commit, "--", ".workorder/receipts").stdout
+    present = set(s.files(root, ".workorder/receipts", staged))
     problems = []
     for path in sorted(p for p in listed.splitlines() if p.endswith(".jsonl")):
         tid = path.rsplit("/", 1)[-1].removesuffix(".jsonl")
@@ -160,8 +160,8 @@ def check(root, staged=False, base=None):
     views = {tid: verdict(root, record, staged) for tid, record in all_records.items()}
     problems = base_problems(root, base, staged) if base else []
     # Also inspect ledgers removed from the current snapshot.
-    old = s.git(root, "ls-tree", "-r", "--name-only", "HEAD", "--", ".notquite/receipts", required=False)
-    paths = set(old.stdout.splitlines()) | set(s.files(root, ".notquite/receipts", staged))
+    old = s.git(root, "ls-tree", "-r", "--name-only", "HEAD", "--", ".workorder/receipts", required=False)
+    paths = set(old.stdout.splitlines()) | set(s.files(root, ".workorder/receipts", staged))
     for path in paths:
         tid = path.rsplit("/", 1)[-1].removesuffix(".jsonl")
         s.entries(root, tid, staged)
@@ -196,7 +196,7 @@ def check(root, staged=False, base=None):
         debt = claim_debt(record, all_records, views)
         if debt:
             problems.append(f"NOT QUITE  {tid} says {record['status']} but owes: {', '.join(debt)}."
-                            f" Details: notquite check {tid}")
+                            f" Details: workorder check {tid}")
         elif staged:
             changed = fresh_claim_on_changed_code(root, record)
             if changed:
@@ -216,21 +216,21 @@ def claim_debt(record, all_records, views):
 def next_step(item, record, code_changed=False):
     tid = record["id"]
     if item == "implementation":
-        return f"commit the code, then: notquite receipt implemented --task {tid}"
+        return f"commit the code, then: workorder receipt implemented --task {tid}"
     if item.startswith("a passing test on"):
         if code_changed:
-            return (f"notquite receipt implemented --task {tid}, then"
-                    f" notquite receipt test --task {tid} -- <your test command>")
-        return f"notquite receipt test --task {tid} -- <your test command>"
+            return (f"workorder receipt implemented --task {tid}, then"
+                    f" workorder receipt test --task {tid} -- <your test command>")
+        return f"workorder receipt test --task {tid} -- <your test command>"
     if item.startswith("contract "):
         return f"add qualifying evidence to {record['contract']}"
     if item == "merge of the tested code":
-        return f"merge the tested commit, then: notquite receipt merged --task {tid}"
+        return f"merge the tested commit, then: workorder receipt merged --task {tid}"
     if item.startswith("deployment read-back"):
-        return (f"notquite receipt deployed --task {tid} --target <name>"
+        return (f"workorder receipt deployed --task {tid} --target <name>"
                 " -- <command that prints the deployed commit>")
     if item.startswith("live read-back"):
-        return (f"notquite receipt live --task {tid} --target <name>"
+        return (f"workorder receipt live --task {tid} --target <name>"
                 " -- <command that prints the commit the live system reports>")
     if item.startswith("task:"):
         field = "depends_on" if item[5:] in record.get("depends_on", []) else "waits_on"
@@ -285,12 +285,12 @@ def uncounted(record, history):
         if record["ships"] not in needed:
             return f"{tid} has ships: {record['ships']}, so a {kind} receipt is not part of its evidence"
     if implemented is None:
-        return f"no implementation is recorded yet; run notquite receipt implemented --task {tid} first"
+        return f"no implementation is recorded yet; run workorder receipt implemented --task {tid} first"
     short = implemented["commit"][:7]
     if kind in {"test", "merged", "deployed"} and item["code"] != implemented["code"]:
         if kind == "test":
             return (f"this code differs from the implemented commit {short}; run"
-                    f" notquite receipt implemented --task {tid} first")
+                    f" workorder receipt implemented --task {tid} first")
         if kind == "merged":
             return (f"{item['ref']} on origin does not hold exactly the code of the implemented commit"
                     f" {short}; other work may have landed there")
@@ -298,7 +298,7 @@ def uncounted(record, history):
     current = before[before.index(implemented) + 1:]
     merges = [i for i, e in enumerate(current) if e["kind"] == "merged"]
     if kind == "deployed" and not merges:
-        return f"no merge is recorded since the implementation; run notquite receipt merged --task {tid} first"
+        return f"no merge is recorded since the implementation; run workorder receipt merged --task {tid} first"
     if kind == "live":
         after_merge = current[merges[-1] + 1:] if merges else []
         deployed = [e for e in after_merge if e["kind"] == "deployed"]
