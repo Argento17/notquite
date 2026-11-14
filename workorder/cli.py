@@ -62,7 +62,7 @@ def parser():
                        help="explain one task, by id (TASK-1) or path (tasks/TASK-1.md)")
     check.add_argument("--staged", action="store_true", help="check the staged files (pre-commit)")
     check.add_argument("--allow", metavar="TASKS", default="",
-                       help="with --base: accept changes to these tasks' test, contract or dependencies"
+                       help="with --base: accept task definition or test file changes, or complete removal"
                             " (comma-separated ids, for a reviewer to pass)")
     check.add_argument("--run-tests", action="store_true",
                        help="with --base: run the declared test of every task this change claims DONE or CLOSED")
@@ -175,16 +175,22 @@ def main(argv=None):
                 raise s.Refused("--staged and --base check every task; leave out the task")
             lines, refused = gate.explain(root, task_argument(options.task))
             print("\n".join(lines))
+            record = s.record(root, task_argument(options.task))
+            print(gate.check_summary(dict(tasks=1, claimed=int(record["status"] in gate.FINISHED))))
             return int(refused)
         else:
             if (options.allow or options.run_tests) and not options.base:
                 raise s.Refused("--allow and --run-tests go with --base")
             notes = []
+            counts = {}
             allow = {item.strip() for item in options.allow.split(",") if item.strip()}
-            problems = gate.check(root, options.staged, options.base, notes, allow, options.run_tests)
+            problems = gate.check(root, options.staged, options.base, notes, allow, options.run_tests, counts)
             print("\n".join(problems) if problems else "check: OK")
             if notes:
                 print("\n".join(f"Note: {note}" for note in notes))
+            if options.run_tests and counts["tests"] == 0:
+                print("no declared test ran in this check")
+            print(gate.check_summary(counts, options.run_tests))
             return int(bool(problems))
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:

@@ -206,7 +206,7 @@ DONE, plus what the task ships:
 | `repo` | the tested change is on the target branch, or a qualifying `merged` receipt |
 | `live` | the merge, then `receipt deployed --target <name> -- <command>`, then a later `receipt live --target <name> -- <command>` |
 
-Workorder checks the pushed branch: the one `origin/HEAD` names, else `origin/main`; with no remote, local `main`. A commit only on your local `main` does not count as merged until it is pushed. Set `merge_ref: refs/heads/release` in the task to choose another target. It uses local refs and does not fetch. Checking on the feature branch does not compute a merge.
+Workorder checks the pushed branch: the one `origin/HEAD` names, else `origin/main`; with no remote, local `main`. A commit only on your local `main` does not count as merged until it is pushed. Set `merge_ref: refs/heads/release` in the task to choose another target. It uses local refs and does not fetch. Checks on feature branches and detached checkouts use that same target.
 
 A recorded `merged` receipt still counts when its commit contains the implemented commit or holds exactly its code. A merge receipt that counted stays counted. Deployment read-backs can also name a commit containing the computed squash or rebase merge.
 
@@ -218,7 +218,14 @@ Workorder computes the merge without writing a receipt. It checks whether the
 target contains the implemented commit, holds the same code, has the same code
 patch after a squash, or has a patch equivalent to every code commit after a
 rebase. Changes to task files and receipts do not count as code patches.
-`show` and `check` name the matching commit and how it matched.
+`show` and `check` name the matching commit and how it matched, from any
+checkout. A feature branch is never used as its own merge target.
+
+Rebasing a finished branch over unrelated changes keeps its DONE claim when
+the claim and implementation have the same code patch relative to their own
+merge bases with the target. Merging main into the branch also keeps the claim.
+If a matching squash is on local main but not origin/main, the next step says
+to push main.
 
 A squash onto a main that changed other files can count. If main changed the
 same lines and the resulting patch differs, it does not count. Run
@@ -275,7 +282,13 @@ Critical criteria must be met before DONE. This contract fails: a mock result ca
 
 ## Hooks and CI
 
-The check runs wherever `workorder` is installed. Two optional places make it automatic. Both judge the change: the tasks it touches (their task file, receipts, contract or evidence) and the tasks that depend on them. Plain `workorder check` reads every task.
+The hook and a local `workorder check` judge recorded evidence. Plain `check`
+reads every task. The hook checks staged task files, receipts, contracts and
+evidence, plus their dependents. In CI, `check --base <main> --run-tests` is
+where each task's declared test is run again on the code being checked.
+`--base` also includes tasks whose test files changed. A reviewer can accept
+changes to a task's requirements with a `workorder-allow:<ID>` pull request
+label, passed as `--allow` in the example below.
 
 Pre-commit hook, to refuse committing a false DONE:
 
@@ -293,7 +306,9 @@ GitHub Actions (`.github/workflows/workorder.yml` in your project):
 
 ```yaml
 name: Workorder
-on: [pull_request]
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 permissions: {contents: read}
 jobs:
   check:
@@ -303,16 +318,29 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install workorder==0.4.0
-      - run: workorder check --base origin/${{ github.base_ref }} --run-tests
+      - run: python -m pip install workorder==0.5.0
+      - name: Check tasks and run their tests
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          # task ids from pull request labels named workorder-allow:<ID>
+          allow=$(jq -r '[.pull_request.labels[].name | select(test("^workorder-allow:[A-Z][A-Z0-9]*-[1-9][0-9]*$")) | sub("^workorder-allow:"; "")] | join(",")' "$GITHUB_EVENT_PATH")
+          workorder check --base "$BASE" --run-tests ${allow:+--allow "$allow"}
 ```
 
 What `--base` adds, beyond what the pre-commit hook can promise (`git commit --no-verify` skips the hook):
 
-- Receipts already on the base branch must still be there, unchanged.
+- Receipts already on the base branch must stay unchanged. With `--allow ID`, a task that was DONE, CLOSED or CANCELLED at the base may be removed with all its receipts.
 - A commit since the base that marked a task DONE or CLOSED must carry its implemented code.
 - A change to what a task requires (its `test`, its contract or its evidence, a removed dependency, or a removed or reworded line of its Scope or Acceptance) fails the check until a reviewer accepts it: `--allow TASK-4` (comma-separated ids) for a re-run started by a maintainer. Adding lines is not a change of requirement.
-- With `--run-tests`, the check runs the declared test of every task the change claims DONE or CLOSED, on the code being merged, instead of trusting the receipts recorded on the agent's machine.
+- Removing or changing lines in a task's test files needs `--allow ID`. Pure additions pass. Set `test_paths` to name files or folders; otherwise Workorder uses paths in the `test` command.
+- A task created and claimed DONE or CLOSED in the same change needs `--allow ID` to accept its definition.
+- With `--run-tests`, the check runs the declared tests of supported DONE or CLOSED claims in scope. It reports how many tasks it checked and how many tests actually ran. If none ran, it says so plainly.
+
+Only reviewers who may accept these changes should apply the allow labels.
+`--allow` accepts the named definition changes or complete task removal; it
+does not waive missing evidence, changed receipts on a retained task, or a
+failing test.
 
 ## Limitations
 
@@ -323,7 +351,7 @@ What `--base` adds, beyond what the pre-commit hook can promise (`git commit --n
 - Only task files are checked. Claims made in chat, issues or pull request text are not.
 - Receipts and claims record your Git `user.name`, and it is pushed. Receipts written by 0.2.0 or earlier also carry the computer's hostname, and keep it.
 - Ids, claims and releases are Git tags, so they show up in tag lists; a `git tag` that picks the newest tag should filter out `workorder/*`.
-- Every task stays in `tasks/`; there is no archive yet. Plain `workorder check` reads all of them, while the hook and CI read only what a change touches.
+- Tasks stay in `tasks/` until removed with reviewer acceptance through `check --base --allow`. Plain `workorder check` reads all current tasks, while the hook and `--base` read what a change touches.
 
 ## Contributing
 

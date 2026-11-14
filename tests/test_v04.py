@@ -283,7 +283,7 @@ def test_squash_with_changed_lines_needs_renew(local_repo):
     assert "computed CLOSED" in ok(root, "show", "--task", "TASK-1")
 
 
-def test_feature_branch_never_supplies_a_computed_merge(local_repo):
+def test_target_merge_is_visible_from_the_feature_branch(local_repo):
     root = local_repo
     feature(root)
     assert "computed DONE" in ok(root, "show", "--task", "TASK-1")
@@ -291,8 +291,8 @@ def test_feature_branch_never_supplies_a_computed_merge(local_repo):
     git(root, "merge", "-q", "--no-ff", "--no-edit", "feature")
     assert "computed CLOSED" in ok(root, "show", "--task", "TASK-1")
     git(root, "checkout", "-q", "feature")
-    assert "computed DONE" in ok(root, "show", "--task", "TASK-1")
-    assert "Merge:" not in cli(root, "check", "TASK-1").stdout
+    assert "computed CLOSED" in ok(root, "show", "--task", "TASK-1")
+    assert "Merge:" in ok(root, "check", "TASK-1")
 
 
 @pytest.mark.parametrize("target", ["local", "symbolic", "fallback", "override"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import subprocess
 import uuid
 
@@ -222,12 +223,7 @@ def computed_merge(root, record, implemented):
     if target is None:
         return None
     ref, commit = target
-    branch = s.git(root, "symbolic-ref", "-q", "HEAD", required=False).stdout.strip()
-    local_ref = "refs/heads/" + ref.split("/", 3)[3] if ref.startswith("refs/remotes/") else ref
-    if branch and branch != local_ref:
-        return None  # never use the checked-out feature branch as evidence of its own merge
-    if not branch and not s.contains(root, s.head(root), commit):
-        return None
+    # Always inspect the selected target. HEAD on a feature branch is never a fallback target.
     match = merge_match(root, implemented, commit)
     if match:
         return {**match, "ref": ref, "target": commit}
@@ -335,12 +331,13 @@ def finished(tid, all_records, views, seen=frozenset()):
     return not waits(all_records[tid], all_records, views, seen | {tid})
 
 
+@s.cached_read
 def fields_at(root, tid, rev="HEAD"):
     """The front matter of tasks/<tid>.md at a revision, or None if it has no readable record there."""
-    shown = s.git(root, "show", f"{rev}:tasks/{tid}.md", required=False)
-    if shown.returncode:
+    text = s.metadata_texts(root, rev, tid if rev != "HEAD" else None, False).get(f"tasks/{tid}.md")
+    if text is None:
         return None
-    lines = shown.stdout.replace("\r\n", "\n").removeprefix("\ufeff").splitlines()
+    lines = text.splitlines()
     try:
         return s.front_matter(tid, lines[1:lines.index("---", 1)])
     except (s.Refused, ValueError):
@@ -358,7 +355,7 @@ def newest_implementation(history):
     return history[index] if index >= 0 else None
 
 
-def base_problems(root, base, staged=False):
+def base_problems(root, base, staged=False, retired=frozenset()):
     """Receipts committed on the base revision must still be there, unchanged, as a prefix."""
     found = s.git(root, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", required=False)
     if found.returncode:
@@ -368,6 +365,8 @@ def base_problems(root, base, staged=False):
     problems = []
     tids = {s.receipt_task(p) for p in s.receipt_paths(root, rev=commit)} - {None}
     for tid in sorted(tids):
+        if tid in retired:
+            continue
         before = s.receipt_texts(root, tid, rev=commit)
         after = s.receipt_texts(root, tid, staged)
         try:
@@ -398,6 +397,39 @@ def owes(record, owed, delivery=()):
     return ", ".join(items + list(delivery)) or "nothing"
 
 
+@s.cached_read
+def task_history(root, base=None):
+    """One history walk for a linear task history. Merge histories keep Git's per-path simplification."""
+    log = s.git(root, "log", "--full-history", "--format=commit %H %P", "--raw", "--no-abbrev",
+                "--no-renames", f"{base}..HEAD" if base else "HEAD", "--", "tasks").stdout
+    changes, commit = {}, None
+    for line in log.splitlines():
+        if line.startswith("commit "):
+            words = line.split()
+            if len(words) > 3:
+                return None  # a merge needs the same path-specific history used by earlier releases
+            commit = words[1]
+        elif line.startswith(":") and "\t" in line:
+            info, path = line.split("\t", 1)
+            tid = path.removeprefix("tasks/").removesuffix(".md")
+            if path == f"tasks/{tid}.md" and s.ID.fullmatch(tid):
+                oid = info.split()[3]
+                changes.setdefault(tid, []).append((commit, oid))
+    blobs = s.read_blobs(root, {oid for items in changes.values() for _, oid in items if set(oid) != {"0"}})
+    result = {}
+    for tid, items in changes.items():
+        statuses = []
+        for commit, oid in items:
+            lines = blobs.get(oid, "").splitlines()
+            try:
+                fields = s.front_matter(tid, lines[1:lines.index("---", 1)])
+            except (ValueError, s.Refused):
+                fields = {}
+            statuses.append((commit, fields.get("status")))
+        result[tid] = statuses
+    return result
+
+
 def stale_claim(root, record, staged=False, base=None):
     """A DONE or CLOSED claim must be made on the code of the implementation it relies on.
 
@@ -423,11 +455,16 @@ def stale_claim(root, record, staged=False, base=None):
         where = "in this commit" if staged else "now"
         return (f"NOT QUITE  {tid} is being marked {status}, but the code {where} differs from the"
                 f" implemented commit {short}. Record workorder receipt implemented --task {tid} and test again.")
-    commits = s.git(root, "log", "--format=%H", f"{base}..HEAD" if base else "HEAD", "--",
-                    f"tasks/{tid}.md").stdout.split()
+    histories = task_history(root, base)
+    if histories is None:
+        commits = s.git(root, "log", "--format=%H", f"{base}..HEAD" if base else "HEAD", "--",
+                        f"tasks/{tid}.md").stdout.split()
+        statuses = ((commit, committed_status(root, tid, commit)) for commit in commits)
+    else:
+        statuses = histories.get(tid, [])
     claim = None
-    for commit in commits:  # newest first: walk back to the commit that made the claim
-        if committed_status(root, tid, commit) not in FINISHED:
+    for commit, status_at_commit in statuses:  # newest first: find the commit that made the claim
+        if status_at_commit not in FINISHED:
             break
         claim = commit
     else:
@@ -439,22 +476,59 @@ def stale_claim(root, record, staged=False, base=None):
     if (relied_on is None or current["hash"] != relied_on.get("hash")
             or s.code_digest(root, claim) == current["code"]):
         return None
-    merged = computed_merge(root, record, current)
+    # This concerns the claim's history, even when the task ships nothing.
+    target = merge_target(root, record)
+    merged = merge_match(root, current, target[1]) if target else None
     if (merged and merged["method"] in {"squash", "rebase"}
-            and s.contains(root, merged["commit"], claim)):
+            and s.contains(root, merged["commit"], claim)
+            and s.code_digest(root, claim) == s.code_digest(root, merged["commit"])):
+        return None
+    if equivalent_claim(root, record, current, claim):
         return None
     return (f"NOT QUITE  {tid} was marked {status} in {claim[:7]} on code other than the implemented"
             f" commit {short}. Record workorder receipt implemented --task {tid} on that code and test again.")
 
 
+def equivalent_claim(root, record, implemented, claim):
+    """A rebase preserves the code patch relative to each commit's own target merge base."""
+    target = merge_target(root, record)
+    if target is None:
+        return False
+    patches = []
+    for commit in (implemented["commit"], claim):
+        base = s.git(root, "merge-base", commit, target[1], required=False).stdout.strip()
+        if not base:
+            return False
+        diff = s.git(root, "diff", "--binary", "--no-renames", "--no-ext-diff", "--no-textconv",
+                     base, commit, "--", *s.CODE_PATHS).stdout
+        patch = s.git(root, "patch-id", "--stable", data=diff).stdout.split()
+        if not patch:
+            return False  # an empty change cannot excuse a claim on different code
+        patches.append(patch[0])
+    return patches[0] == patches[1]
+
+
+def unpushed_target(root, record):
+    target = merge_target(root, record)
+    if target is None or not target[0].startswith("refs/remotes/"):
+        return None
+    remote, branch = target[0].removeprefix("refs/remotes/").split("/", 1)
+    local = s.git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}",
+                  required=False)
+    implemented = newest_implementation(s.entries(root, record["id"]))
+    if (local.returncode == 0 and implemented and not merge_match(root, implemented, target[1])
+            and merge_match(root, implemented, local.stdout.strip())):
+        return f"push {branch} to {remote}: git push {remote} {branch}"
+    return None
+
+
 def changed_paths(root, reference, staged=False):
     """Paths that differ between reference and what is being checked (the index under --staged, the
     working tree otherwise, which in CI is the commit being checked), untracked task files included."""
-    args = ["diff", "--name-only", "--no-renames"] + (["--cached"] if staged else []) + [reference]
-    paths = set(s.git(root, *args).stdout.splitlines())
+    args = ["diff", "--name-only", "-z", "--no-renames"] + (["--cached"] if staged else []) + [reference]
+    paths = set(s.git(root, *args).stdout.split("\0")) - {""}
     if not staged:
-        paths |= set(s.git(root, "ls-files", "--others", "--exclude-standard", "--", "tasks",
-                           ".workorder", ".notquite").stdout.splitlines())
+        paths |= set(s.git(root, "ls-files", "-z", "--others", "--exclude-standard").stdout.split("\0")) - {""}
     return paths
 
 
@@ -475,13 +549,77 @@ def evidence_paths(root, record, staged=False):
     return found
 
 
-def scope(root, reference, staged, names, all_records):
+@s.cached_read
+def repository_files(root, rev=None):
+    args = ["ls-tree", "-r", "--name-only", "-z", rev] if rev else ["ls-files", "-z"]
+    return set(s.git(root, *args).stdout.split("\0")) - {""}
+
+
+def test_files(root, record, base, staged=False):
+    """Expand current and base definitions, so deleting a test or changing its path cannot hide it."""
+    before = fields_at(root, record["id"], base)
+    candidates = repository_files(root, base) | repository_files(root)
+    candidates |= changed_paths(root, base, staged)
+    found = set()
+    for definition in (before, record):
+        if definition is None:
+            continue
+        paths = definition.get("test_paths")
+        if paths is None:
+            paths = declared_test(definition) or []
+        if not isinstance(paths, list):
+            continue
+        for path in paths:
+            if not isinstance(path, str):
+                continue
+            if "test_paths" not in definition:
+                path = path.split("::", 1)[0]  # pytest node selection
+            try:
+                path = posixpath.normpath(s.local_path(root, path).relative_to(root).as_posix())
+            except (s.Refused, ValueError):
+                continue
+            found |= {p for p in candidates if path == "." or p == path or p.startswith(path + "/")}
+    return found
+
+
+def test_file_changes(root, base, record, staged=False):
+    paths = sorted(test_files(root, record, base, staged) & changed_paths(root, base, staged))
+    if not paths:
+        return None
+    # Disabling rename detection makes a rename remove the old file's lines, even when identical.
+    args = ["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv"]
+    if staged:
+        args.append("--cached")
+    delta = s.git(root, *args, base, "--", *(f":(literal){p}" for p in paths)).stdout
+    lost, affected, binary = 0, [], False
+    for entry in delta.split("\0"):
+        if not entry:
+            continue
+        added, removed, path = entry.split("\t", 2)
+        if path not in repository_files(root, base):
+            continue  # new files, including binary fixtures, are pure additions
+        exists = path in repository_files(root) if staged else s.local_path(root, path).is_file()
+        if removed == "-" or int(removed) or not exists:
+            lost += int(removed) if removed != "-" else 0
+            binary |= removed == "-"
+            affected.append(path)
+    if affected:
+        change = "changed binary content" if binary else f"lost or changed {lost} lines"
+        return f"{record['id']}: its test files {change} since {base} ({', '.join(affected)})"
+    return None
+
+
+def scope(root, reference, staged, names, all_records, include_tests=False):
     """The tasks a change touches (task file, receipts, contract or its evidence), and every task that
     depends on one of them, directly or not."""
     changed = changed_paths(root, reference, staged)
-    touched = {tid for tid in names if f"tasks/{tid}.md" in changed}
+    touched = {path[6:-3] for path in changed if path.startswith("tasks/") and path.endswith(".md")
+               and s.ID.fullmatch(path[6:-3])}
     touched |= {s.receipt_task(path) for path in changed} - {None}
     touched |= {tid for tid, record in all_records.items() if evidence_paths(root, record, staged) & changed}
+    if include_tests:
+        touched |= {tid for tid, record in all_records.items()
+                    if test_files(root, record, reference, staged) & changed}
     growing = True
     while growing:
         growing = False
@@ -500,6 +638,8 @@ def requirement_changes(root, base, record):
         return found
     if before.get("test", "") != record.get("test", ""):
         found.append(f"test changed: {before.get('test', '') or '(none)'!r} -> {record.get('test', '') or '(none)'!r}")
+    if before.get("test_paths") != record.get("test_paths"):
+        found.append("test_paths changed")
     if before.get("contract") != record.get("contract"):
         found.append(f"contract changed: {before.get('contract')} -> {record.get('contract')}")
     elif record.get("contract", "none") != "none":
@@ -537,15 +677,19 @@ def requirement_changes(root, base, record):
     return found
 
 
-def run_declared_test(root, record):
+def run_declared_test(root, record, counts=None):
     """Run a task's declared test here (CI), without a shell; return a problem line, or None if it passed."""
     tid, declared = record["id"], declared_test(record)
     if declared is None:
         return f"NOT QUITE  {tid} says {record['status']} but declares no test for this check to run"
     try:
         code = subprocess.run(declared, cwd=root).returncode
+        if counts is not None:
+            counts["tests"] += 1
     except OSError as error:
         code = f"not started: {error.strerror}"
+    finally:
+        s.invalidate_reads()  # a declared command may have changed files or refs
     if code == 0:
         return None
     return f"NOT QUITE  {tid} says {record['status']}, but its test failed when this check ran it (exit {code})"
@@ -563,7 +707,64 @@ class Views(dict):
         return self[tid]
 
 
-def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False):
+def dependency_cycles(all_records):
+    """Strongly connected components: only participants get a cycle problem."""
+    indices, low, stack, active, cycles = {}, {}, [], set(), {}
+
+    def visit(tid):
+        indices[tid] = low[tid] = len(indices)
+        stack.append(tid)
+        active.add(tid)
+        children = [w[5:] for w in s.dependencies(all_records[tid])
+                    if w.startswith("task:") and w[5:] in all_records]
+        for other in children:
+            if other not in indices:
+                visit(other)
+                low[tid] = min(low[tid], low[other])
+            elif other in active:
+                low[tid] = min(low[tid], indices[other])
+        if low[tid] == indices[tid]:
+            group = []
+            while True:
+                other = stack.pop()
+                active.remove(other)
+                group.append(other)
+                if other == tid:
+                    break
+            if len(group) > 1 or tid in children:
+                for other in group:
+                    cycles[other] = "dependency cycle: " + ", ".join(sorted(group))
+
+    for tid in all_records:
+        if tid not in indices:
+            visit(tid)
+    return cycles
+
+
+def removals(root, base, names, allow, staged=False):
+    before = s.metadata_texts(root, base, None, False)
+    old_tasks = {p[6:-3] for p in before if p.startswith("tasks/") and p.endswith(".md")
+                 and s.ID.fullmatch(p[6:-3])}
+    retired, problems = set(), []
+    for tid in sorted(old_tasks - set(names)):
+        if (tid in allow and committed_status(root, tid, base) in FINISHED | {"CANCELLED"}
+                and not s.receipt_paths(root, staged, tid=tid)):
+            retired.add(tid)
+        else:
+            problems.append(f"{tid}: task file removed since {base}; removing a DONE, CLOSED or CANCELLED"
+                            f" task requires all its receipts removed and --allow {tid}")
+    return retired, problems
+
+
+def check_summary(counts, run_tests=False):
+    line = f"checked {counts['tasks']} tasks ({counts['claimed']} claimed DONE or CLOSED)"
+    if run_tests:
+        line += f"; ran {counts['tests']} declared tests"
+    return line
+
+
+@s.read_session()
+def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, counts=None):
     """Problems that refuse the check.
 
     Plain check reads every task. With --staged (the pre-commit hook) or --base REF (CI) it judges the
@@ -572,6 +773,7 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False):
     dependencies) fails unless the task is in allow; with run_tests, CI runs each claimed task's test.
     """
     notes = [] if notes is None else notes
+    counts = {} if counts is None else counts
     errors = {}
     all_records = records(root, staged, errors)
     names = task_names(root, staged)
@@ -583,23 +785,30 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False):
                             " (in GitHub Actions: actions/checkout with fetch-depth: 0)")
         reference = None  # the first commit: nothing to compare with, check everything
     if reference:
-        selected, changed = scope(root, reference, staged, names, all_records)
+        selected, changed = scope(root, reference, staged, names, all_records, include_tests=bool(base))
     else:
         selected, changed = set(names), None
+    counts.update(tasks=len(selected), claimed=sum(r["status"] in FINISHED for tid, r in all_records.items()
+                                                   if tid in selected), tests=0)
     problems = [f"{tid}: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())
                 if tid in selected]
     stray = [path for path in s.files(root, "tasks", staged) if not path.endswith(".md")
              and (changed is None or path in changed)]
     problems += [f"{path}: only task files belong in tasks/; a file here is outside the code fingerprint,"
                  " so changes to it are never checked" for path in stray]
+    retired = set()
     if base:
-        problems += base_problems(root, base, staged)
+        retired, removed_problems = removals(root, base, names, allow, staged)
+        problems += removed_problems + base_problems(root, base, staged, retired)
+        notes += [f"{tid}: task and all receipts removed (allowed)" for tid in sorted(retired)]
     views = Views(root, all_records, staged)
     # Include removed receipts and ledgers whose task file was also removed.
     paths = set(s.receipt_paths(root, rev="HEAD")) | set(s.receipt_paths(root, staged))
     tids = {s.receipt_task(path) for path in paths
             if changed is None or path in changed or s.receipt_task(path) in selected} - {None}
     for tid in sorted(tids):
+        if tid in retired:
+            continue
         try:
             s.entries(root, tid, staged)
         except s.Refused as error:
@@ -609,10 +818,12 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False):
         if tid not in all_records and tid not in errors:
             problems.append(f"{tid}: receipt ledger has no task record")
     visiting, visited = set(), set()
+    cycles = dependency_cycles(all_records)
+    problems += [f"{tid}: {message}" for tid, message in sorted(cycles.items()) if tid in selected]
 
     def walk(tid):
         if tid in visiting:
-            raise s.Refused(f"dependency cycle at {tid}")
+            return
         if tid in visited:
             return
         visiting.add(tid)
@@ -654,6 +865,18 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False):
         if found:
             problems.append(found)
         if base:
+            if fields_at(root, tid, base) is None and record["status"] in FINISHED:
+                line = f"{tid} was created and claimed {record['status']} in the same change"
+                if tid in allow:
+                    notes.append(line + " (definition allowed)")
+                else:
+                    problems.append(line + f"; a reviewer accepts its definition with --allow {tid}")
+            changed_tests = test_file_changes(root, base, record, staged)
+            if changed_tests:
+                if tid in allow:
+                    notes.append(changed_tests + " (allowed)")
+                else:
+                    problems.append(changed_tests + f"; a reviewer accepts it with --allow {tid}")
             for change in requirement_changes(root, base, record):
                 line = f"{tid}: {change} since {base}"
                 if tid in allow:
@@ -664,7 +887,7 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False):
             for change in requirement_changes(root, "HEAD", record):
                 notes.append(f"{tid}: {change} in this commit")
         if run_tests and not found and record["status"] in FINISHED:
-            failed = run_declared_test(root, record)
+            failed = run_declared_test(root, record, counts)
             if failed:
                 problems.append(failed)
             else:
@@ -681,7 +904,7 @@ def claim_debt(record, all_records, views):
     return done + (delivery if claimed == "CLOSED" else []) + waits(record, all_records, views)
 
 
-def next_step(item, record, code_changed=False):
+def next_step(item, record, code_changed=False, root=None):
     tid = record["id"]
     command = record.get("test", "").strip() or "<your test command>"
     if item == "implementation":
@@ -706,6 +929,9 @@ def next_step(item, record, code_changed=False):
     if item.startswith("contract "):
         return f"add qualifying evidence to {record['contract']}"
     if item == "merge of the tested code":
+        push = unpushed_target(root, record) if root else None
+        if push:
+            return push
         return ("the merged code differs from the tested code or no matching merge was found; "
                 f"run workorder renew --task {tid} on main, or record workorder receipt merged --task {tid}")
     if item.startswith("deployment read-back"):
@@ -834,6 +1060,7 @@ def timeline(root, record, history):
     return lines
 
 
+@s.read_session()
 def record_lines(root, tid):
     """The task as a record to come back to: what it is, where it stands, what happened, what is next."""
     errors = {}
@@ -884,10 +1111,11 @@ def record_lines(root, tid):
     lines += ["", "progress:"] + ([f"  {line}" for line in progress] or ["  (no notes yet)"])
     owed = stale + done + delivery + open_waits
     if owed:
-        lines += ["", f"next step: {next_step(owed[0], record)}"]
+        lines += ["", f"next step: {next_step(owed[0], record, root=root)}"]
     return lines
 
 
+@s.read_session()
 def explain(root, tid):
     """Lines describing one task's claim and evidence, and whether the claim stands."""
     errors = {}
@@ -935,7 +1163,7 @@ def explain(root, tid):
         lines.append(f"  Note:     {ACCEPTANCE_NOTE}")
     if debt:
         lines += [f"  Missing:  {item}" for item in debt]
-        lines += [f"  Next:     {next_step(item, record, code_changed)}" for item in debt]
+        lines += [f"  Next:     {next_step(item, record, code_changed, root)}" for item in debt]
         result = "NOT DONE" if done or claimed == "DONE" else "NOT CLOSED"
         lines += ["", f"  Result: {result}. The status says {claimed}; the evidence above does not support it."]
     else:
@@ -946,19 +1174,22 @@ def explain(root, tid):
     return lines, bool(debt)
 
 
+@s.read_session()
 def ready(root):
     # A refused DONE or CLOSED claim is shown on its own task; it does not hide the rest of the work.
-    # Problems with the task set itself (cycles, missing tasks, stray ledgers) still stop the listing.
+    # Cycles belong to their participants; unrelated work remains visible.
     issues = check(root)
     unreadable = {}
     records(root, errors=unreadable)
     refused = {issue.split()[2] for issue in issues if issue.startswith("NOT QUITE  ")}
     structural = [issue for issue in issues if not issue.startswith("NOT QUITE  ")
-                  and issue.split(":")[0] not in unreadable and not issue.startswith("tasks/")]
+                  and issue.split(":")[0] not in unreadable and not issue.startswith("tasks/")
+                  and ": dependency cycle:" not in issue]
     if structural:
         raise s.Refused("; ".join(structural))
     errors = {}
     all_records = records(root, errors=errors)
+    cycles = dependency_cycles(all_records)
     views = Views(root, all_records)
     lines = [f"{tid} cannot be read: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())]
     try:
@@ -976,7 +1207,9 @@ def ready(root):
         if claimed and views[tid][0] == "CLOSED" and not blocked and tid not in refused:
             continue
         held = claims.get(tid)
-        if tid in refused:
+        if tid in cycles:
+            state = cycles[tid]
+        elif tid in refused:
             state = f"says {record['status']}, which the evidence does not support: workorder check {tid}"
         elif blocked:
             state = "blocked: " + ", ".join(blocked)

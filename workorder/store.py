@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
 import hashlib
 import hmac
 import heapq
@@ -17,6 +20,41 @@ import uuid
 
 class Refused(ValueError):
     pass
+
+
+_READS = ContextVar("workorder_reads", default=None)
+
+
+@contextmanager
+def read_session():
+    """Share reads within one command, never across commands in an embedding process."""
+    if _READS.get() is not None:
+        yield
+        return
+    token = _READS.set({})
+    try:
+        yield
+    finally:
+        _READS.reset(token)
+
+
+def invalidate_reads():
+    cache = _READS.get()
+    if cache is not None:
+        cache.clear()
+
+
+def cached_read(function):
+    @wraps(function)
+    def read(*args, **kwargs):
+        cache = _READS.get()
+        if cache is None:
+            return function(*args, **kwargs)
+        key = (function, args, tuple(sorted(kwargs.items())))
+        if key not in cache:
+            cache[key] = function(*args, **kwargs)
+        return cache[key]
+    return read
 
 
 ID = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*\Z")
@@ -43,6 +81,18 @@ def now():
 
 
 def git(root, *args, data=None, required=True):
+    run = (_git_read if args[0] in {"rev-parse", "symbolic-ref", "show", "log", "ls-tree",
+                                   "ls-files", "diff", "merge-base", "rev-list", "patch-id",
+                                   "check-ref-format"} else _git_run)
+    return run(root, *args, data=data, required=required)
+
+
+@cached_read
+def _git_read(root, *args, data=None, required=True):
+    return _git_run(root, *args, data=data, required=required)
+
+
+def _git_run(root, *args, data=None, required=True):
     result = subprocess.run(
         ["git", *args], cwd=root, input=data, capture_output=True,
         encoding="utf-8", errors="strict", timeout=30,
@@ -60,6 +110,7 @@ def who(root):
     return name
 
 
+@cached_read
 def head(root):
     return git(root, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip()
 
@@ -92,11 +143,19 @@ def read_bytes(root, relative, staged=False):
 
 def read_text(root, relative, staged=False):
     # Git on Windows may check text files out with CRLF; the content is the same.
+    if staged and (receipt_task(relative) or relative.startswith("tasks/")):
+        text = metadata_texts(root, None, None, True).get(relative)
+        if text is None:
+            raise Refused(f"missing staged file: {relative}")
+        return text
     return read_bytes(root, relative, staged).decode("utf-8").removeprefix("\ufeff").replace("\r\n", "\n")
 
 
+@cached_read
 def files(root, directory, staged=False):
     if staged:
+        if directory == "tasks":
+            return sorted(p for p in git(root, "ls-files", "-z", "--", "tasks").stdout.split("\0") if p)
         paths = git(root, "ls-files", "-z", "--", directory).stdout.split("\0")
         return sorted(p for p in paths if p)
     base = local_path(root, directory)
@@ -106,23 +165,22 @@ def files(root, directory, staged=False):
 # CANCELLED ends a task that will not be done: it needs no evidence and never counts as finished.
 STATUSES = ("IN_PROGRESS", "BLOCKED", "DONE", "CLOSED", "CANCELLED")
 CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract")
-# Optional fields of the extended template. Only depends_on and test affect a verdict, and only by
-# adding requirements (dependencies; the one test command that counts); the rest is information for
-# people and never stands in for evidence.
+# Optional fields. Dependencies and the test add requirements; merge_ref selects delivery's target,
+# and test_paths selects files guarded by a base check. Planning fields never stand in for evidence.
 EXTENDED_FIELDS = ("business_owner", "priority", "created_at", "mission", "depends_on", "blocks",
-                   "next", "summary", "test", "merge_ref")
+                   "next", "summary", "test", "test_paths", "merge_ref")
 EXTENDED_ORDER = ("id", "title", "owner", "business_owner", "priority", "created_at", "mission",
                   "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "test",
                   "contract")
 TASK_REF = r"[A-Z][A-Z0-9]*-[1-9][0-9]*"
 FRONT_MATTER_HELP = ("front matter takes `key: value` lines: plain single-line text, a JSON string, or a"
                      ' list such as ["TASK-1"]; mission, next and summary may use > or | blocks, and'
-                     " depends_on, blocks and waits_on may use indented - item lines")
+                     " depends_on, blocks, waits_on and test_paths may use indented - item lines")
 # The small YAML subset Workorder reads. Anything else is refused rather than guessed.
 BLOCK_TEXT_FIELDS = ("mission", "next", "summary")
-LIST_FIELDS = ("depends_on", "blocks", "waits_on")
+LIST_FIELDS = ("depends_on", "blocks", "waits_on", "test_paths")
 BLOCK_INDICATORS = (">", "|", ">-", "|-", ">+", "|+")
-PLAIN_ITEM = r"[A-Za-z0-9_.@:-]+"
+PLAIN_ITEM = r"[A-Za-z0-9_./@:-]+"
 
 
 def front_value(tid, key, raw):
@@ -195,7 +253,7 @@ def block_list(tid, key, block):
                 item = json.loads(item)
             except ValueError:
                 item = None
-        if not isinstance(item, str) or not re.fullmatch(PLAIN_ITEM, item):
+        if not isinstance(item, str) or not item or (key != "test_paths" and not re.fullmatch(PLAIN_ITEM, item)):
             raise Refused(f"{tid}: {key}: list lines look like \"  - TASK-1\"")
         items.append(item)
     return items
@@ -251,6 +309,7 @@ def task_refs(tid, key, value):
     return list(dict.fromkeys(ids))
 
 
+@cached_read
 def record(root, tid, staged=False):
     task_id(tid)
     if not staged and not local_path(root, f"tasks/{tid}.md").is_file():
@@ -294,6 +353,12 @@ def record(root, tid, staged=False):
             raise Refused(f"{tid}: {key} must be text")
     if fields.get("test", "").strip():
         split_command(fields["test"], f"{tid}: test")
+    if "test_paths" in fields:
+        paths = fields["test_paths"]
+        if not isinstance(paths, list) or any(not isinstance(p, str) or not p.strip() for p in paths):
+            raise Refused(f"{tid}: test_paths must be a list of repository paths")
+        for path in paths:
+            local_path(root, path)
     if fields.get("created_at"):
         try:
             dt.datetime.fromisoformat(fields["created_at"].replace("Z", "+00:00"))
@@ -554,15 +619,67 @@ def receipt_task(path):
     return None
 
 
+@cached_read
+def metadata_texts(root, rev=None, tid=None, staged=False):
+    """Read task and receipt blobs in two Git calls, preserving byte-sized batch framing.
+
+    HEAD and the index are shared across tasks. Historical reads select one task;
+    immutable blobs already read in this session need not be read again.
+    """
+    scopes = ([f"tasks/{tid}.md", *[f"{d}/{tid}.jsonl" for d in RECEIPT_DIRS],
+               *[f"{d}/{tid}" for d in RECEIPT_DIRS]] if tid else ["tasks", *RECEIPT_DIRS])
+    args = ["ls-files", "--stage", "-z"] if staged else ["ls-tree", "-r", "-z", rev or "HEAD"]
+    listing = git(root, *args, "--", *scopes, required=False)
+    objects = {}
+    for entry in listing.stdout.split("\0"):
+        if not entry:
+            continue
+        info, path = entry.split("\t", 1)
+        mode, kind, oid = info.split()
+        if staged:
+            oid, stage = kind, oid
+            if stage != "0":
+                continue  # unresolved paths are reported as missing staged files
+        elif kind != "blob":
+            continue
+        if receipt_task(path) or (path.startswith("tasks/") and path.endswith(".md")):
+            objects[path] = oid
+    blobs = read_blobs(root, objects.values())
+    return {path: blobs[oid] for path, oid in objects.items()}
+
+
+def read_blobs(root, oids):
+    cache = _READS.get()
+    blobs = cache.setdefault(("blobs", root), {}) if cache is not None else {}
+    wanted = sorted(set(oids) - blobs.keys())
+    if wanted:
+        result = subprocess.run(["git", "cat-file", "--batch"], cwd=root,
+                                input=("\n".join(wanted) + "\n").encode(),
+                                capture_output=True, timeout=30, check=True)
+        offset = 0
+        for oid in wanted:
+            end = result.stdout.index(b"\n", offset)
+            header = result.stdout[offset:end].split()
+            if len(header) != 3 or header[1] != b"blob":
+                raise Refused("Git could not read a task or receipt blob")
+            size = int(header[2])
+            raw = result.stdout[end + 1:end + 1 + size]
+            blobs[oid] = raw.decode("utf-8").removeprefix("\ufeff").replace("\r\n", "\n")
+            offset = end + 2 + size
+    return blobs
+
+
+@cached_read
 def receipt_paths(root, staged=False, rev=None, tid=None):
     """Receipt files of every task, or of one task (its legacy ledger and its folder) when tid is given."""
     scopes = ([f"{d}/{tid}.jsonl" for d in RECEIPT_DIRS] + [f"{d}/{tid}" for d in RECEIPT_DIRS]
               if tid else list(RECEIPT_DIRS))
     if rev:
-        return git(root, "ls-tree", "-r", "--name-only", rev, "--", *scopes,
-                   required=False).stdout.splitlines()
+        return sorted(p for p in metadata_texts(root, rev, tid if rev != "HEAD" else None, False)
+                      if receipt_task(p) and (tid is None or receipt_task(p) == tid))
     if staged:
-        return sorted(p for p in git(root, "ls-files", "-z", "--", *scopes).stdout.split("\0") if p)
+        return sorted(p for p in metadata_texts(root, None, None, True)
+                      if receipt_task(p) and (tid is None or receipt_task(p) == tid))
     found = []
     for scope in scopes:
         path = local_path(root, scope)
@@ -573,9 +690,12 @@ def receipt_paths(root, staged=False, rev=None, tid=None):
     return sorted(found)
 
 
+@cached_read
 def receipt_texts(root, tid, staged=False, rev=None):
-    return {p: (git(root, "show", f"{rev}:{p}").stdout.replace("\r\n", "\n") if rev
-                else read_text(root, p, staged))
+    if rev or staged:
+        return {p: text for p, text in metadata_texts(
+            root, rev, tid if rev and rev != "HEAD" else None, staged).items() if receipt_task(p) == tid}
+    return {p: read_text(root, p)
             for p in receipt_paths(root, staged, rev, tid) if receipt_task(p) == tid}
 
 
@@ -734,6 +854,7 @@ def receipt_changes(root, tid, before, after, history=None):
     return changed
 
 
+@cached_read
 def entries(root, tid, staged=False, rev=None):
     task_id(tid)
     texts = receipt_texts(root, tid, staged, rev)
@@ -753,6 +874,7 @@ def write_receipt(root, tid, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("x", encoding="utf-8", newline="\n") as stream:
         stream.write(packed(data) + "\n")
+    invalidate_reads()
     return path
 
 

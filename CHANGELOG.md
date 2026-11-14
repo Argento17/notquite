@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0 (unreleased)
+
+- Share receipt reads within a command, read committed metadata in batches,
+  and walk linear task histories once. Keep CRLF receipt checks.
+- Compute target merges from feature branches and detached checkouts. Keep
+  finished claims after a rebase when their code patches still match.
+- Suggest pushing main when a matching squash has not reached origin/main.
+- Print checked task and claim counts. With `--run-tests`, count tests that
+  actually ran and say plainly when none ran.
+- Add `test_paths`. Base checks include changed test files and require
+  reviewer acceptance for removed or changed lines, including renames.
+- Require acceptance for a task created and claimed finished in one change.
+- Allow complete removal of a task that was DONE, CLOSED or CANCELLED at the
+  base with `--allow ID`. Keep refusing partial removal or unfinished tasks.
+- Report dependency cycles on their tasks and keep checking and listing the rest.
+- Document reviewer allow labels and declared test reruns in GitHub Actions.
+
 ## 0.4.0 (unreleased)
 
 - Write one file per receipt. Parent hashes let branches add receipts for the

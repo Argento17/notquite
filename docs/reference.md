@@ -15,7 +15,7 @@ code in `workorder/`; if the two disagree, the code wins and this file has a bug
 | `workorder receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
 | `workorder check [ID or tasks/ID.md]` | No argument: reads every task; one line per problem, or `check: OK`. With a task: an explanation of that task alone |
 | `workorder check --staged` | For the pre-commit hook: checks the staged versions of the tasks this commit touches (task file, receipts, contract or its evidence) and the tasks that depend on them; refuses a commit that newly claims DONE or CLOSED on code other than the implemented code; notes changes to a task's requirements |
-| `workorder check --base REF [--allow IDS] [--run-tests]` | For CI, against the pull request's base branch: checks the tasks changed since `REF` and their dependents; refuses receipts removed or changed since `REF`, a DONE or CLOSED claimed since `REF` on code other than the implementation it relied on, and any change to a task's `test`, contract, evidence or dependencies unless the task is in `--allow`. `--run-tests` runs the declared test of each task the change claims DONE or CLOSED |
+| `workorder check --base REF [--allow IDS] [--run-tests]` | Checks changed tasks, including their test files, and their dependents. Refuses stale claims, changed receipts, changed requirements or test lines, new finished definitions, and removed tasks. `--allow` accepts definition changes and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
 | `workorder show --task ID` | The task as a record: recorded and computed status, what is still owed, title, mission, next and test, a dated timeline of its receipts, its Progress notes and the next step |
 | `workorder note --task ID TEXT` | Adds `- YYYY-MM-DD: TEXT` at the end of the task's Progress section (creating it if needed) |
 | `workorder renew --task ID [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded by `renew` |
@@ -54,7 +54,7 @@ everything else with a message naming the line:
   at the start of the file is ignored.
 - Lists, on one line: JSON (`["TASK-1", "task:TASK-2"]`) or simple
   (`[TASK-1, task:TASK-2]`, items without spaces or quotes).
-- Indented lists for `depends_on`, `blocks` and `waits_on` only:
+- Indented lists for `depends_on`, `blocks`, `waits_on` and `test_paths` only:
 
   ```yaml
   depends_on:
@@ -77,7 +77,7 @@ Not read, and refused:
   multi-line plain or quoted values. A `#` after a value on the
   same line is not a comment here: it stays part of the value;
 - block text on any field other than `mission`, `next` and `summary`, and
-  indented lists on any field other than the three list fields;
+  indented lists on any field other than the four list fields;
 - block indicators with an explicit indentation number (`|2`);
 - a block line indented less than the block's first line (YAML would end the
   block or treat it as a comment; Workorder refuses rather than guess).
@@ -113,6 +113,14 @@ may be used; any other field (except `x-` fields) is refused, so typos are caugh
   recorded command. `new --test COMMAND` fills it in. Words split on
   spaces, quotes group words, backslashes are kept as written, and shell
   operators (`&&`, `|`, `;`, `>`) are refused: put compound steps in a script.
+- `test_paths`: an optional list of repository paths, for example
+  `["tests/test_list.py", "tests/integration"]`. A folder includes every file
+  below it. Paths must stay inside the repository. If absent, existing file
+  and folder paths in the `test` command are used, including quoted paths and
+  pytest node paths such as `tests/test_list.py::test_sort`. Both the base and
+  current definitions are read, so deleting a file or removing a path from
+  the task cannot hide a change. An explicit empty list selects no test files.
+  Changing `test_paths` itself needs `--allow ID` under `--base`.
 - `merge_ref`: a full branch ref, such as `refs/heads/release` or
   `refs/remotes/origin/release`. Overrides the computed merge target. Short
   names and tag refs are refused. An absent target does not prove a merge.
@@ -130,7 +138,9 @@ it says DONE or CLOSED, its evidence computes DONE or CLOSED, and its own
 dependencies are finished, all the way down; a reopened or cancelled task is
 not finished. `ready` lists open dependencies as blocked. A task may not both
 wait for and block the same task. Missing task dependencies and dependency
-cycles, across both fields, make `check` fail.
+cycles, across both fields, make `check` fail. Each cycle is reported on its
+participating tasks. `check` continues checking other tasks, and `ready`
+continues listing them.
 
 Planning fields and sections do not supply evidence. `depends_on` adds
 dependencies, `test` selects the command that counts, and `merge_ref` selects
@@ -183,7 +193,13 @@ DONE or CLOSED claim must therefore be made on the implemented code:
   that made it (since `REF` with `--base REF`), and that commit's code is
   compared with the implementation the claim relied on, unless a newer
   `implemented` receipt was recorded after it. A claim carried into a verified
-  squash or rebase is accepted on that merged change.
+  squash or rebase is accepted on that merged change, from any checkout.
+- After a branch rebase, the claim also counts when its code diff from its
+  merge base with the target has the same `git patch-id --stable` as the
+  implementation's code diff from its own merge base with that target.
+  Both patches must be nonempty. Task files and receipts are excluded.
+  Unrelated changes on main do not invalidate the claim. A changed patch
+  still needs fresh evidence. Merging main into the branch also works.
 
 `check <id>` adds a note when HEAD's code differs, and a `Command:` line naming
 the command behind the deciding test run. Code that lands after a task is DONE
@@ -220,23 +236,106 @@ to, else `refs/remotes/origin/main`. A repository with neither uses
 `refs/heads/main`. A commit only on local `main` is not merged until it is
 pushed (pushing updates the local copy of `origin/main`).
 A task's `merge_ref` overrides this order. Checks read local refs without
-fetching. A named checkout must be the target branch (or the local branch
-corresponding to an `origin` ref). A detached checkout must be contained in
-the target. A check on a feature branch does not compute its own merge.
+fetching. Checks use this target from any checkout, including feature
+branches and detached checkouts. The checked-out feature branch is never
+used as its own merge target.
 
 The search examines up to 1,000 target commits after the merge base. Rebase
 comparison also limits the implementation range to 1,000 commits; a partial
 range never proves a rebase. Ancestry is checked before the bounded search.
 Results and code fingerprints are cached in `.git/workorder-digests/`, keyed
-by immutable commit IDs. The cache is local and can be removed.
+by immutable commit IDs. The cache is local and can be removed. Each command
+also shares receipt and Git reads in memory, then discards those reads.
+Committed metadata blobs are read in batches. Linear task histories share one
+history walk; merge histories retain Git's per-task history rules.
 
 Patch checks need the original implementation history. If it is absent,
 Workorder can still recognise exactly matching code. It does not reconstruct
 a missing patch from the receipt. Fetch that history or renew the evidence.
 When the target's change differs, `next_step` suggests
-`workorder renew --task ID` on main or `workorder receipt merged`.
+`workorder renew --task ID` on main or `workorder receipt merged`. If the
+matching change is on local main but not the selected origin/main, the next
+step says to push main instead.
 `show` and `check` explain a match, for example:
 `merged into main by squash 1a2b3c4, computed`.
+
+## Checks against a base
+
+`check --base REF` selects tasks whose records, receipts, contracts, evidence
+or test files changed since REF, and their dependents. A folder in `test_paths`
+includes all its files. Without `test_paths`, paths named in `test` are used if
+they exist at the base or in the checkout. Plain additions to test files pass.
+Removed or changed lines require reviewer acceptance, even when the task file
+itself did not change. Renames count as deleting the old path and adding the
+new one. Binary edits also need acceptance. A refusal looks like:
+
+```text
+TASK-4: its test files lost or changed 2 lines since origin/main (tests/test_list.py); a reviewer accepts it with --allow TASK-4
+```
+
+A task file absent at the base but claimed DONE or CLOSED in this change
+needs acceptance of its definition:
+
+```text
+TASK-4 was created and claimed DONE in the same change; a reviewer accepts its definition with --allow TASK-4
+```
+
+Removing a task file is refused by default, even if it has no receipts. With
+`--allow ID`, a task that was DONE, CLOSED or CANCELLED at the base may be
+removed together with all its receipts in both receipt folders. Partial
+removal, removal of an unfinished task, and changes to receipts of a retained
+task are still refused. Dependents must still have valid dependencies.
+
+`--allow` takes comma-separated ids. It accepts definition changes and the
+complete removal described above. It does not excuse missing evidence,
+unfinished dependencies or failing tests.
+
+Every check mode prints a summary after its result and notes:
+
+```text
+checked 3 tasks (2 claimed DONE or CLOSED); ran 2 declared tests
+```
+
+The test count appears only with `--run-tests`. It counts commands actually
+started, including failures. A command that could not start does not count.
+If none ran, another line says `no declared test ran in this check`. A task
+with `test: any` has no declared command to rerun. Only selected tasks with
+supported DONE or CLOSED claims have their tests run. Counts describe the
+selected tasks, including unreadable or removed tasks; unreadable claims are
+not included in the claim count. A single-task check counts that task only.
+Exit codes are unchanged: 0 for acceptance, 1 for refusal.
+
+### GitHub Actions
+
+The hook and plain local checks judge recorded evidence. This workflow runs
+the declared tests again. It reads `workorder-allow:<ID>` labels from the pull
+request event and passes their ids to `--allow`. Only reviewers who may
+accept these changes should apply those labels. Label text is read as data;
+it is never inserted into shell code.
+
+```yaml
+name: Workorder
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+permissions: {contents: read}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}   # receipts refer to earlier commits
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install workorder==0.5.0
+      - name: Check tasks and run their tests
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          # task ids from pull request labels named workorder-allow:<ID>
+          allow=$(jq -r '[.pull_request.labels[].name | select(test("^workorder-allow:[A-Z][A-Z0-9]*-[1-9][0-9]*$")) | sub("^workorder-allow:"; "")] | join(",")' "$GITHUB_EVENT_PATH")
+          workorder check --base "$BASE" --run-tests ${allow:+--allow "$allow"}
+```
 
 ## Receipts
 
@@ -282,7 +381,8 @@ These rules apply to the working tree against HEAD, the index under
 `check --staged`, and the base revision under `check --base REF`.
 Line-ending conversion from LF to CRLF is allowed. A deletion already
 committed with hooks skipped cannot be found by comparing HEAD with itself;
-use `--base` to check against the earlier revision.
+use `--base` to check against the earlier revision. The complete removal of
+a finished or cancelled task has the explicit exception below.
 
 ### Repair
 
