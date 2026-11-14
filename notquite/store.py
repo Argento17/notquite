@@ -100,25 +100,158 @@ def files(root, directory, staged=False):
     return sorted(p.relative_to(root).as_posix() for p in base.rglob("*") if p.is_file())
 
 
+CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract")
+# Optional fields of the extended template. Only depends_on affects a verdict, and only by adding
+# dependencies; the rest is information for people and never stands in for evidence.
+EXTENDED_FIELDS = ("business_owner", "priority", "created_at", "mission", "depends_on", "blocks",
+                   "next", "summary")
+EXTENDED_ORDER = ("id", "title", "owner", "business_owner", "priority", "created_at", "mission",
+                  "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "contract")
+TASK_REF = r"[A-Z][A-Z0-9]*-[1-9][0-9]*"
+FRONT_MATTER_HELP = ("front matter takes `key: value` lines: plain single-line text, a JSON string, or a"
+                     ' list such as ["TASK-1"]; mission, next and summary may use > or | blocks, and'
+                     " depends_on, blocks and waits_on may use indented - item lines")
+# The small YAML subset NotQuite reads. Anything else is refused rather than guessed.
+BLOCK_TEXT_FIELDS = ("mission", "next", "summary")
+LIST_FIELDS = ("depends_on", "blocks", "waits_on")
+BLOCK_INDICATORS = (">", "|", ">-", "|-", ">+", "|+")
+PLAIN_ITEM = r"[A-Za-z0-9_.@:-]+"
+
+
+def front_value(tid, key, raw):
+    """Parse one value: plain text, a JSON string or list, or a simple [a, b] list."""
+    raw = raw.strip()
+    if not raw.startswith(('"', '[')):
+        return raw
+    try:
+        return json.loads(raw)
+    except ValueError:
+        pass
+    inner = raw[1:-1].strip() if raw.startswith("[") and raw.endswith("]") else None
+    items = [item.strip() for item in inner.split(",")] if inner else []
+    if inner is None or any(not re.fullmatch(PLAIN_ITEM, item) for item in items):
+        raise Refused(f"{tid}: cannot read {key}; {FRONT_MATTER_HELP}")
+    return items
+
+
+def block_text(tid, key, indicator, block):
+    """A YAML > (folded) or | (literal) block, with optional - (strip) or + (keep) chomping."""
+    filled = [line for line in block if line.strip()]
+    if not filled:
+        return ""
+    indent = len(filled[0]) - len(filled[0].lstrip(" "))
+    if any(len(line) - len(line.lstrip(" ")) < indent for line in filled):
+        raise Refused(f"{tid}: {key}: block lines must keep the indentation of the first line")
+    content = [line[indent:] if line.strip() else "" for line in block]
+    trailing = len(content) - len("\n".join(content).rstrip("\n").split("\n"))
+    content = content[:len(content) - trailing]
+    if indicator[0] == "|":
+        text = "\n".join(content)
+    else:
+        # Folding joins two ordinary lines with a space; empty lines become line breaks. Lines
+        # indented further than the block keep their own line breaks, as in YAML.
+        text, previous, empty = "", None, 0
+        for line in content:
+            if not line:
+                empty += 1
+                continue
+            if previous is None:
+                text += "\n" * empty
+            elif previous.startswith(" ") or line.startswith(" "):
+                text += "\n" * (empty + 1)
+            else:
+                text += "\n" * empty if empty else " "
+            text += line
+            previous, empty = line, 0
+    if indicator.endswith("-"):
+        return text
+    if indicator.endswith("+"):
+        return text + "\n" * (1 + trailing)
+    return text + "\n"
+
+
+def block_list(tid, key, block):
+    """Indented "- item" lines: plain ids or JSON strings, nothing nested."""
+    items = []
+    for line in block:
+        if not line.strip():
+            continue
+        match = re.fullmatch(r" +- +(.+?)\s*", line)
+        item = match.group(1) if match else None
+        if item and item.startswith('"'):
+            try:
+                item = json.loads(item)
+            except ValueError:
+                item = None
+        if not isinstance(item, str) or not re.fullmatch(PLAIN_ITEM, item):
+            raise Refused(f"{tid}: {key}: list lines look like \"  - TASK-1\"")
+        items.append(item)
+    return items
+
+
+def front_matter(tid, lines):
+    """Fields from front matter lines: key: value, plus the block forms above. Line 1 is ---."""
+    fields, index = {}, 0
+    while index < len(lines):
+        line, number = lines[index], index + 2
+        end = index + 1
+        while end < len(lines) and (not lines[end].strip() or lines[end].startswith(" ")):
+            end += 1
+        block = lines[index + 1:end]
+        index = end
+        if not line.strip():
+            continue
+        key, separator, raw = line.partition(":")
+        if not separator or not key or key != key.strip() or line.startswith("#"):
+            raise Refused(f"{tid}: line {number}: {FRONT_MATTER_HELP}")
+        if key in fields:
+            raise Refused(f"{tid}: duplicate field {key}")
+        raw = raw.strip()
+        nested = any(item.strip() for item in block)
+        if raw in BLOCK_INDICATORS:
+            if key not in BLOCK_TEXT_FIELDS:
+                raise Refused(f"{tid}: {key} cannot be a > or | block; only {', '.join(BLOCK_TEXT_FIELDS)} can")
+            fields[key] = block_text(tid, key, raw, block)
+        elif not raw and key in LIST_FIELDS:
+            fields[key] = block_list(tid, key, block)
+        elif nested:
+            raise Refused(f"{tid}: line {number + 1}: indented lines belong only under a > or | block or a"
+                          f" list field; {FRONT_MATTER_HELP}")
+        else:
+            fields[key] = front_value(tid, key, raw)
+    return fields
+
+
+def task_refs(tid, key, value):
+    """A list of task ids, written as TASK-1 or task:TASK-1, returned as plain ids."""
+    if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+        raise Refused(f"{tid}: {key} must be a list of task ids")
+    ids = [v[5:] if v.startswith("task:") else v for v in value]
+    if any(not re.fullmatch(TASK_REF, i) for i in ids):
+        raise Refused(f"{tid}: {key} lists task ids such as TASK-2; people waits go in waits_on")
+    if tid in ids:
+        raise Refused(f"{tid}: {key} cannot name the task itself")
+    return list(dict.fromkeys(ids))
+
+
 def record(root, tid, staged=False):
     task_id(tid)
     text = read_text(root, f"tasks/{tid}.md", staged)
     lines = text.splitlines()
     if not lines or lines[0] != "---" or "---" not in lines[1:]:
         raise Refused(f"{tid}: expected fenced front matter")
-    fields = {}
-    for line in lines[1:lines.index("---", 1)]:
-        key, separator, raw = line.partition(":")
-        if not separator or key in fields:
-            raise Refused(f"{tid}: bad or duplicate field")
-        # This small front matter uses JSON strings/lists and plain single-line scalars.
-        raw = raw.strip()
-        fields[key] = json.loads(raw) if raw.startswith(('"', '[')) else raw
-    expected = {"id", "title", "owner", "status", "ships", "waits_on", "contract"}
-    if set(fields) != expected or fields["id"] != tid:
-        raise Refused(f"{tid}: fields must be {', '.join(sorted(expected))}; id must match filename")
+    fields = front_matter(tid, lines[1:lines.index("---", 1)])
+    missing = [k for k in CORE_FIELDS if k not in fields]
+    unknown = sorted(set(fields) - set(CORE_FIELDS) - set(EXTENDED_FIELDS))
+    if missing or unknown:
+        raise Refused(f"{tid}: " + "; ".join(
+            ([f"missing {', '.join(missing)}"] if missing else [])
+            + ([f"unknown {', '.join(unknown)} (known optional fields: {', '.join(EXTENDED_FIELDS)})"]
+               if unknown else [])))
+    if fields["id"] != tid:
+        raise Refused(f"{tid}: id must match the file name")
     if any(not isinstance(fields[k], str) or not fields[k].strip()
-           for k in expected - {"waits_on"}):
+           for k in set(CORE_FIELDS) - {"waits_on"}):
         raise Refused(f"{tid}: text fields must be nonempty strings")
     if fields["status"] not in {"IN_PROGRESS", "BLOCKED", "DONE", "CLOSED"}:
         raise Refused(f"{tid}: unknown status")
@@ -126,11 +259,31 @@ def record(root, tid, staged=False):
         raise Refused(f"{tid}: ships must be none, repo or live")
     waits = fields["waits_on"]
     if not isinstance(waits, list) or any(
-        not isinstance(w, str) or not re.fullmatch(r"(?:task:[A-Z][A-Z0-9]*-[1-9][0-9]*|person:[^\s:]+)", w)
+        not isinstance(w, str) or not re.fullmatch(rf"(?:task:{TASK_REF}|person:[^\s:]+)", w)
         for w in waits
     ):
         raise Refused(f"{tid}: waits_on needs task:<id> or person:<name> items")
+    for key in ("business_owner", "priority", "created_at", "mission", "next", "summary"):
+        if key in fields and not isinstance(fields[key], str):
+            raise Refused(f"{tid}: {key} must be text")
+    if fields.get("created_at"):
+        try:
+            dt.datetime.fromisoformat(fields["created_at"].replace("Z", "+00:00"))
+        except ValueError:
+            raise Refused(f"{tid}: created_at must be an ISO date such as 2026-11-14") from None
+    for key in ("depends_on", "blocks"):
+        if key in fields:
+            fields[key] = task_refs(tid, key, fields[key])
+    needs = {w[5:] for w in waits if w.startswith("task:")} | set(fields.get("depends_on", []))
+    both = sorted(needs & set(fields.get("blocks", [])))
+    if both:
+        raise Refused(f"{tid}: cannot both wait for and block {', '.join(both)}")
     return fields
+
+
+def dependencies(record):
+    """One dependency list: waits_on items plus depends_on ids as task: items, without repeats."""
+    return list(dict.fromkeys([*record["waits_on"], *(f"task:{i}" for i in record.get("depends_on", []))]))
 
 
 def has_origin(root):
@@ -162,8 +315,44 @@ def remote_value(root, ref, oid):
     return json.loads(git(root, "cat-file", "blob", oid).stdout)
 
 
-def new(root, title, owner, ships="repo", prefix="TASK"):
+EXTENDED_BODY = """
+## Context
+
+<!-- Why this task exists and what it touches. -->
+
+## Scope
+
+<!-- What is in scope, and what is explicitly out. -->
+
+## Lanes
+
+<!-- Parallel streams of work and who or what owns each. -->
+
+## Acceptance
+
+<!-- The original ask, criterion by criterion. Evidence NotQuite should check belongs in a contract. -->
+
+## Progress
+
+<!-- Dated notes. NotQuite does not read this section: status comes from receipts. -->
+"""
+
+
+def task_text(tid, data, template):
+    if template == "simple":
+        return ("---\n" + "".join(f"{k}: {packed(v)}\n" for k, v in data.items())
+                + f"---\n\n# {tid}\n\nWrite the original ask here.\n")
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    extended = dict(business_owner="", priority="", created_at=today, mission="", depends_on=[],
+                    blocks=[], next="", summary="", **data)
+    return ("---\n" + "".join(f"{k}: {packed(extended[k])}\n" for k in EXTENDED_ORDER)
+            + f"---\n\n# {tid}\n" + EXTENDED_BODY)
+
+
+def new(root, title, owner, ships="repo", prefix="TASK", template="simple"):
     repository(root)
+    if template not in {"simple", "extended"}:
+        raise Refused("template must be simple or extended")
     if not re.fullmatch(r"[A-Z][A-Z0-9]*", prefix) or not title.strip() or not owner.strip():
         raise Refused("use an uppercase prefix, nonempty title and owner")
     directory = local_path(root, "tasks")
@@ -184,8 +373,7 @@ def new(root, title, owner, ships="repo", prefix="TASK"):
         if local or reserve(root, NAMESPACE + f"ids/{tid}", {**data, "at": now(), "who": who(root)}):
             path = directory / f"{tid}.md"
             with path.open("x", encoding="utf-8", newline="\n") as stream:
-                stream.write("---\n" + "".join(f"{k}: {packed(v)}\n" for k, v in data.items())
-                             + f"---\n\n# {tid}\n\nWrite the original ask here.\n")
+                stream.write(task_text(tid, data, template))
             return tid
     raise Refused("too much allocation contention; retry")
 

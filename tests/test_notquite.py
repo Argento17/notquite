@@ -1,6 +1,7 @@
 """Exercise the public commands against real, disposable Git remotes."""
 
 from concurrent.futures import ThreadPoolExecutor
+import datetime
 import hashlib
 import json
 import os
@@ -440,6 +441,17 @@ def test_invented_examples_are_readable_and_false_done_is_explicit(clones):
     records = gate.records(one)
     assert {records[f"TASK-{n}"]["status"] for n in (1, 2, 3)} == {"IN_PROGRESS", "BLOCKED", "DONE"}
     assert "TASK-3 says DONE" in cli(one, "check").stdout
+    assert records["TASK-4"]["depends_on"] == ["TASK-1"] and records["TASK-4"]["priority"] == "P2"
+
+
+def test_readme_extended_example_is_a_valid_task(clones):
+    one, _ = clones
+    readme = (PACKAGE / "README.md").read_text(encoding="utf-8")
+    block = next(b for b in readme.split("```markdown\n")[1:] if "business_owner" in b).split("```")[0]
+    (one / "tasks/TASK-4.md").write_text(block + "\n# TASK-4\n", encoding="utf-8")
+    record = store.record(one, "TASK-4")
+    assert list(record) == list(store.EXTENDED_ORDER)
+    assert "TASK-4 blocked: task:TASK-1" in ok(one, "ready")
 
 
 def test_workflow_installs_kit_runs_tests_and_checker():
@@ -833,3 +845,316 @@ def test_holder_releases_once_and_a_lost_token_cannot_release(clones):
     assert again.returncode == 1 and "no active claim" in again.stderr
     ok(two, "claim", "--task", "TASK-1")
     assert claim_tag_value(one, generation=2)["token_sha256"] != claim_tag_value(one)["token_sha256"]
+
+
+# v0.2.0: the optional extended task format and one dependency model.
+
+V010_SIMPLE = """---
+id: "TASK-1"
+title: "Solo work"
+owner: "solo"
+status: "IN_PROGRESS"
+ships: "repo"
+waits_on: []
+contract: "none"
+---
+
+# TASK-1
+
+Write the original ask here.
+"""
+
+
+def extended(root, tid="TASK-1", status="IN_PROGRESS", ships="repo", body=None, **extra):
+    fields = {"id": tid, "title": "Add a list filter", "owner": "alex", "business_owner": "sam",
+              "priority": "P1", "created_at": "2026-11-14", "mission": "Make long lists easier to scan",
+              "depends_on": [], "blocks": [], "next": "Write the filter", "summary": "A filter button",
+              "status": status, "ships": ships, "waits_on": [], "contract": "none"}
+    fields.update(extra)
+    text = ("---\n" + "".join(f"{k}: {json.dumps(v)}\n" for k, v in fields.items()) + f"---\n\n# {tid}\n"
+            + (body if body is not None else
+               "\n## Context\n\nInvented example.\n\n## Progress\n\n- 2026-11-14: marked DONE in notes.\n"))
+    path = root / "tasks" / f"{tid}.md"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_default_new_output_is_byte_identical_to_v010(local_repo):
+    ok(local_repo, "new", "--title", "Solo work", "--owner", "solo")
+    assert (local_repo / "tasks/TASK-1.md").read_text(encoding="utf-8") == V010_SIMPLE
+
+
+def test_v010_plain_scalar_records_still_read(clones):
+    one, _ = clones
+    (one / "tasks/TASK-1.md").write_text(
+        "---\nid: TASK-1\ntitle: Add a filter\nowner: alex\nstatus: DONE\nships: none\n"
+        "waits_on: []\ncontract: none\n---\n\n# TASK-1\n", encoding="utf-8")
+    implement(one)
+    passed(one)
+    assert ok(one, "check").strip() == "check: OK"
+
+
+def test_extended_template_writes_every_field_and_section(local_repo):
+    ok(local_repo, "new", "--title", "Plan the filter", "--owner", "solo", "--template", "extended")
+    text = (local_repo / "tasks/TASK-1.md").read_text(encoding="utf-8")
+    keys = [line.split(":", 1)[0] for line in text.split("---\n")[1].splitlines()]
+    assert keys == list(store.EXTENDED_ORDER)
+    sections = [line for line in text.splitlines() if line.startswith("## ")]
+    assert sections == ["## Context", "## Scope", "## Lanes", "## Acceptance", "## Progress"]
+    record = store.record(local_repo, "TASK-1")
+    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    assert record["created_at"] == today and record["depends_on"] == [] and record["status"] == "IN_PROGRESS"
+    assert ok(local_repo, "check").strip() == "check: OK"
+
+
+def test_extended_fields_never_stand_in_for_evidence(clones):
+    one, _ = clones
+    extended(one, status="DONE", ships="none", priority="P0", summary="Done and shipped",
+             next="nothing left", business_owner="the whole company")
+    refused = cli(one, "check", "TASK-1")
+    assert refused.returncode == 1 and "Missing:  implementation" in refused.stdout
+    implement(one)
+    passed(one)
+    assert ok(one, "check").strip() == "check: OK"
+    extended(one, status="CLOSED", ships="repo", priority="P0")
+    assert "merge of the tested code" in cli(one, "check").stdout
+
+
+def test_receipts_recorded_on_a_simple_task_still_count_after_switching_to_extended(clones):
+    one, _ = clones
+    commit = implement(one)
+    passed(one)
+    git(one, "add", "tasks", ".notquite")
+    git(one, "commit", "-qm", "Record the evidence")
+    extended(one, status="DONE", ships="none")
+    assert ok(one, "check").strip() == "check: OK"
+    assert store.entries(one, "TASK-1")[0]["commit"] == commit
+
+
+def test_reading_never_rewrites_task_files(clones):
+    one, _ = clones
+    path = extended(one, ships="none", body="\n\n## Context\n\n<!-- kept -->\n\n\n## Progress\n\n  odd   spacing  \n")
+    raw = path.read_text(encoding="utf-8").replace('priority: "P1"', "priority:    P1")
+    path.write_bytes(raw.encode("utf-8"))
+    before = path.read_bytes()
+    implement(one)
+    passed(one)
+    for args in (("check",), ("check", "TASK-1"), ("show", "--task", "TASK-1"), ("ready",),
+                 ("claim", "--task", "TASK-1"), ("release", "--task", "TASK-1")):
+        ok(one, *args)
+    assert path.read_bytes() == before
+    assert store.record(one, "TASK-1")["priority"] == "P1"
+
+
+def test_simple_yaml_style_lists_are_read(clones):
+    one, _ = clones
+    task(one, "TASK-2")
+    task(one, "TASK-3")
+    path = extended(one, "TASK-4")
+    text = path.read_text(encoding="utf-8")
+    text = text.replace('depends_on: []', 'depends_on: [TASK-2, task:TASK-3]')
+    text = text.replace('waits_on: []', 'waits_on: [person:alex]')
+    path.write_text(text, encoding="utf-8")
+    record = store.record(one, "TASK-4")
+    assert record["depends_on"] == ["TASK-2", "TASK-3"] and record["waits_on"] == ["person:alex"]
+    assert store.dependencies(record) == ["person:alex", "task:TASK-2", "task:TASK-3"]
+
+
+@pytest.mark.parametrize("change,message", [
+    (('priority: "P1"', "priority: |\n  P1"), "priority cannot be a > or | block"),
+    (('summary: "A filter button"', "summary: A filter\n  button"), "indented lines belong only under"),
+    (("depends_on: []", "depends_on:\n  - id: TASK-2"), 'list lines look like "  - TASK-1"'),
+    (('priority: "P1"', '# note: urgent\npriority: "P1"'), "line 6:"),
+    (("depends_on: []", "depends_on: &deps [TASK-2]"), "depends_on must be a list of task ids"),
+    (('summary: "A filter button"', "summary: |2\n    text"), "indented lines belong only under"),
+    (('summary: "A filter button"', 'summary: "A filter\n  button"'), "indented lines belong only under"),
+    (('priority: "P1"', 'priorty: "P1"'), "unknown priorty"),
+    (('created_at: "2026-11-14"', 'created_at: "14/11/2026"'), "ISO date"),
+    (("depends_on: []", 'depends_on: ["person:alex"]'), "people waits go in waits_on"),
+    (("depends_on: []", 'depends_on: ["TASK-1"]'), "cannot name the task itself"),
+    (("depends_on: []", 'depends_on: [TASK-2]\nblocks: [TASK-2]'), "duplicate field blocks"),
+    (("blocks: []", 'blocks: ["TASK-2"]\nwaits_on_x: 1'), "unknown waits_on_x"),
+    (('mission: "Make long lists easier to scan"', "mission: [unclosed"), "cannot read mission"),
+])
+def test_unsupported_front_matter_is_refused_with_a_reason(clones, change, message):
+    one, _ = clones
+    task(one, "TASK-2")
+    path = extended(one)
+    text = path.read_text(encoding="utf-8")
+    assert change[0] in text
+    path.write_text(text.replace(change[0], change[1]), encoding="utf-8")
+    result = cli(one, "check")
+    assert result.returncode == 1 and message in result.stderr, result.stderr
+
+
+def test_waiting_for_and_blocking_the_same_task_is_contradictory(clones):
+    one, _ = clones
+    task(one, "TASK-2")
+    extended(one, depends_on=["TASK-2"], blocks=["TASK-2"])
+    assert "cannot both wait for and block TASK-2" in cli(one, "check").stderr
+    extended(one, waits_on=["task:TASK-2"], blocks=["TASK-2"])
+    assert "cannot both wait for and block TASK-2" in cli(one, "check").stderr
+
+
+def test_depends_on_and_waits_on_form_one_dependency_list(clones):
+    one, _ = clones
+    task(one, "TASK-1")
+    extended(one, "TASK-2", status="DONE", ships="none", depends_on=["TASK-1"], waits_on=["task:TASK-1"])
+    assert "waits_on: task:TASK-1\n" in ok(one, "show", "--task", "TASK-2")
+    ok(one, "receipt", "implemented", "--task", "TASK-2")
+    ok(one, "receipt", "test", "--task", "TASK-2", "--", PYTHON, "-c", "pass")
+    refused = cli(one, "check", "TASK-2")
+    assert refused.returncode == 1 and "Missing:  task:TASK-1" in refused.stdout
+    assert "finish TASK-1 first, or remove it from depends_on" in refused.stdout
+    implement(one)
+    passed(one)
+    assert cli(one, "check", "TASK-2").returncode == 0
+    assert ok(one, "check").strip() == "check: OK"
+
+
+def test_ready_reports_depends_on_like_waits_on(clones):
+    one, _ = clones
+    task(one, "TASK-1")
+    extended(one, "TASK-2", depends_on=["TASK-1"])
+    assert "TASK-2 blocked: task:TASK-1" in ok(one, "ready")
+
+
+def test_cycles_and_missing_tasks_are_found_across_both_fields(clones):
+    one, _ = clones
+    extended(one, "TASK-1", depends_on=["TASK-2"])
+    task(one, "TASK-2", waits=["task:TASK-1"])
+    assert "dependency cycle" in cli(one, "check").stderr
+    extended(one, "TASK-1", depends_on=["TASK-9"])
+    task(one, "TASK-2")
+    assert "TASK-1: missing dependency TASK-9" in cli(one, "check").stdout
+
+
+def test_blocks_is_informational_but_checked(clones):
+    one, _ = clones
+    extended(one, "TASK-2", blocks=["TASK-1"])
+    task(one, "TASK-1", status="DONE", ships="none")
+    implement(one)
+    passed(one)
+    assert ok(one, "check").strip() == "check: OK"  # TASK-2 is unfinished, yet TASK-1 may be DONE
+    extended(one, "TASK-2", blocks=["TASK-7"])
+    assert "TASK-2: blocks unknown task TASK-7" in cli(one, "check").stdout
+    extended(one, "TASK-2", blocks=["TASK-3"])
+    extended(one, "TASK-3", blocks=["TASK-2"])
+    assert "TASK-2 and TASK-3 each say they block the other" in cli(one, "check").stdout
+
+
+# The YAML subset: > and | blocks for mission/next/summary, indented lists for list fields.
+
+FIXTURES = PACKAGE / "tests/fixtures/yaml-style"
+
+
+def load_fixtures(root):
+    for source in FIXTURES.glob("*.md"):
+        (root / "tasks" / source.name).write_bytes(source.read_bytes())
+
+
+def test_yaml_style_fixtures_read_to_the_expected_values(clones):
+    one, _ = clones
+    load_fixtures(one)
+    records = gate.records(one)
+    full = records["TASK-11"]
+    assert list(full) == list(store.EXTENDED_ORDER)
+    assert full["mission"] == "Let a user share a read-only list with someone else.\nNobody else can edit it.\n"
+    assert full["next"] == "Agree how long a shared link stays valid before building the share button."
+    assert full["summary"] == ("A share button creates a read-only link to the list.\n"
+                               "Links expire, and the owner can revoke them.\n")
+    assert full["depends_on"] == ["TASK-10", "TASK-12"] and full["blocks"] == ["TASK-13"]
+    assert full["waits_on"] == ["person:sam"] and full["created_at"] == "2026-11-14T09:30:00Z"
+    assert store.dependencies(full) == ["person:sam", "task:TASK-10", "task:TASK-12"]
+    partial = records["TASK-12"]
+    assert partial["depends_on"] == [] and partial["blocks"] == ["TASK-11"]
+    assert partial["summary"] == "A list view without edit controls."
+    assert records["TASK-10"]["waits_on"] == [] and "depends_on" not in records["TASK-10"]
+    assert ok(one, "check").strip() == "check: OK"
+    output = ok(one, "ready")
+    assert "TASK-11 blocked: person:sam, task:TASK-10, task:TASK-12" in output
+    assert "TASK-10 free" in output and "TASK-12 free" in output
+
+
+def test_yaml_style_files_are_never_rewritten(clones):
+    one, _ = clones
+    load_fixtures(one)
+    before = {p.name: p.read_bytes() for p in (one / "tasks").glob("TASK-1?.md")}
+    ok(one, "receipt", "implemented", "--task", "TASK-11")
+    ok(one, "receipt", "test", "--task", "TASK-11", "--", PYTHON, "-c", "pass")
+    for args in (("check",), ("check", "TASK-11"), ("show", "--task", "TASK-11"), ("ready",),
+                 ("claim", "--task", "TASK-11"), ("release", "--task", "TASK-11")):
+        ok(one, *args)
+    assert {p.name: p.read_bytes() for p in (one / "tasks").glob("TASK-1?.md")} == before
+
+
+def test_yaml_style_dependencies_hold_back_a_done_claim(clones):
+    one, _ = clones
+    load_fixtures(one)
+    path = one / "tasks/TASK-11.md"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("status: IN_PROGRESS", "status: DONE").replace("ships: live", "ships: none")
+                    .replace("waits_on:\n  - person:sam\n", "waits_on: []\n"), encoding="utf-8")
+    ok(one, "receipt", "implemented", "--task", "TASK-11")
+    ok(one, "receipt", "test", "--task", "TASK-11", "--", PYTHON, "-c", "pass")
+    refused = cli(one, "check", "TASK-11")
+    assert refused.returncode == 1
+    assert "Missing:  task:TASK-10" in refused.stdout and "Missing:  task:TASK-12" in refused.stdout
+
+
+@pytest.mark.parametrize("indicator,expected", [
+    ("|", "one\n  two\n\nthree\n"),
+    ("|-", "one\n  two\n\nthree"),
+    ("|+", "one\n  two\n\nthree\n\n"),
+    (">", "one\n  two\n\nthree\n"),
+    (">-", "one\n  two\n\nthree"),
+    (">+", "one\n  two\n\nthree\n\n"),
+])
+def test_block_text_follows_yaml_for_the_supported_forms(indicator, expected):
+    block = ["    one", "      two", "", "    three", ""]
+    assert store.block_text("TASK-1", "summary", indicator, block) == expected
+
+
+def test_folded_block_joins_ordinary_lines_and_keeps_paragraphs():
+    block = ["  A share button", "  creates a link.", "", "  Links expire."]
+    assert store.block_text("TASK-1", "summary", ">", block) == "A share button creates a link.\nLinks expire.\n"
+
+
+def test_block_text_edge_cases():
+    assert store.block_text("TASK-1", "summary", ">", []) == ""
+    assert store.block_text("TASK-1", "summary", "|", ["", ""]) == ""
+    with pytest.raises(store.Refused, match="keep the indentation"):
+        store.block_text("TASK-1", "summary", "|", ["    one", "  two"])
+
+
+def test_switching_a_simple_task_to_yaml_style_extended_keeps_its_receipts(clones, tmp_path):
+    one, _ = clones
+    task(one, status="IN_PROGRESS", ships="none")
+    commit = implement(one)
+    passed(one)
+    git(one, "add", "tasks", ".notquite")
+    git(one, "commit", "-qm", "Record the evidence")
+    (one / "tasks/TASK-1.md").write_text(
+        "---\nid: TASK-1\ntitle: Add a list filter\nowner: alex\nbusiness_owner: sam\npriority: P1\n"
+        "created_at: 2026-11-14\nsummary: >\n  A filter button that hides\n  completed items.\n"
+        "depends_on:\nblocks:\n  - TASK-2\nstatus: DONE\nships: none\nwaits_on: []\ncontract: none\n"
+        "---\n\n# TASK-1\n\n## Progress\n\n- 2026-11-14: switched to the extended format.\n", encoding="utf-8")
+    task(one, "TASK-2")
+    git(one, "add", "tasks")
+    git(one, "commit", "-qm", "Switch TASK-1 to the extended format")
+    git(one, "push", "-q", "origin", "HEAD:refs/heads/main")
+    fresh = tmp_path / "fresh"
+    git(tmp_path, "clone", "-q", str(Path(git(one, "remote", "get-url", "origin"))), str(fresh))
+    assert ok(fresh, "check").strip() == "check: OK"
+    explained = ok(fresh, "check", "TASK-1")
+    assert explained.startswith("DONE  TASK-1") and f"PASS (exit 0, {commit[:7]})" in explained
+    assert store.entries(fresh, "TASK-1")[0]["commit"] == commit
+
+
+def test_a_hash_after_a_value_stays_part_of_the_value(clones):
+    one, _ = clones
+    path = extended(one)
+    path.write_text(path.read_text(encoding="utf-8").replace('priority: "P1"', "priority: P1 # soon"),
+                    encoding="utf-8")
+    assert store.record(one, "TASK-1")["priority"] == "P1 # soon"
