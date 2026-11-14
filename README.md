@@ -3,8 +3,10 @@
 ![NotQuite rejecting a DONE task whose last passing test ran on an older commit](https://raw.githubusercontent.com/Argento17/notquite/main/docs/notquite-demo.gif)
 
 ```sh
-python -m pip install git+https://github.com/Argento17/notquite@v0.1.0
+pipx install notquite
 ```
+
+No pipx? On Ubuntu or Debian: `sudo apt install pipx && pipx ensurepath`. Other systems: see the [pipx install guide](https://pipx.pypa.io/stable/how-to/install-pipx.html). Plain `pip install` outside a virtual environment is blocked on recent Ubuntu; the [quick start](#quick-start) uses one.
 
 - A task's status is a claim; its actual state is computed from recorded evidence.
 - DONE needs an implementation on a clean commit plus a passing latest test run on that exact commit. A later failing run revokes it.
@@ -65,7 +67,7 @@ Requires Git and Python 3.10 or newer. This uses a throwaway folder and needs no
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-python -m pip install git+https://github.com/Argento17/notquite@v0.1.0
+python -m pip install notquite
 
 mkdir demo && cd demo
 git init -q -b main
@@ -233,7 +235,7 @@ jobs:
         with: {fetch-depth: 0}   # receipts refer to earlier commits
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install git+https://github.com/Argento17/notquite@v0.1.0
+      - run: python -m pip install notquite==0.1.0
       - run: notquite check
 ```
 
