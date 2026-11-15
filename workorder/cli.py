@@ -37,7 +37,7 @@ def parser():
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
     done.add_argument("--task", required=True)
     done.add_argument("--note", help="add a dated Progress line, including when done refuses")
-    done.add_argument("--needs-review", action="store_true", help="finish with test changes pending pull request review")
+    done.add_argument("--needs-review", action="store_true", help="record evidence and keep IN_PROGRESS pending a reviewer label")
     done.add_argument("--no-code-change", action="store_true", help="allow verification tasks with no code change")
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
@@ -50,6 +50,8 @@ def parser():
                      help="number the id locally even with an origin remote (no tag is pushed)")
     new.add_argument("--test", default="", metavar="COMMAND",
                      help="the task's test command; once set, only a run of exactly this command counts")
+    new.add_argument("--test-paths", nargs="+", metavar="PATH",
+                     help="test files or folders; required for wrapper commands, even before the files exist")
     new.add_argument("--template", choices=["extended", "simple"], default="extended",
                      help="extended: planning fields and Context/Scope/Lanes/Acceptance/Progress sections;"
                           " simple: the seven required fields only, as in 0.1.0 (default: extended)")
@@ -98,7 +100,7 @@ def parser():
     check.add_argument("--require-task", action="store_true",
                        help="with --base: require a new counting receipt on a task with a concrete test command for non-test code changes")
     check.add_argument("--review", choices=["warn", "refuse"],
-                       help="with --base: warn about test changes (default), or refuse until accepted")
+                       help="with --base: refuse test changes until accepted (default), or opt in to warnings")
     check.add_argument("--base", metavar="REF",
                        help="check changes since REF: changed or removed receipts; requirement changes"
                             " (test, contract, evidence, dependencies, Scope and Acceptance lines);"
@@ -194,12 +196,12 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         print(filled["Acceptance"])
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         base = gate.local_test_base(root, record)
-        pending = False
+        pending = needs_review
         if base:
             notes = []
             problems = gate.local_test_problems(root, base, record, timeout=timeout, notes=notes,
                                                 completed=True, pending_review=needs_review)
-            pending = any(gate._accepts_allow_label(note) for note in notes)
+            pending |= any(gate._accepts_allow_label(note) for note in notes)
             for note in notes:
                 if note != wrapper:
                     print(f"Note: {note}")
@@ -208,6 +210,18 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 return 1
         else:
             print('Note: REF comparison skipped: origin/main and origin/master are not available locally')
+            changed_command = gate.local_command_problems(root, 'HEAD', record)
+            if changed_command:
+                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in changed_command])
+                return 1
+        if pending:
+            s.set_task_field(root, tid, "status", "IN_PROGRESS")
+            message = f'pending review: the pull request needs workorder-allow:{tid}'
+            s.add_note(root, tid, message)
+            print(f'{tid} IN_PROGRESS; {message}')
+            print('Set status DONE in the reviewed pull request once its evidence and Acceptance are complete.')
+            print('commit tasks/ and .workorder/' + (' and push' if s.has_origin(root) else ''))
+            return 0
         path = s.local_path(root, f"tasks/{tid}.md")
         before = path.read_bytes()
         supported = False
@@ -228,11 +242,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         print("\n".join(lines))
         _, owed, delivery = gate.verdict(root, s.record(root, tid))
         debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""
-        if pending:
-            print(f'{tid} DONE, pending review: its test files changed; the pull request flags them '
-                  f'for a reviewer (with --review refuse it needs the label workorder-allow:{tid})')
-        else:
-            print(f"{tid} DONE: its declared test passed on this code{debt}")
+        print(f"{tid} DONE: its declared test passed on this code{debt}")
         push = " and push" if s.has_origin(root) else ""
         print(f"commit tasks/ and .workorder/{push}")
         return 0
@@ -282,7 +292,13 @@ def main(argv=None):
                                options.needs_review, options.no_code_change)
         elif options.action == "new":
             shared = s.has_origin(root) and not options.local
-            named = gate.paths_named_by_command(options.test, root) if options.test else None
+            if options.test_paths is None and gate.wrapper_paths({'test': options.test}) is not None:
+                raise s.Refused('this test command runs a wrapper; supply --test-paths PATH [PATH ...] '
+                                'so changes to its tests are reviewed')
+            named = (options.test_paths if options.test_paths is not None else
+                     gate.paths_named_by_command(options.test, root) if options.test else None)
+            for path in named or []:
+                s.local_path(root, path)
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
                         options.template, options.test, options.local, test_paths=named)
             where = ("reserved on origin" if shared
@@ -378,11 +394,12 @@ def main(argv=None):
             allow = {item.strip() for item in options.allow.split(",") if item.strip()}
             problems = gate.check(root, options.staged, options.base, notes, allow, options.run_tests, counts,
                                   options.strict_tests, options.all_tests, options.require_task,
-                                  timeout=options.timeout, review=options.review or "warn")
+                                  timeout=options.timeout, review=options.review or "refuse")
             if (options.staged and not counts["tasks"] and not problems and not notes
                     and not counts.get("warnings") and not options.run_tests):
                 return 0
-            print("\n".join(problems) if problems else "check: OK")
+            if problems:
+                print("\n".join(problems))
             for warning in counts.get('warnings', []):
                 print(f'Warning: {warning}')
                 if os.environ.get('GITHUB_ACTIONS'):
@@ -392,6 +409,8 @@ def main(argv=None):
                     print(f'::warning file={escape(warning.path, True)},line={warning.line}::{escape(warning)}')
             if counts.get('warnings'):
                 print(f"Review: {len(counts['warnings'])} test changes need a reviewer's look")
+            if not problems:
+                print("check: OK")
             if notes:
                 print("\n".join(f"Note: {note}" for note in gate.summarize_notes(notes, options.verbose)))
             if options.run_tests and counts["tests"] == 0:

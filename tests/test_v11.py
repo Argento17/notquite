@@ -260,14 +260,16 @@ def test_new_wrapper_has_no_invented_test_paths(local_repo, command):
     root = local_repo
     (root / 'spec').mkdir()
     (root / 'spec/calc.js').write_text('assert.equal(mul(3, 4), 12);\n')
-    ok(root, 'new', '--title', 'Run tests', '--owner', 'dev', '--test', command)
+    refused = cli(root, 'new', '--title', 'Run tests', '--owner', 'dev', '--test', command)
+    assert refused.returncode == 1 and '--test-paths' in refused.stderr
+    ok(root, 'new', '--title', 'Run tests', '--owner', 'dev', '--test', command, '--test-paths', 'spec')
     record = store.record(root, 'TASK-1')
-    assert 'test_paths' not in record
+    assert record['test_paths'] == ['spec']
     base = commit_all(root)
     (root / 'spec/calc.js').write_text('assert.equal(true, true);\n')
     result = cli(root, 'check', '--base', base, '--strict-tests')
     assert result.returncode == 1, result.stdout + result.stderr
-    assert 'runs a wrapper script; set test_paths' in result.stdout
+    assert 'runs a wrapper script' not in result.stdout
     assert 'spec/calc.js' in result.stdout
 
 

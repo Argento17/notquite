@@ -131,7 +131,7 @@ def test_test_and_requirement_changes_use_the_merge_base(local_repo):
     assert 'tests/test_t1.py' not in changed_output
 
 
-def test_needs_review_finishes_a_deliberate_test_change(local_repo, monkeypatch, capsys):
+def test_needs_review_records_a_deliberate_test_change(local_repo, monkeypatch, capsys):
     root = local_repo
     (root / '.gitignore').write_text('__pycache__/\n.pytest_cache/\n', encoding='utf-8')
     (root / 'tests').mkdir()
@@ -151,9 +151,9 @@ def test_needs_review_finishes_a_deliberate_test_change(local_repo, monkeypatch,
     accepted = cli(root, 'done', '--task', 'TASK-6', '--needs-review')
     output = accepted.stdout + accepted.stderr
     assert accepted.returncode == 0, output
-    assert store.record(root, 'TASK-6')['status'] == 'DONE'
-    assert ('TASK-6 DONE, pending review: its test files changed; the pull request flags them '
-            'for a reviewer (with --review refuse it needs the label workorder-allow:TASK-6)') in output
+    assert store.record(root, 'TASK-6')['status'] == 'IN_PROGRESS'
+    assert 'pending review: the pull request needs workorder-allow:TASK-6' in output
+    store.set_task_field(root, 'TASK-6', 'status', 'DONE')  # Claim in the reviewed PR.
     git(root, 'add', 'tasks', '.workorder')
     hook = real_git(root, 'commit', '-qm', 'Record the review')
     hook_output = hook.stdout + hook.stderr
@@ -212,7 +212,8 @@ def test_require_task_needs_a_task_from_the_merge_base_or_allow(local_repo):
     store.receipt(root, 'TASK-9', 'implemented')
     refused = cli(root, 'check', '--base', base, '--require-task')
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert 'implemented or test receipt' in refused.stdout
+    assert 'TASK-9 is new in this pull request:' in refused.stdout
+    assert 'no task records it' not in refused.stdout
     allowed = cli(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-9')
     assert allowed.returncode == 0, allowed.stdout + allowed.stderr
 

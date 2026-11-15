@@ -125,7 +125,7 @@ def test_worked_task_runs_fresh_ref_tests_without_test_file_edits(local_repo):
     touch(root)
     result = check(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'ran 2 declared tests' in result.stdout
+    assert 'ran 1 declared test' in result.stdout
     assert 'cached' not in result.stdout
 
 

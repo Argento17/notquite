@@ -1,9 +1,9 @@
 # Shortcuts Workorder flags
 
-Test changes are flagged in the pull request by default, and refused with
-`--review refuse`. The examples below keep their selected test command passing
-while removing coverage or avoiding task evidence. Warnings ask for a reviewer's
-look. They do not decide whether a behavior change is intended.
+Test changes are refused unless a reviewer adds the label. `--review warn` is
+an option. The examples keep their selected command passing while removing
+coverage or avoiding task evidence. Review findings do not decide whether a
+behavior change is intended.
 
 The first seven cases break negative multiplication: `mul(-3, 4)` returns `1`
 instead of `-12`. Their task exists unfinished on main, and the branch records
@@ -15,7 +15,7 @@ The runner checks every case with both commands:
 
 ```sh
 workorder check --base main --run-tests --all-tests --require-task
-workorder check --base main --run-tests --all-tests --require-task --review refuse
+workorder check --base main --run-tests --all-tests --require-task --review warn
 ```
 
 | Case | Change | Default finding |
@@ -27,10 +27,10 @@ workorder check --base main --run-tests --all-tests --require-task --review refu
 | 5 | Delete the failing test | Removed test lines; fewer passes; REF failure |
 | 6 | Change the expected answer to the bug's result | Changed test line; REF failure |
 | 7 | Add `-k 'not negative'` to the task command | Changed selection and test command; fewer passes |
-| 8 | Add broken division and weaken an existing assertion without task work | Changed test line warning; missing task receipt refuses in both modes |
+| 8 | Add broken division and weaken an existing assertion without task work | Changed test line refuses; missing task receipt refuses in both modes |
 | 9 | Add correct division and a new test under a task already defined on main | Honest change: no warning or refusal in either mode |
-| 10 | Weaken multiplication and record an unrelated, non-counting receipt | Changed lines and REF failure warn; missing counting task evidence refuses in both modes |
-| 11 | Finish division while weakening multiplication's tests | Multiplication's changed lines and REF failure warn even though its records are untouched |
+| 10 | Weaken multiplication and record an unrelated, non-counting receipt | Changed lines and REF failure refuse; missing counting task evidence refuses in both modes |
+| 11 | Finish division while weakening multiplication's tests | Multiplication's changed lines and REF failure refuse even though its records are untouched |
 | 12 | Refactor production code with tests unchanged and a root test file present | Honest change: no warning or refusal in either mode |
 | 13 | Add `return` before an assertion that already failed on main, then claim DONE | Edit to a base-failing test; REF failure |
 | 14 | Append a second test function that shadows the base-failing one | Edit to a base-failing test; REF failure |
@@ -39,16 +39,15 @@ Case 12's task is unfinished on main. A renewal of a task already DONE there
 would need `--allow ID` to satisfy `--require-task`. A root test file does not
 make the production files test material.
 
-All twelve shortcuts have a review warning by default and refuse with
-`--review refuse`. Cases 8 and 10 also refuse by default because their records
+All twelve shortcuts refuse by default. With `--review warn`, their review
+findings become warnings; cases 8 and 10 still refuse because their records
 lack the required task evidence. Both honest changes pass without any warning
 in either mode.
 
 An example of the default output is:
 
 ```text
-Warning: TASK-1: its tests from main fail on this code; a reviewer accepts this intended behavior change or test rename with --allow TASK-1
-Review: 1 test changes need a reviewer's look
+TASK-1: its tests from main fail on this code; a reviewer accepts this intended behavior change or test rename with --allow TASK-1
 ```
 
 A shared file edit produces one finding naming every owner. `--allow tests`
@@ -65,13 +64,13 @@ sh examples/shortcuts.sh /path/to/venv/bin/python
 
 The interpreter defaults to `python3`. An optional second argument selects the
 parent folder for results. The script creates a fresh disposable directory and
-keeps complete setup, pytest, default-check and refusal-check logs, plus
+keeps complete setup, pytest, default-check and warning-check logs, plus
 `results.json`. It checks exits and diagnostics directly, without piping a test
 run. It uses no remote and does not commit to this checkout. It requires a
 POSIX shell, Python and Git. A successful run ends with:
 
 ```text
-PASS: 14 cases verified; 12 shortcuts flagged by default and refused with --review refuse; honest changes pass with no warning.
+PASS: 14 cases verified; 12 shortcuts refused by default and reported with --review warn; honest changes pass with no warning.
 ```
 
 See the [reference](reference.md#checks-against-a-base) and

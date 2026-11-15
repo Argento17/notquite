@@ -196,7 +196,7 @@ def test_done_and_hooks_share_one_run_but_explicit_check_runs_fresh(local_repo):
     git(root, 'checkout', '-qb', 'feature')
     done = cli(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert done.returncode == 0, done.stdout + done.stderr
-    assert len(executions(counter)) == 3
+    assert len(executions(counter)) == 2
     git(root, 'add', 'tasks', '.workorder')
     env = dict(os.environ, PYTHONPATH=str(PACKAGE),
                PATH=str(Path(PYTHON).parent) + os.pathsep + os.environ['PATH'])
@@ -209,7 +209,7 @@ def test_done_and_hooks_share_one_run_but_explicit_check_runs_fresh(local_repo):
     assert stop.returncode == 0, stop.stdout + stop.stderr
     checked = cli(root, 'check', '--base', base, '--run-tests', '--all-tests')
     assert checked.returncode == 0, checked.stdout + checked.stderr
-    assert len(executions(counter)) == 5
+    assert len(executions(counter)) == 3
     assert store.record(root, 'TASK-1')['status'] == 'DONE'
     assert store.entries(root, 'TASK-1')[-1]['command'] == command
 

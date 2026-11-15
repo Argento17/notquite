@@ -19,6 +19,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 
@@ -51,14 +52,14 @@ def print_once(message):
 
 
 def print_test_output(output, errors='', failed=False):
+    # The same output can be used for evidence, current, REF and all-task checks.
+    key = ('test-output', failed, re.sub(r' in \d+(?:\.\d+)?s', ' in <time>s', output + errors))
+    seen = _TEST_OUTPUTS.get()
+    if seen is not None:
+        if key in seen:
+            return
+        seen.add(key)
     if failed:
-        # The same failure can be used for current, REF and all-task checks.
-        key = re.sub(r' in \d+(?:\.\d+)?s', ' in <time>s', output + errors)
-        seen = _TEST_OUTPUTS.get()
-        if seen is not None:
-            if key in seen:
-                return
-            seen.add(key)
         print('Failure:')
     print(output, end='')
     print(errors, end='', file=sys.stderr)
@@ -931,6 +932,21 @@ def verify_receipt(root, tid, value):
     present = has_commit(root, item["commit"])
     if present and code_digest(root, item["commit"]) != item["code"]:
         raise Refused(f"{tid}: receipt code does not match its commit")
+    if 'implementation_paths' in item:
+        paths = item['implementation_paths']
+        if (item['kind'] != 'implemented' or not isinstance(paths, dict)
+                or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', str(item.get('implementation_base', '')))):
+            raise Refused(f'{tid}: invalid implementation paths')
+        for path, entry in paths.items():
+            if (not isinstance(path, str) or not path or path.startswith(('/', 'tasks/', '.workorder/', '.notquite/'))
+                    or any(part in {'', '.', '..'} for part in path.split('/'))
+                    or (entry is not None and (not isinstance(entry, str) or not re.fullmatch(
+                        r'(?:100644 blob|100755 blob|120000 blob|160000 commit) [0-9a-f]{40}(?:[0-9a-f]{24})?', entry)))):
+                raise Refused(f'{tid}: invalid implementation path entry')
+        if present:
+            tree = code_tree(root, item['commit'])
+            if any(tree.get(path) != entry for path, entry in paths.items()):
+                raise Refused(f'{tid}: implementation paths do not match its commit')
     if item["kind"] in {"test", "deployed", "live"}:
         if (type(item.get("exit_code")) is not int or type(item.get("valid")) is not bool
                 or not isinstance(item.get("command"), list) or not item["command"]
@@ -1292,6 +1308,14 @@ def _code_digest(root, commit):
     return digest("\0".join(code).encode("utf-8", errors="surrogateescape"))
 
 
+@cached_read
+def code_tree(root, revision):
+    """Git mode, object type and object ID for each code path, independent of checkout endings."""
+    return {path: entry for value in git(root, 'ls-tree', '-r', '-z', revision).stdout.split('\0') if value
+            for entry, path in [value.split('\t', 1)]
+            if not path.startswith(('tasks/', '.workorder/', LEGACY_DIR))}
+
+
 def index_code(root):
     """The code fingerprint of what the next commit would contain (the index)."""
     return code_digest(root, git(root, "write-tree").stdout.strip())
@@ -1388,6 +1412,62 @@ def _test_state(root, isolated=False):
     return commit, fingerprint.hexdigest()
 
 
+def ci_environment():
+    return any(os.environ.get(name, '').lower() not in {'', '0', 'false', 'no'}
+               for name in ('CI', 'GITHUB_ACTIONS'))
+
+
+def test_cache_path(root, fingerprint, command, timeout):
+    folder = root / git(root, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
+    key = digest(packed([2, fingerprint, list(command), timeout]).encode('ascii'))
+    return folder / (key + '.json')
+
+
+def read_test_cache(path, command):
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+        if (isinstance(value, dict) and type(value.get('returncode')) is int
+                and isinstance(value.get('stdout'), str) and isinstance(value.get('stderr'), str)
+                and re.fullmatch(r'\d{2}:\d{2}', value.get('at', ''))):
+            run = subprocess.CompletedProcess(command, value['returncode'], value['stdout'], value['stderr'])
+            run.cached = True
+            run.reused_at = value['at']
+            return run
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def checkout_bytes(root, path):
+    """Index contents with Git's checkout conversion, as a user would run them."""
+    # Attribute rules must come from the index too, not unstaged .gitattributes.
+    tree = index_tree(root)
+    result = subprocess.run(['git', 'cat-file', '--filters', f':{path}'], cwd=root,
+                            capture_output=True, timeout=30,
+                            env={**os.environ, 'GIT_ATTR_SOURCE': tree})
+    if result.returncode:
+        raise Refused(f'could not read staged checkout content: {path}')
+    return result.stdout
+
+
+@cached_read
+def index_tree(root):
+    # write-tree updates the index's tree cache. Preserve the caller's index,
+    # including an alternate index supplied by Git while running a hook.
+    source = Path(git(root, 'rev-parse', '--git-path', 'index').stdout.strip())
+    if not source.is_absolute():
+        source = root / source
+    with tempfile.TemporaryDirectory(prefix='workorder-index-') as temporary:
+        index = Path(temporary) / 'index'
+        index.write_bytes(source.read_bytes())
+        result = subprocess.run(['git', 'write-tree'], cwd=root, capture_output=True,
+                                encoding='utf-8', errors='surrogateescape', timeout=30,
+                                env={**os.environ, 'GIT_INDEX_FILE': str(index)})
+        if result.returncode:
+            raise Refused(result.stderr.strip() or 'could not read the staged tree')
+        return result.stdout.strip()
+
+
 def cached_test(command, root, timeout=None, *, cache_root=None, logical_command=None, fresh=False):
     """Reuse a stable test result within this clone; CI and explicit reruns run fresh.
 
@@ -1399,8 +1479,7 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
     isolated = owner != root
     logical = list(command if logical_command is None else logical_command)
     timeout = positive_seconds(timeout) if timeout is not None else None
-    ci = any(os.environ.get(name, '').lower() not in {'', '0', 'false', 'no'}
-             for name in ('CI', 'GITHUB_ACTIONS'))
+    ci = ci_environment()
     cached_path = None
     before = owner_head = None
     if not ci:
@@ -1409,17 +1488,10 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
             owner_head = (_git_run(owner, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
                           if owner != root else before[0] if before else None)
             if before:
-                folder = owner / git(owner, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
-                key = digest(packed([2, before[1], logical, timeout]).encode('ascii'))
-                cached_path = folder / (key + '.json')
+                cached_path = test_cache_path(owner, before[1], logical, timeout)
                 if not fresh:
-                    value = json.loads(cached_path.read_text(encoding='utf-8'))
-                    if (isinstance(value, dict) and type(value.get('returncode')) is int
-                            and isinstance(value.get('stdout'), str) and isinstance(value.get('stderr'), str)
-                            and re.fullmatch(r'\d{2}:\d{2}', value.get('at', ''))):
-                        run = subprocess.CompletedProcess(command, value['returncode'], value['stdout'], value['stderr'])
-                        run.cached = True
-                        run.reused_at = value['at']
+                    run = read_test_cache(cached_path, command)
+                    if run is not None:
                         return run
         except (OSError, Refused, ValueError):
             pass  # an absent, malformed or unwritable cache must never prevent a run
@@ -1491,6 +1563,13 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         raise Refused("commit the code before recording implementation or tests; "
                       + describe_dirty(dirty_paths(root)))
     data = {"kind": kind, "commit": commit, "code": code_digest(root, commit)}
+    if kind == 'implemented':
+        from . import gate
+        base, _ = gate.implementation_base(root, definition)
+        paths = gate.implementation_paths(root, {**data, 'task': tid, 'hash': None}, base)
+        tree = code_tree(root, commit)
+        data.update(implementation_base=base,
+                    implementation_paths={path: tree.get(path) for path in sorted(paths)})
     if kind == "merged":
         if not ref.startswith("refs/heads/"):
             raise Refused("merge ref must be a full branch ref")

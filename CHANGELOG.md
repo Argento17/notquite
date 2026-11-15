@@ -1,6 +1,30 @@
 # Changelog
 
-## 0.11.0 (unreleased)
+## 0.12.0 (15 Nov 2026)
+
+- Refuse test review findings by default; `--review warn` remains optional.
+  `done --needs-review` records evidence and leaves IN_PROGRESS with the
+  reviewer-label note. The reviewed pull request can carry DONE and its label;
+  the check on main after merge needs no label.
+- Give one definition-acceptance message for new tasks whose receipts cover
+  the code; document landing the task first or reviewing both in one pull request.
+- Record implementation paths, modes, blob IDs and deletions so matching squash
+  merges survive deleted branches and fresh clones, including parallel work.
+  Continue reading old receipts with their existing matching rules.
+- Scope wrapper requirements to changed tasks and their tests. Ask for explicit
+  `new --test-paths` for wrappers. Refuse changed task test commands in done,
+  pre-commit and Stop, including checks without a remote.
+- Print warnings before `check: OK`, and show each test output once.
+- Look up reusable current and REF results before making test copies. Keep
+  explicit runs fresh and staged content separate from unstaged changes.
+- Run each distinct declared command and timeout once on current code, including
+  unchanged REF comparisons. Document how runtime grows with finished tasks.
+- Normalize CRLF when comparing Python import additions. Apply Git checkout
+  conversion to staged test copies so Windows hooks can reuse working results.
+- Update version, workflow, agent instructions, reference and shortcut examples
+  to 0.12.0. Keep README within 130 lines.
+
+## 0.11.0 (not released on its own; included in 0.12.0)
 
 - Run completion evidence fresh for done, receipt test, renew and explicit
   check --run-tests. Only implicit hooks reuse local runs, with the run's UTC time.
@@ -36,7 +60,7 @@
   Recognise spec/ folders and files named *_spec.* or *_tests.*.
 - Update package versions and install pins to 0.11.0.
 
-## 0.10.0 (unreleased)
+## 0.10.0 (not released on its own; included in 0.12.0)
 
 - Isolate temporary Git copies and their test commands from the hook's Git
   environment, preserving commit indexes for -a, paths, amend and linked worktrees.
@@ -69,7 +93,7 @@
   another clone is no longer shown as held.
 - Update package versions and install pins to 0.10.0.
 
-## 0.9.0 (unreleased)
+## 0.9.0 (not released on its own; included in 0.12.0)
 
 - Review all repository test roots and every task whose tests changed, including
   untouched task records. Existing test edits need the owning task's acceptance,
@@ -104,7 +128,7 @@
   a handover note, implement, run done, then let the generated check and the
   check on the default branch pass without skipping the hook.
 
-## 0.8.0 (unreleased)
+## 0.8.0 (not released on its own; included in 0.12.0)
 
 - Refuse test-change problems in done, pre-commit and Stop when the target is
   available locally; keep status and give workorder-allow:<ID> label advice.
@@ -139,7 +163,7 @@
 - Add the portable shortcut catalogue and its actual 0.8 output.
 - Update package versions and install pins to 0.8.0.
 
-## 0.7.0
+## 0.7.0 (not released on its own; included in 0.12.0)
 
 - Compare changed tests with their base versions on current code in a temporary
   copy. Passing additions and edits preserving those tests need no label;
@@ -183,7 +207,7 @@
 - Update package versions and install pins to 0.7.0. New workflows written
   by `init` pin the running version.
 
-## 0.6.0 (14 Nov 2026)
+## 0.6.0 (not released on its own; included in 0.12.0)
 
 - On Windows, receipt writers for one task no longer fail with "permission denied"
   while another writer releases the task's lock.

@@ -370,5 +370,5 @@ def test_git_install_pin_follows_metadata_not_the_readme_text(local_repo, publis
                    "      - name: Add your test dependencies here\n"
                    "        run: |\n"
                    '          echo "::warning::No project test dependencies detected; add your test dependencies here" >&2\n')
-    assert text.strip().replace(shlex.quote(pin), 'workorder==0.11.0') in reference.replace(
+    assert text.strip().replace(shlex.quote(pin), 'workorder==0.12.0') in reference.replace(
         example_dependencies, placeholder)

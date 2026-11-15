@@ -154,16 +154,16 @@ results = []
 
 def report(repo, title, command=test, plain_exit=0, check_exit=1, reasons=()):
     plain = run(command, repo, repo.parent / "pytest.txt", expected=plain_exit)
-    # Test review warns by default; record-truth failures still refuse in both modes.
-    default_exit = 1 if any('this change edits code' in reason for reason in reasons) else 0
-    checked = run(wo + check, repo, repo.parent / "check.txt", expected=default_exit)
-    strict = run(wo + check + ["--review", "refuse"], repo,
-                 repo.parent / "check-refuse.txt", expected=check_exit)
+    # Review findings refuse by default. Warnings are optional; false claims still refuse.
+    warn_exit = 1 if any('this change edits code' in reason for reason in reasons) else 0
+    checked = run(wo + check, repo, repo.parent / "check.txt", expected=check_exit)
+    warned = run(wo + check + ["--review", "warn"], repo,
+                 repo.parent / "check-warn.txt", expected=warn_exit)
     if reasons:
-        if "Warning:" not in checked or "Review:" not in checked:
-            raise RuntimeError("Shortcut did not produce a default review warning:\n" + checked)
-    elif any("Warning:" in result or "Review:" in result for result in (checked, strict)):
-        raise RuntimeError("Honest change produced a warning:\n" + checked + strict)
+        if "Warning:" not in warned or "Review:" not in warned:
+            raise RuntimeError("Shortcut did not produce an opt-in review warning:\n" + warned)
+    elif any("Warning:" in result or "Review:" in result for result in (checked, warned)):
+        raise RuntimeError("Honest change produced a warning:\n" + checked + warned)
     messages = []
     for reason in reasons:
         matching = [line for line in checked.splitlines() if reason in line]
@@ -175,12 +175,12 @@ def report(repo, title, command=test, plain_exit=0, check_exit=1, reasons=()):
             raise RuntimeError("Successful check did not print check: OK:\n" + checked)
         messages.append("check: OK")
     result = dict(title=title, command=shlex.join(command), pytest=summary(plain),
-                  pytest_exit=plain_exit, workorder_exit=default_exit, refuse_exit=check_exit, messages=messages)
+                  pytest_exit=plain_exit, workorder_exit=check_exit, warn_exit=warn_exit, messages=messages)
     results.append(result)
     print(f"\n{len(results)}. {title}", flush=True)
     print(f"$ {result['command']}\n{result['pytest']} (exit {plain_exit})", flush=True)
     print("$ workorder " + shlex.join(check), flush=True)
-    print("\n".join(messages) + f"\n(default exit {default_exit}; --review refuse exit {check_exit})", flush=True)
+    print("\n".join(messages) + f"\n(default exit {check_exit}; --review warn exit {warn_exit})", flush=True)
 
 
 try:
@@ -334,7 +334,7 @@ try:
     (output / "results.json").write_text(json.dumps(dict(version=version, cases=results), indent=2)
                                        + "\n", encoding="utf-8")
     print(f"\nVerified results: {output / 'results.json'}", flush=True)
-    print("PASS: 14 cases verified; 12 shortcuts flagged by default and refused with --review refuse; honest changes pass with no warning.", flush=True)
+    print("PASS: 14 cases verified; 12 shortcuts refused by default and reported with --review warn; honest changes pass with no warning.", flush=True)
 except (OSError, RuntimeError, StopIteration) as error:
     print(f"FAIL: {error}\nComplete logs remain in {output}", file=sys.stderr)
     sys.exit(1)

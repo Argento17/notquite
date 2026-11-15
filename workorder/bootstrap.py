@@ -14,9 +14,9 @@ from . import store as s
 AGENT_BLOCK = r"""## Tasks
 - Start every session from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed, then run `workorder renew --task <id>` if the tested code changed. Use the repository's default branch name if it is not main. Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
-- Work on a branch and open a pull request for review.
+- Land the task on main before starting its code, then work on a branch and open a pull request. If task and code must share a pull request, ask a reviewer to accept the new definition with `workorder-allow:<id>`.
 - After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
-- If `done` refuses because you changed tests on purpose, rerun with `--needs-review` and tell the user its test changes are flagged in the pull request (with `--review refuse` it needs the label `workorder-allow:<id>`).
+- If `done` refuses because you changed tests on purpose, rerun with `--needs-review`. It records evidence and leaves IN_PROGRESS with a pending review note. Set DONE in the reviewed pull request when Acceptance is met; test changes are refused unless a reviewer adds the label `workorder-allow:<id>`. Report the pending review to the user.
 - Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 """
@@ -59,7 +59,7 @@ jobs:
         run: |
           # Reviewed task ids, unowned tests, or the code-to-task requirement.
           allow=$(jq -r '[.pull_request.labels[].name | select(test("^workorder-allow:([A-Z][A-Z0-9]*-[1-9][0-9]*|tests|no-task)$")) | sub("^workorder-allow:"; "")] | join(",")' "$GITHUB_EVENT_PATH")
-          # Test changes warn by default; add --review refuse to require reviewer acceptance.
+          # Test changes are refused unless a reviewer adds the label; --review warn is optional.
           workorder check --base "$BASE" --run-tests --all-tests --require-task ${allow:+--allow "$allow"}
 """
 

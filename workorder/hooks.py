@@ -157,6 +157,9 @@ def run(root, event):
         if tid in claimed and base:
             problems += gate.local_test_problems(root, base, record, notes=notes, results=results,
                                                  pending_review=True)
+        else:
+            revision = gate.comparison_base(root, base)[0] if base else 'HEAD'
+            problems += gate.local_command_problems(root, revision, record)
     for note in gate.summarize_notes(notes):
         print(f'Note: {note}')
     if problems:

@@ -1830,7 +1830,7 @@ def test_renew_never_records_a_merge_that_cannot_count(clones):
     assert [e["kind"] for e in store.entries(one, "TASK-1")] == ["implemented", "test"]
 
 
-def test_a_squash_onto_a_moved_main_is_renewed_in_one_command(clones, tmp_path):
+def test_a_squash_onto_a_moved_main_matches_without_renewal(clones, tmp_path):
     one, two = clones
     git(one, "checkout", "-q", "-b", "feature")
     (one / "app.py").write_text("items = ['feature']\n", encoding="utf-8")
@@ -1854,8 +1854,7 @@ def test_a_squash_onto_a_moved_main_is_renewed_in_one_command(clones, tmp_path):
     fresh = tmp_path / "fresh"
     git(tmp_path, "clone", "-q", "--no-local", git(one, "remote", "get-url", "origin"), str(fresh))
     git(fresh, "config", "user.name", "fresh")
-    refused = cli(fresh, "check")
-    assert refused.returncode == 1 and "is not in this clone" in refused.stdout
+    ok(fresh, "check")
     renewed = ok(fresh, "renew", "--task", "TASK-1")
     assert "implemented" in renewed and "test" in renewed and "still owes: nothing" in renewed
     ok(fresh, "check")

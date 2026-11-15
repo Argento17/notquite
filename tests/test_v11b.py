@@ -303,7 +303,7 @@ def test_done_clears_next_field(local_repo):
 
 def test_new_accepts_script_explicitly_named_as_its_own_test(local_repo):
     (local_repo / 'check.js').write_text('if (2 + 2 !== 4) throw Error("bad sum");\n')
-    ok(local_repo, 'new', '--title', 'Check sum', '--owner', 'dev', '--test', 'node check.js')
+    ok(local_repo, 'new', '--title', 'Check sum', '--owner', 'dev', '--test', 'node check.js', '--test-paths', 'check.js')
     record = store.record(local_repo, 'TASK-1')
     assert record['test_paths'] == ['check.js']
     assert gate.wrapper_note(record) is None
@@ -411,7 +411,7 @@ def test_windows_extended_drive_target_rebases_case_and_dot_segments(tmp_path):
     ('fewer', 'fewer tests pass'), ('base_failing', 'so any change needs review'),
     ('ref_failure', 'its tests from'),
 ])
-def test_test_review_warns_by_default_and_refuses_on_request(local_repo, change, reason, monkeypatch):
+def test_test_review_refuses_by_default_and_warns_on_request(local_repo, change, reason, monkeypatch):
     root = local_repo
     (root / '.gitignore').write_text('__pycache__/\n.pytest_cache/\n')
     (root / 'app.py').write_text('value = 1\n')
@@ -442,26 +442,27 @@ def test_test_review_warns_by_default_and_refuses_on_request(local_repo, change,
     if change == 'base_failing':
         commit_all(root)
         ok(root, 'done', '--task', 'TASK-1', '--needs-review')
+        store.set_task_field(root, 'TASK-1', 'status', 'DONE')
     args = ['check', '--base', base, '--run-tests']
-    result = cli(root, *args)
+    result = cli(root, *args, '--review', 'warn')
     assert result.returncode == 0, result.stdout + result.stderr
     assert any(line.startswith('Warning:') and reason in line for line in result.stdout.splitlines()), result.stdout
     assert re.search(r'Review: \d+ test changes need a reviewer\x27s look', result.stdout)
     if change in {'skip', 'xfail'}:
         assert f'more tests are {"skipped" if change == "skip" else "xfailed"}' in result.stdout
-    strict = cli(root, *args, '--review', 'refuse')
+    strict = cli(root, *args)
     assert strict.returncode == 1 and reason in strict.stdout
     accepted = cli(root, *args, '--allow', 'TASK-1')
     assert accepted.returncode == 0 and 'Warning:' not in accepted.stdout
     assert 'Review:' not in accepted.stdout
     monkeypatch.setenv('GITHUB_ACTIONS', 'true')
-    annotated = cli(root, *args)
+    annotated = cli(root, *args, '--review', 'warn')
     assert '::warning file=' in annotated.stdout and ',line=' in annotated.stdout
     assert annotated.returncode == 0
 
 
 @pytest.mark.parametrize('staged', [False, True])
-def test_default_file_warning_has_github_location_and_allow_silences(local_repo, monkeypatch, staged):
+def test_opt_in_file_warning_has_github_location_and_allow_silences(local_repo, monkeypatch, staged):
     probe = local_repo / 'test_unowned.py'
     probe.write_text('def test_value():\n    assert True\n')
     base = commit_all(local_repo)
@@ -470,7 +471,7 @@ def test_default_file_warning_has_github_location_and_allow_silences(local_repo,
     if staged:
         git(local_repo, 'add', 'test_unowned.py')
     flags = ['--staged'] if staged else []
-    result = cli(local_repo, 'check', '--base', base, *flags)
+    result = cli(local_repo, 'check', '--base', base, '--review', 'warn', *flags)
     assert result.returncode == 0, result.stdout
     assert result.stdout.count('Warning:') == 1
     assert 'Review: 1 test changes need a reviewer\'s look' in result.stdout
@@ -488,16 +489,16 @@ def test_review_mode_never_accepts_false_finished_claim(local_repo, mode):
     assert result.returncode == 1 and 'owes: implementation' in result.stdout
 
 
-def test_workflow_documents_strict_review_without_enabling_it(local_repo):
+def test_workflow_documents_default_refusal_and_optional_warnings(local_repo):
     bootstrap.initialize(local_repo)
     path = local_repo / '.github/workflows/workorder.yml'
     text = path.read_text()
-    assert '# ' in text and '--review refuse' in text
+    assert 'refused unless a reviewer adds the label' in text and '--review warn' in text
     command = next(line for line in text.splitlines() if line.strip().startswith('workorder check --base'))
     assert '--review refuse' not in command
     path.write_text('old workflow\n')
     bootstrap.initialize(local_repo, update_workflow=True)
-    assert '--review refuse' in path.read_text()
+    assert '--review warn' in path.read_text()
 
 
 @pytest.mark.parametrize('view', ['check', 'show'])
@@ -543,10 +544,10 @@ def test_generated_pr_command_flags_hidden_test_material_bug(local_repo, materia
     # These are the check flags written by init for the pull request.
     args = ['check', '--base', 'origin/main', '--run-tests', '--all-tests', '--require-task']
     default = cli(root, *args)
-    assert default.returncode == 0, default.stdout + default.stderr
-    assert 'Warning: tests: its test files lost or changed' in default.stdout
+    assert default.returncode == 1, default.stdout + default.stderr
+    assert 'tests: its test files lost or changed' in default.stdout
     assert target.relative_to(root).as_posix() in default.stdout
-    strict = cli(root, *args, '--review', 'refuse')
+    strict = cli(root, *args)
     assert strict.returncode == 1 and 'lost or changed' in strict.stdout
 
 

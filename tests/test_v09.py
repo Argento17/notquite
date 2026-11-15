@@ -186,14 +186,14 @@ def test_wrapper_without_test_paths_is_refused_under_base(local_repo, command):
     assert 'set test_paths so changes to its tests are reviewed' in result.stdout
 
 
-def test_untouched_wrapper_still_needs_test_paths(local_repo):
+def test_untouched_unfinished_wrapper_does_not_refuse_other_work(local_repo):
     root = local_repo
     task(root, ships='none', test='npm test')
     base = commit_all(root)
     (root / 'app.py').write_text('value = 2\n')
     result = cli(root, 'check', '--base', base)
-    assert result.returncode == 1, result.stdout
-    assert 'set test_paths' in result.stdout
+    assert result.returncode == 0, result.stdout
+    assert 'set test_paths' not in result.stdout
 
 
 def test_production_refactor_is_not_an_inferred_test_change(local_repo):
