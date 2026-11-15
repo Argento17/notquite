@@ -45,6 +45,11 @@ jobs:
                 "3db476ada3aee9c054d6a27ab6cb49abf196e8666f8c647dc7c00acbb9a73bf1  workorder-0.13.0-py3-none-any.whl" \
                 "b5361556ae1d4ce84990525463b71bfcfdc53ad1781b8ff93e8b355928a48ff9  workorder-0.13.0.tar.gz" \
                 > expected.sha256 ;;
+            v0.14.0)
+              printf '%s\n' \
+                "c3db684bcaa5e3ea77598d6efc7ef3118185582a8f285a445a83245731557a5d  workorder-0.14.0-py3-none-any.whl" \
+                "d02ca4328ccf1c652a54fd4e9f23c5209750f2088c5a761740e90ecb5f1a1eb8  workorder-0.14.0.tar.gz" \
+                > expected.sha256 ;;
             *) echo "No tested checksums recorded for $TAG"; exit 1 ;;
           esac
           cd dist
