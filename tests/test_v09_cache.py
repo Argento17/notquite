@@ -184,7 +184,7 @@ def test_explicit_receipt_seeds_cached_declared_checks(local_repo):
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='executes a POSIX pre-commit hook')
-def test_done_hook_stop_and_check_share_one_run_across_processes(local_repo):
+def test_done_and_hooks_share_one_run_but_explicit_check_runs_fresh(local_repo):
     root = local_repo
     bootstrap.initialize(root, claude=True)
     command, counter = counted_command(root)
@@ -196,7 +196,7 @@ def test_done_hook_stop_and_check_share_one_run_across_processes(local_repo):
     git(root, 'checkout', '-qb', 'feature')
     done = cli(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert done.returncode == 0, done.stdout + done.stderr
-    assert len(executions(counter)) == 1
+    assert len(executions(counter)) == 3
     git(root, 'add', 'tasks', '.workorder')
     env = dict(os.environ, PYTHONPATH=str(PACKAGE),
                PATH=str(Path(PYTHON).parent) + os.pathsep + os.environ['PATH'])
@@ -209,7 +209,7 @@ def test_done_hook_stop_and_check_share_one_run_across_processes(local_repo):
     assert stop.returncode == 0, stop.stdout + stop.stderr
     checked = cli(root, 'check', '--base', base, '--run-tests', '--all-tests')
     assert checked.returncode == 0, checked.stdout + checked.stderr
-    assert len(executions(counter)) == 1
+    assert len(executions(counter)) == 5
     assert store.record(root, 'TASK-1')['status'] == 'DONE'
     assert store.entries(root, 'TASK-1')[-1]['command'] == command
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -86,7 +87,7 @@ def parser():
     check.add_argument("--verbose", action="store_true", help="print every task note instead of grouping similar notes")
     check.add_argument("--allow", metavar="TASKS", default="",
                        help="with --base: accept definition/test edits, REF-test failures, reduced pytest outcomes or complete removal"
-                            " (comma-separated ids; tests for unowned tests, no-task for changes without task work)")
+                            " (comma-separated ids; tests for test-file edits, no-task for changes without task work)")
     check.add_argument("--run-tests", action="store_true",
                        help="run selected tasks' tests; with --base, include tasks with changed tests and REF comparisons")
     check.add_argument("--strict-tests", action="store_true",
@@ -95,7 +96,9 @@ def parser():
     check.add_argument("--all-tests", action="store_true",
                        help="with --run-tests: also test every DONE/CLOSED task, once per code, command and timeout")
     check.add_argument("--require-task", action="store_true",
-                       help="with --base: require a new counting receipt on a task with a concrete test command for code changes")
+                       help="with --base: require a new counting receipt on a task with a concrete test command for non-test code changes")
+    check.add_argument("--review", choices=["warn", "refuse"],
+                       help="with --base: warn about test changes (default), or refuse until accepted")
     check.add_argument("--base", metavar="REF",
                        help="check changes since REF: changed or removed receipts; requirement changes"
                             " (test, contract, evidence, dependencies, Scope and Acceptance lines);"
@@ -131,11 +134,16 @@ def invalid_reason(root, item):
 
 def done_refusal(tid, status, lines):
     """Describe the refusal without presenting the proposed DONE as a written claim."""
-    if status is not None:
+    if status in gate.FINISHED:
+        reasons = [line.removeprefix('  Missing:').strip() for line in lines if line.startswith('  Missing:')]
+        print(f"{tid} stays {status}; this change was refused: " + '; '.join(reasons))
+        lines = [line for line in lines if line.startswith('  Next:')]
+    elif status is not None:
         print(f"{tid}: DONE was not written; the status stays {status}")
     print("\n".join(line for line in lines if line.startswith(("  Missing:", "  Next:"))))
 
 
+@s.test_output_session()
 def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_change=False):
     """Use the same evidence and claim checks as the individual commands, restoring status on refusal."""
     status = None
@@ -159,7 +167,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if not all(filled.get(name) for name in ("Scope", "Acceptance")):
             raise s.Refused("fill in Scope and Acceptance first")
         revision, reference = gate.implementation_base(root, record)
-        if not no_code_change and s.code_digest(root, revision) == s.code_digest(root, s.head(root)):
+        if not no_code_change and not any(gate.needs_task_receipt(path)
+                                          for path in gate.changed_paths(root, revision)):
             raise s.Refused(f'{tid}: no code changed since {reference}; nothing was implemented')
         hook = root / s.git(root, 'rev-parse', '--git-path', 'hooks/pre-commit').stdout.strip()
         if not hook.is_file():
@@ -168,7 +177,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if implemented is None or implemented["code"] != s.code_digest(root, s.head(root)):
             item = s.receipt(root, tid, "implemented")
             print(f"{tid} implemented {item['commit'][:7]} - recorded")
-        item = s.receipt(root, tid, "test", command, timeout=timeout, use_cache=True)
+        item = s.receipt(root, tid, "test", command, timeout=timeout)
         print(f"{tid} test {item['commit'][:7]} exit {item['exit_code']} - recorded")
         if item['exit_code'] == 0 and not item['valid']:
             print('recorded, but does not count: ' + invalid_reason(root, item))
@@ -176,6 +185,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 print('Add generated files such as __pycache__/ to .gitignore; commit the change and run done again.')
         lines, refused = gate.explain(root, tid, claim="DONE")
         if refused or item["exit_code"] or not item["valid"]:
+            if item["exit_code"]:
+                lines = [line for line in lines if not line.startswith('  Next:')]
+                lines.append('  Next:     fix the code or the test, then run workorder done again')
             done_refusal(tid, status, lines)
             return 1
         print("Acceptance:")
@@ -201,6 +213,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         supported = False
         try:
             s.set_task_field(root, tid, "status", "DONE")
+            if record.get("next"):
+                s.set_task_field(root, tid, "next", "")
             if s.record(root, tid)['status'] != 'DONE':
                 raise s.Refused('could not set the task status to DONE')
             lines, refused = gate.explain(root, tid)
@@ -215,8 +229,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         _, owed, delivery = gate.verdict(root, s.record(root, tid))
         debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""
         if pending:
-            print(f'{tid} DONE, pending review: the pull request needs the label '
-                  f'workorder-allow:{tid} (its test files changed)')
+            print(f'{tid} DONE, pending review: its test files changed; the pull request flags them '
+                  f'for a reviewer (with --review refuse it needs the label workorder-allow:{tid})')
         else:
             print(f"{tid} DONE: its declared test passed on this code{debt}")
         push = " and push" if s.has_origin(root) else ""
@@ -243,6 +257,8 @@ def main(argv=None):
             options.task = options.task or options.named_task
             if (options.allow or options.strict_tests or options.require_task) and not options.base:
                 raise s.Refused("--allow, --strict-tests and --require-task go with --base")
+            if options.review and not options.base:
+                raise s.Refused("--review goes with --base")
             if options.all_tests and not options.run_tests:
                 raise s.Refused("--all-tests goes with --run-tests")
             if options.task and options.run_tests:
@@ -362,10 +378,20 @@ def main(argv=None):
             allow = {item.strip() for item in options.allow.split(",") if item.strip()}
             problems = gate.check(root, options.staged, options.base, notes, allow, options.run_tests, counts,
                                   options.strict_tests, options.all_tests, options.require_task,
-                                  timeout=options.timeout)
-            if options.staged and not counts["tasks"] and not problems and not notes and not options.run_tests:
+                                  timeout=options.timeout, review=options.review or "warn")
+            if (options.staged and not counts["tasks"] and not problems and not notes
+                    and not counts.get("warnings") and not options.run_tests):
                 return 0
             print("\n".join(problems) if problems else "check: OK")
+            for warning in counts.get('warnings', []):
+                print(f'Warning: {warning}')
+                if os.environ.get('GITHUB_ACTIONS'):
+                    def escape(value, prop=False):
+                        value = str(value).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+                        return value.replace(':', '%3A').replace(',', '%2C') if prop else value
+                    print(f'::warning file={escape(warning.path, True)},line={warning.line}::{escape(warning)}')
+            if counts.get('warnings'):
+                print(f"Review: {len(counts['warnings'])} test changes need a reviewer's look")
             if notes:
                 print("\n".join(f"Note: {note}" for note in gate.summarize_notes(notes, options.verbose)))
             if options.run_tests and counts["tests"] == 0:

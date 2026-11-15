@@ -196,14 +196,14 @@ def test_base_guards_test_files(local_repo, explicit, change):
     else:
         probe.write_text(probe.read_text() + 'assert 3 == 3\n')
     commit_all(root)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == (0 if change == 'add' else 1), result.stdout + result.stderr
     if change != 'add':
         lost = 1 if change == 'edit' else 2
         assert f'TASK-1: its test files lost or changed {lost} lines since {base}' in result.stdout
         assert 'tests/test example.py' in result.stdout
         assert 'a reviewer accepts it with --allow TASK-1' in result.stdout
-        ok(root, 'check', '--base', base, '--allow', 'TASK-1')
+        ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
     assert 'checked 1 task ' in result.stdout
 
 
@@ -326,14 +326,14 @@ def test_binary_test_additions_pass_but_edits_need_allow(local_repo):
     binary = folder / 'fixture.bin'
     binary.write_bytes(b'\0original\xff')
     commit_all(root)
-    ok(root, 'check', '--base', base)
+    ok(root, 'check', '--review', 'refuse', '--base', base)
     base = store.head(root)
     store.add_note(root, "TASK-1", "Updating the fixture")
     binary.write_bytes(b'\0changed\xff')
     commit_all(root)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'changed binary content' in result.stdout
-    ok(root, 'check', '--base', base, '--allow', 'TASK-1')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
 
 
 def test_empty_test_rename_needs_allow(local_repo):
@@ -345,9 +345,9 @@ def test_empty_test_rename_needs_allow(local_repo):
     store.add_note(root, "TASK-1", "Working on these tests")
     test.rename(root / 'test_renamed.py')
     commit_all(root)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'lost or changed 0 lines' in result.stdout
-    ok(root, 'check', '--base', base, '--allow', 'TASK-1')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
 
 
 def test_base_test_paths_still_guard_files_after_paths_removed(local_repo):
@@ -360,10 +360,10 @@ def test_base_test_paths_still_guard_files_after_paths_removed(local_repo):
     path.write_text(path.read_text().replace('[test_app.py]', '[]'))
     probe.write_text('pass\n')
     commit_all(root)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'test_paths changed' in result.stdout
     assert 'lost or changed 1 lines' in result.stdout
-    ok(root, 'check', '--base', base, '--allow', 'TASK-1')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
 
 
 @pytest.mark.parametrize('explicit', [False, True])
@@ -380,9 +380,9 @@ def test_test_paths_normalise_parent_components(local_repo, explicit):
     store.add_note(root, "TASK-1", "Working on these tests")
     probe.write_text('pass\n')
     commit_all(root)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'lost or changed 1 lines' in result.stdout
-    ok(root, 'check', '--base', base, '--allow', 'TASK-1')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
 
 
 def test_old_squash_does_not_excuse_reopened_claim_on_new_code(local_repo):

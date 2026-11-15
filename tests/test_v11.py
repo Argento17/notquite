@@ -68,9 +68,9 @@ def test_import_extension_and_new_test_pass_without_label(local_repo, imports):
     output = ok(root, 'done', '--task', 'TASK-1')
     assert 'pending review' not in output
     commit_all(root)
-    checked = cli(root, 'check', '--base', 'origin/main', '--run-tests', '--all-tests', '--require-task')
+    checked = cli(root, 'check', '--review', 'refuse', '--base', 'origin/main', '--run-tests', '--all-tests', '--require-task')
     assert checked.returncode == 0, checked.stdout + checked.stderr
-    strict = cli(root, 'check', '--base', 'origin/main', '--strict-tests')
+    strict = cli(root, 'check', '--review', 'refuse', '--base', 'origin/main', '--strict-tests')
     assert strict.returncode == 1 and 'test files or pytest configuration changed' in strict.stdout
 
 
@@ -84,7 +84,7 @@ def test_import_extension_does_not_hide_test_body_edits(local_repo, body):
     root = local_repo
     base = calc_task(root, 'tests/test_mul.py')
     (root / 'tests/test_mul.py').write_text(body.replace('import mul', 'import mul, div') + DIV_TEST)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'lost or changed' in result.stdout
 
 
@@ -99,7 +99,7 @@ def test_changed_import_bindings_still_need_review(local_repo, replacement):
     root = local_repo
     base = calc_task(root, 'tests/test_mul.py')
     (root / 'tests/test_mul.py').write_text(MUL_TEST.replace('from calc import mul', replacement))
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'lost or changed' in result.stdout
 
 
@@ -156,12 +156,12 @@ def test_unowned_import_additions_pass_and_changed_assertions_refuse(local_repo,
     probe.write_text(MUL_TEST.replace('import mul', 'import mul, div') + DIV_TEST)
     if staged:
         git(local_repo, 'add', 'test_calc.py')
-    result = cli(local_repo, 'check', '--base', base, *(['--staged'] if staged else []))
+    result = cli(local_repo, 'check', '--review', 'refuse', '--base', base, *(['--staged'] if staged else []))
     assert result.returncode == 0, result.stdout + result.stderr
     probe.write_text(probe.read_text().replace('== 12', '== 11'))
     if staged:
         git(local_repo, 'add', 'test_calc.py')
-    refused = cli(local_repo, 'check', '--base', base, *(['--staged'] if staged else []))
+    refused = cli(local_repo, 'check', '--review', 'refuse', '--base', base, *(['--staged'] if staged else []))
     assert refused.returncode == 1 and 'lost or changed' in refused.stdout
 
 
@@ -183,7 +183,7 @@ def test_new_import_name_cannot_shadow_an_existing_binding(local_repo):
     probe.write_text('from helper import div\n' + MUL_TEST)
     base = commit_all(local_repo)
     probe.write_text(probe.read_text().replace('import mul', 'import mul, div'))
-    result = cli(local_repo, 'check', '--base', base)
+    result = cli(local_repo, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'lost or changed' in result.stdout
 
 
@@ -286,7 +286,7 @@ def test_spec_and_plural_test_names_are_reviewed(local_repo, path):
     target.write_text('original assertion\n')
     base = commit_all(local_repo)
     target.write_text('weakened assertion\n')
-    result = cli(local_repo, 'check', '--base', base)
+    result = cli(local_repo, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1, result.stdout + result.stderr
     assert path in result.stdout and '--allow tests' in result.stdout
-    assert cli(local_repo, 'check', '--base', base, '--allow', 'tests').returncode == 0
+    assert cli(local_repo, 'check', '--review', 'refuse', '--base', base, '--allow', 'tests').returncode == 0

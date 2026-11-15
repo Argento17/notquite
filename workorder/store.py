@@ -27,6 +27,55 @@ class Refused(ValueError):
     pass
 
 
+_TEST_OUTPUTS = ContextVar("workorder_test_outputs", default=None)
+
+
+@contextmanager
+def test_output_session():
+    if _TEST_OUTPUTS.get() is not None:
+        yield
+        return
+    token = _TEST_OUTPUTS.set(set())
+    try:
+        yield
+    finally:
+        _TEST_OUTPUTS.reset(token)
+
+
+def print_once(message):
+    seen = _TEST_OUTPUTS.get()
+    if seen is None or message not in seen:
+        print(message)
+        if seen is not None:
+            seen.add(message)
+
+
+def print_test_output(output, errors='', failed=False):
+    if failed:
+        # The same failure can be used for current, REF and all-task checks.
+        key = re.sub(r' in \d+(?:\.\d+)?s', ' in <time>s', output + errors)
+        seen = _TEST_OUTPUTS.get()
+        if seen is not None:
+            if key in seen:
+                return
+            seen.add(key)
+        print('Failure:')
+    print(output, end='')
+    print(errors, end='', file=sys.stderr)
+
+
+_REUSE_TESTS = ContextVar("workorder_reuse_tests", default=False)
+
+
+@contextmanager
+def test_reuse(enabled=True):
+    token = _REUSE_TESTS.set(enabled)
+    try:
+        yield
+    finally:
+        _REUSE_TESTS.reset(token)
+
+
 _READS = ContextVar("workorder_reads", default=None)
 
 
@@ -1361,14 +1410,16 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
                           if owner != root else before[0] if before else None)
             if before:
                 folder = owner / git(owner, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
-                key = digest(packed([1, before[1], logical, timeout]).encode('ascii'))
+                key = digest(packed([2, before[1], logical, timeout]).encode('ascii'))
                 cached_path = folder / (key + '.json')
                 if not fresh:
                     value = json.loads(cached_path.read_text(encoding='utf-8'))
                     if (isinstance(value, dict) and type(value.get('returncode')) is int
-                            and isinstance(value.get('stdout'), str) and isinstance(value.get('stderr'), str)):
+                            and isinstance(value.get('stdout'), str) and isinstance(value.get('stderr'), str)
+                            and re.fullmatch(r'\d{2}:\d{2}', value.get('at', ''))):
                         run = subprocess.CompletedProcess(command, value['returncode'], value['stdout'], value['stderr'])
                         run.cached = True
+                        run.reused_at = value['at']
                         return run
         except (OSError, Refused, ValueError):
             pass  # an absent, malformed or unwritable cache must never prevent a run
@@ -1381,6 +1432,11 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
         run = run_test(command, root, timeout, capture_output=True, isolated=isolated)
     finally:
         invalidate_reads()
+    # Pytest can report a failure even when application shutdown code forces exit 0.
+    from .gate import pytest_counts
+    outcomes = pytest_counts((run.stdout or '') + (run.stderr or '')) or {}
+    if run.returncode == 0 and any(outcomes.get(name, 0) for name in ('failed', 'error', 'errors')):
+        run.returncode = 1
     run.cached = False
     if cached_path is not None:
         temporary = cached_path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
@@ -1389,7 +1445,7 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
                     and _git_run(owner, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip() == owner_head):
                 cached_path.parent.mkdir(parents=True, exist_ok=True)
                 temporary.write_text(packed(dict(returncode=run.returncode, stdout=run.stdout or '',
-                                                 stderr=run.stderr or '')), encoding='utf-8')
+                                                 stderr=run.stderr or '', at=dt.datetime.now(dt.timezone.utc).strftime('%H:%M'))), encoding='utf-8')
                 os.replace(temporary, cached_path)
         except (OSError, Refused, ValueError):
             pass
@@ -1425,7 +1481,7 @@ def missing_test_dependency(command, code, output, root=None):
     return None
 
 
-def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None, *, use_cache=False):
+def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None):
     repository(root)
     definition = record(root, tid)
     commit = head(root)
@@ -1450,9 +1506,8 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
             raise Refused("read-backs need --target")
         try:
             if kind == "test":
-                run = cached_test(command, root, test_timeout(definition, timeout), fresh=not use_cache)
-                print(run.stdout or '', end='')
-                print(run.stderr or '', end='', file=sys.stderr)
+                run = cached_test(command, root, test_timeout(definition, timeout), fresh=True)
+                print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0)
             else:
                 run = subprocess.run(list(command), cwd=root, capture_output=True,
                                      encoding="utf-8", errors="replace")

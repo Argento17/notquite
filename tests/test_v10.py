@@ -2,6 +2,7 @@
 
 import io
 import os
+import shutil
 import subprocess
 import sys
 
@@ -70,14 +71,14 @@ def test_task_first_added_lines_cannot_hide_a_failing_ref_test(local_repo, monke
             captured = capsys.readouterr()
             output = captured.out + captured.err
         else:
-            result = cli(root, 'check', '--base', base, '--run-tests', '--all-tests', '--require-task')
+            result = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--all-tests', '--require-task')
             output = result.stdout + result.stderr
             assert result.returncode == 1, output
             assert 'this change edits code but no task records it' not in output
     assert 'so any change needs review' in output
     assert 'its tests from' in output and 'fail on this code' in output
     assert '--allow TASK-1' in output
-    allowed = cli(root, 'check', '--base', base, '--run-tests', '--allow', 'tests')
+    allowed = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--allow', 'tests')
     assert allowed.returncode == 1, allowed.stdout + allowed.stderr
     assert 'so any change needs review' in allowed.stdout
 
@@ -110,32 +111,33 @@ def test_named_file_does_not_own_the_rest_of_tests(local_repo):
     base = commit_all(root)
     probe = root / 'tests/test_one.py'
     probe.write_text(probe.read_text().replace('assert True', 'assert  True'))
-    refused = cli(root, 'check', '--base', base)
+    refused = cli(root, 'check', '--review', 'refuse', '--base', base)
     output = refused.stdout + refused.stderr
     assert refused.returncode == 1, output
     assert output.count('lost or changed') == 1
     assert 'TASK-1:' in output and 'tests/test_one.py' in output
     assert 'TASK-2:' not in output
     assert 'TASK-3:' not in output
-    assert cli(root, 'check', '--base', base, '--allow', 'tests').returncode == 0
+    assert cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'tests').returncode == 0
     helper = root / 'tests/helper.py'
     helper.write_text('value = 2\n')
     probe.write_text('def test_one():\n    assert True\n')
-    helper_change = cli(root, 'check', '--base', base)
+    helper_change = cli(root, 'check', '--review', 'refuse', '--base', base)
     helper_output = helper_change.stdout + helper_change.stderr
     assert helper_change.returncode == 1, helper_output
     assert 'tests/helper.py' in helper_output and '--allow tests' in helper_output
     assert 'TASK-1:' not in helper_output
     helper.write_text('value = 1\n')
     (root / 'tests/conftest.py').write_text('value = 2\n')
-    shared = cli(root, 'check', '--base', base)
+    shared = cli(root, 'check', '--review', 'refuse', '--base', base)
     shared_output = shared.stdout + shared.stderr
     assert shared.returncode == 1, shared_output
-    assert 'TASK-1:' in shared_output and 'TASK-2:' in shared_output
+    assert 'TASK-1, TASK-2:' in shared_output
     assert 'conftest.py' in shared_output
-    assert cli(root, 'check', '--base', base, '--allow', 'tests').returncode == 0
-    one = cli(root, 'check', '--base', base, '--allow', 'TASK-1')
-    assert one.returncode == 1 and 'TASK-2:' in one.stdout
+    assert cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'tests').returncode == 0
+    one = cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
+    assert one.returncode == 0
+    assert 'lost or changed' not in one.stdout
 
 
 def test_allow_tests_accepts_lines_owned_by_every_named_folder(local_repo):
@@ -147,14 +149,14 @@ def test_allow_tests_accepts_lines_owned_by_every_named_folder(local_repo):
         task(root, f'TASK-{number}', ships='none', test=f'{PYTHON} -m pytest -q tests')
     base = commit_all(root)
     probe.write_text('def test_one():\n    assert  True\n')
-    refused = cli(root, 'check', '--base', base)
+    refused = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert refused.returncode == 1
-    assert refused.stdout.count('lost or changed') == 3
-    assert cli(root, 'check', '--base', base, '--allow', 'tests').returncode == 0
-    one = cli(root, 'check', '--base', base, '--allow', 'TASK-1')
-    assert one.returncode == 1
-    assert 'TASK-2:' in one.stdout and 'TASK-3:' in one.stdout
-    assert not [line for line in one.stdout.splitlines() if line.startswith('TASK-1:')]
+    assert refused.stdout.count('lost or changed') == 1
+    assert 'TASK-1, TASK-2, TASK-3:' in refused.stdout
+    assert cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'tests').returncode == 0
+    one = cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
+    assert one.returncode == 0
+    assert 'lost or changed' not in one.stdout
 
 
 def test_new_records_test_paths_when_the_command_names_them(local_repo):
@@ -189,14 +191,15 @@ def test_other_languages_count_as_test_files(local_repo):
     base = commit_all(root)
     for name in files:
         (root / name).write_text('new\n')
-    refused = cli(root, 'check', '--base', base)
+    refused = cli(root, 'check', '--review', 'refuse', '--base', base)
     output = refused.stdout + refused.stderr
     assert refused.returncode == 1, output
     for name in files:
         assert name in output
-    assert cli(root, 'check', '--base', base, '--allow', 'tests').returncode == 0
+    assert cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'tests').returncode == 0
 
 
+@pytest.mark.skipif(not shutil.which('node'), reason='needs Node.js to run the declared JavaScript tests')
 def test_finished_node_suite_needs_test_paths(local_repo):
     root = local_repo
     (root / 'src').mkdir()
@@ -226,7 +229,7 @@ def test_finished_node_suite_needs_test_paths(local_repo):
     assert 'check: OK' not in output
 
 
-def test_cached_runs_count_in_the_summary(local_repo):
+def test_explicit_runs_stay_fresh_in_the_summary(local_repo):
     root = local_repo
     (root / 'a.py').write_text('raise SystemExit(0)\n')
     (root / 'b.py').write_text('raise SystemExit(0)\n')
@@ -236,13 +239,14 @@ def test_cached_runs_count_in_the_summary(local_repo):
         path = root / f'tasks/{tid}.md'
         path.write_text(path.read_text().replace('\ncontract:', f'\ntest_paths: ["{name}"]\ncontract:', 1))
     base = commit_all(root)
-    first = cli(root, 'check', '--base', base, '--run-tests', '--all-tests')
+    first = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--all-tests')
     assert first.returncode == 0, first.stdout + first.stderr
     assert 'ran 2 declared tests' in first.stdout
-    second = cli(root, 'check', '--base', base, '--run-tests', '--all-tests')
+    second = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--all-tests')
     output = second.stdout + second.stderr
     assert second.returncode == 0, output
-    assert 'ran 2 declared tests (cached)' in output
+    assert 'ran 2 declared tests' in output
+    assert '(cached)' not in output
     assert 'ran 0 declared tests' not in output
     assert "2 tasks' tests passed when this check ran them" in output
 

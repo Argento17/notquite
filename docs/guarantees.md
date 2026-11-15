@@ -1,20 +1,37 @@
 # What Workorder guarantees / what it does not
 
+Test changes are flagged in the pull request by default, and refused with
+`--review refuse`. A warning asks for a reviewer's look; it does not decide
+whether the intended behavior is right.
+
 | What Workorder checks | What it does not establish |
 | --- | --- |
-| Receipts record commands, results and the code they refer to. | Anyone with write access can create a receipt. A receipt alone does not prove a command ran. |
-| DONE/CLOSED claims are checked against evidence and dependencies. | Acceptance lists are not checked. A passing test does not prove a requirement is right or complete. |
-| Plain `check` reads task records and evidence; `check ID` explains one task. | These modes do not rerun tests or inspect all changes since another branch. |
-| `check --staged` checks staged work and dependents, including local test comparisons when the remote target is available. | Hooks can be skipped, are not cloned, and do not fetch missing refs. |
-| `check --base REF` reviews repository test roots and every task whose tests changed, even if its task record is untouched. | Without `--run-tests`, it does not execute tests. |
-| A task owns the files or folders its command or `test_paths` names, plus pytest configuration on that path. `--allow tests` accepts every changed test line. An added line in a test that already failed at the base needs `--allow ID`. | Pytest `-k` and `--deselect` changes, and a base test that fails on the new code, still need `--allow ID`. Assertion quality is a review decision. |
-| `--base REF --run-tests` replays affected tasks' REF tests on current code, then checks failures on REF code before blaming the change. A finished task whose base tests failed must have those tests pass on the new code unless `--allow ID`. | Reviewer acceptance cannot supply a missing command, dependency or comparison result. |
-| `--all-tests --run-tests` runs every DONE/CLOSED task's concrete command, with or without a base. Finished tasks' current failures refuse. | It cannot test behavior outside those commands. Unfinished tasks' failed or missing current tests are progress notes. |
-| `--strict-tests` requires acceptance for protected additions and rejects completed tasks' pytest runs with no passes. | It cannot judge the quality of an assertion. |
-| `--require-task` requires a new counting receipt on a task with a concrete command. `--allow no-task` bypasses only this rule. | It does not prove that the task describes every changed line. Notes and non-counting receipts do not satisfy it. |
-| Discovery covers `test/`, `tests/`, `__tests__/`, `spec/`, `test_*.py`, `*_test.py`, `*_test.go`, `*.test.*`, `*.spec.*`, `*_spec.*`, `*_tests.*`, `conftest.py` and pytest configuration. A root-level test file or an import does not make production code a test file. Named tests count in either the base or current code; a finished task mapping to neither is refused when the base has tests. | Wrappers and dynamic imports require explicit `test_paths`; Workorder cannot infer arbitrary runtime behavior. |
-| `done` and Stop check completion claims against a locally available remote target. Stop refusals exit 2 on stderr. Session start re-reads claim and release tags. | Claims made only in chat cannot be checked. A failed tag read keeps the claims already in this clone. |
-| Local test results are reused for identical code, command and timeout; explicit receipt tests and renewals run freshly. A cached result still counts as a run. | Reusing a result does not detect changes outside those cache inputs. CI reruns bypass the persistent local cache. |
-| `--allow ID` accepts reviewed definition/test changes or complete retirement. | It does not excuse a finished task's current failure, missing evidence, invalid dependencies or changed retained receipts. |
+| Receipts record commands, results and the code they refer to. `done`, `receipt test`, `renew` and explicit `check --run-tests` execute fresh tests. | Anyone with write access can create a receipt. Receipt contents alone do not prove a command ran. |
+| DONE/CLOSED claims are checked against evidence and dependencies. Failed current tests refuse in both review modes, including pytest failure or error summaries with exit 0. | Acceptance lists still need a person or agent to check them. |
+| Plain `check` reads evidence; `check ID` explains one task. | Neither reruns tests or reviews all branch changes. |
+| The pre-commit hook reviews test changes for tasks the commit touches and their dependents. Hooks report test-review notes. | Hooks can be skipped, are not cloned, and do not fetch missing refs. Unowned test edits are reviewed by `check --base`. |
+| `check --base REF` reviews repository test files and every task whose tests changed. `--run-tests` also compares REF tests on current code. | Without `--run-tests`, it does not execute tests. Tests cannot cover behavior outside their commands. |
+| File edits produce one finding naming their owners. `--allow tests` or any owning task accepts that file finding. | Task-specific outcome and selection findings need that task's approval to silence them. |
+| Changed or removed test lines, REF failures, fewer passes, new skips or xfails, changed selection/configuration and edits to base-failing tests produce warnings. `--review refuse` refuses these findings until accepted. | A reviewer decides whether a test or behavior change is appropriate. |
+| `--all-tests --run-tests` runs every DONE/CLOSED task's current command. `--strict-tests` also reviews additions and refuses finished pytest runs with no passes. | Unfinished tasks' current failures are progress notes. |
+| `--require-task` applies to non-test code. It needs a new counting receipt on a task unfinished at the merge base, or explicit `--allow ID` for a new or already finished task. | Renewing an unrelated finished task does not satisfy it without that approval. It does not prove the task describes every changed line. `--allow no-task` bypasses only this rule. |
+| A branch receipt survives target-only changes when the current code exactly matches a clean merge of the receipt's code and the target. | Later branch edits and conflict resolutions still need fresh receipts. |
+| Only implicit hook runs may reuse local results, marked `(reused from HH:MM UTC)`. | Reuse does not detect changed environment variables, services or ignored dependencies. Explicit commands run fresh; CI bypasses the persistent cache. |
+| `--allow ID` accepts reviewed definition/test changes or complete retirement. | It never supplies missing evidence or excuses current failures for finished tasks, invalid dependencies or changed retained receipts. |
+
+Recognised test material includes every file under folders whose names contain
+`test` or `fixture`, and folders named `spec`, `__snapshots__` or `golden`, wherever
+they are. Filenames include `test_*.py`, `*_test.py`, `*_test.go`, `*.test.*`,
+`*.spec.*`, `*_spec.*`, `*_tests.*`, `testing.py`, `*_testing.py`, and any filename
+starting with `expected`, `golden` or `snapshot`. This includes data files such
+as `data/expected.json`. Pytest configuration and `conftest.py` are also reviewed.
+A test at the repository root does not make all production files test material.
+Other helpers need explicit `test_paths`; imports and wrapper commands do not
+reveal every file a test uses. A script can itself be the declared test file.
+
+Temporary test copies rebase internal absolute symlinks, including Windows
+extended paths. Ignored dependencies are linked; when links are unavailable,
+they are copied with a note. Writing through a shared dependency link changes
+that dependency in the source checkout. Tracked source and test files are copied.
 
 For command details and scope, see the [reference](reference.md).

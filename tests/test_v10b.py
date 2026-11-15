@@ -115,7 +115,7 @@ def test_test_and_requirement_changes_use_the_merge_base(local_repo):
     git(root, 'checkout', '-q', 'feature')
     (root / 'app.py').write_text('items = [1]\n', encoding='utf-8')
     short = git(root, 'rev-parse', '--short', git(root, 'merge-base', 'HEAD', 'origin/main'))
-    clean = cli(root, 'check', '--base', 'origin/main')
+    clean = cli(root, 'check', '--review', 'refuse', '--base', 'origin/main')
     output = clean.stdout + clean.stderr
     assert clean.returncode == 0, output
     assert 'lost or changed' not in output
@@ -123,7 +123,7 @@ def test_test_and_requirement_changes_use_the_merge_base(local_repo):
     assert 'Acceptance lines removed' not in output
     probe = root / 'tests/test_keep.py'
     probe.write_text('def test_keep():\n    assert  True\n', encoding='utf-8')
-    changed = cli(root, 'check', '--base', 'origin/main')
+    changed = cli(root, 'check', '--review', 'refuse', '--base', 'origin/main')
     changed_output = changed.stdout + changed.stderr
     assert changed.returncode == 1, changed_output
     assert f'since origin/main (merge base {short})' in changed_output
@@ -152,8 +152,8 @@ def test_needs_review_finishes_a_deliberate_test_change(local_repo, monkeypatch,
     output = accepted.stdout + accepted.stderr
     assert accepted.returncode == 0, output
     assert store.record(root, 'TASK-6')['status'] == 'DONE'
-    assert ('TASK-6 DONE, pending review: the pull request needs the label '
-            'workorder-allow:TASK-6 (its test files changed)') in output
+    assert ('TASK-6 DONE, pending review: its test files changed; the pull request flags them '
+            'for a reviewer (with --review refuse it needs the label workorder-allow:TASK-6)') in output
     git(root, 'add', 'tasks', '.workorder')
     hook = real_git(root, 'commit', '-qm', 'Record the review')
     hook_output = hook.stdout + hook.stderr
@@ -167,10 +167,10 @@ def test_needs_review_finishes_a_deliberate_test_change(local_repo, monkeypatch,
     stopped = capsys.readouterr()
     assert 'lost or changed' in stopped.out
     assert 'NOT QUITE' not in stopped.err
-    blocked = cli(root, 'check', '--base', 'origin/main')
+    blocked = cli(root, 'check', '--review', 'refuse', '--base', 'origin/main')
     assert blocked.returncode == 1
     assert 'lost or changed' in blocked.stdout
-    reviewed = cli(root, 'check', '--base', 'origin/main', '--run-tests', '--all-tests',
+    reviewed = cli(root, 'check', '--review', 'refuse', '--base', 'origin/main', '--run-tests', '--all-tests',
                    '--require-task', '--allow', 'TASK-6')
     assert reviewed.returncode == 0, reviewed.stdout + reviewed.stderr
 
@@ -248,7 +248,7 @@ def test_shared_helpers_and_fixture_data_are_test_files(local_repo, weaken):
     (root / 'test_data/note.txt').write_text('new\n', encoding='utf-8')
     commit_all(root, 'Break code and weaken the test')
     store.receipt(root, 'TASK-1', 'implemented')
-    result = cli(root, 'check', '--base', base, '--run-tests', '--all-tests', '--require-task')
+    result = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--all-tests', '--require-task')
     output = result.stdout + result.stderr
     assert result.returncode == 1, output
     weakened = 'testsupport/helpers.py' if weaken == 'helper' else 'fixtures/expected.json'
@@ -323,7 +323,8 @@ def test_missing_dependencies_warn_and_the_check_names_pytest(local_repo, tmp_pa
         assert completed.returncode == 0, completed.stderr
     base = commit_all(local_repo, 'Configured project')
     path.write_text(path.read_text(encoding='utf-8').replace(
-        f'{PYTHON} runner.py', f'{PYTHON} -S -m pytest -q'), encoding='utf-8')
+        json.dumps(f'{PYTHON} runner.py'), json.dumps(f'{PYTHON} -S -m pytest -q')), encoding='utf-8')
+    assert store.record(local_repo, 'TASK-1')['test'] == f'{PYTHON} -S -m pytest -q'
     checked = cli(local_repo, 'check', '--base', base, '--run-tests')
     output = checked.stdout + checked.stderr
     assert 'pytest is not installed' in output

@@ -17,7 +17,7 @@ def touch(root, tid='TASK-1'):
 
 
 def check(root, base, *flags):
-    return cli(root, 'check', '--base', base, '--run-tests', *flags)
+    return cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', *flags)
 
 
 @pytest.mark.parametrize('strict', [False, True])
@@ -119,13 +119,14 @@ def test_allow_does_not_disable_other_tasks_all_tests(local_repo):
     assert not any(line.startswith('TASK-1:') for line in result.stdout.splitlines())
 
 
-def test_worked_task_reuses_identical_ref_tests_without_test_file_edits(local_repo):
+def test_worked_task_runs_fresh_ref_tests_without_test_file_edits(local_repo):
     root = local_repo
     _, base = setup_tests(root, 'def test_one():\n    assert True\n')
     touch(root)
     result = check(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'ran 2 declared tests (1 cached)' in result.stdout
+    assert 'ran 2 declared tests' in result.stdout
+    assert 'cached' not in result.stdout
 
 
 @pytest.mark.parametrize('explicit', [False, True])
@@ -137,7 +138,7 @@ def test_missing_named_test_never_falls_back_to_unrelated_discovery(local_repo, 
     (root / 'tests/test_app.py').write_text('def test_one():\n    assert False\n')
     touch(root)
     notes = []
-    problems = gate.check(root, base=base, strict_tests=True, notes=notes)
+    problems = gate.check(root, base=base, strict_tests=True, notes=notes, review='refuse')
     assert problems and all('--allow tests' in p for p in problems), problems
     assert any('tests/test_tax.py' in note and 'no test files' in note for note in notes)
 
@@ -226,9 +227,9 @@ def test_additive_skip_and_config_need_review_without_running_tests(local_repo, 
         probe.write_text(probe.read_text() + '\nimport pytest\n@pytest.mark.skip(reason="later")\ndef test_extra():\n    assert True\n')
     else:
         (root / 'conftest.py').write_text('# collection policy\n')
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and '--allow TASK-1' in result.stdout
-    assert cli(root, 'check', '--base', base, '--allow', 'TASK-1').returncode == 0
+    assert cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1').returncode == 0
 
 
 def test_done_reports_missing_ref_instead_of_silently_skipping(local_repo):
@@ -262,7 +263,7 @@ def test_pytest_option_directory_does_not_widen_missing_named_test(local_repo, o
     (root / 'tests/test_app.py').write_text('def test_one():\n    assert False\n')
     touch(root)
     notes = []
-    problems = gate.check(root, base=base, strict_tests=True, notes=notes)
+    problems = gate.check(root, base=base, strict_tests=True, notes=notes, review='refuse')
     assert problems and all('--allow tests' in p for p in problems), problems
     assert any('test_missing.py' in note and 'no test files' in note for note in notes)
 

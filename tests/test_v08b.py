@@ -131,7 +131,7 @@ def test_implicit_test_tree_guards_all_files(local_repo, selection, helper):
     base = commit_all(root)
     path.write_text('new = 2\n')
     store.add_note(root, 'TASK-1', 'Working')
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and path.relative_to(root).as_posix() in result.stdout
     # A named file, a pathless pytest command, and -c do not own every file under tests/.
     assert '--allow tests' in result.stdout
@@ -150,12 +150,12 @@ def test_import_outside_test_roots_does_not_make_a_package_a_test_file(local_rep
     base = commit_all(root)
     helper.write_text('value = 2\n')
     store.add_note(root, 'TASK-1', 'Working')
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'checks/helper.py' not in result.stdout
     helper.write_text('value = 1\n')
     other.write_text('def test_other():\n    assert True\n')
-    refused = cli(root, 'check', '--base', base)
+    refused = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert refused.returncode == 1 and 'checks/test_other.py' in refused.stdout
 
 
@@ -311,7 +311,7 @@ def test_direct_python_test_infers_its_helper_folder(local_repo):
     base = commit_all(root)
     helper.write_text('value = 2\n')
     store.add_note(root, 'TASK-1', 'Working')
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'tests/helper.py' in result.stdout
     assert 'wrapper script' not in result.stdout
 
@@ -345,7 +345,7 @@ def test_nested_config_testpaths_are_relative_to_config(local_repo, config):
     base = commit_all(root)
     (root / 'component/checks/extra.txt').write_text('new\n')
     store.add_note(root, 'TASK-1', 'Working')
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'component/checks/extra.txt' in result.stdout
 
 
@@ -391,7 +391,7 @@ def test_pytest_ancestor_package_init_is_a_test_file(local_repo):
     base = commit_all(root)
     parent.write_text('value = 2\n')
     store.add_note(root, 'TASK-1', 'Working')
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'tests/__init__.py' in result.stdout
 
 
@@ -405,7 +405,7 @@ def test_default_discovery_includes_helpers_above_nested_tests(local_repo):
     base = commit_all(root)
     helper.write_text('value = 2\n')
     store.add_note(root, 'TASK-1', 'Working')
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'tests/helper.py' in result.stdout
 
 

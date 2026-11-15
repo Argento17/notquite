@@ -98,7 +98,10 @@ def test_show_next_step_uses_done(local_repo, work):
                          command=[PYTHON, '-c', 'pass'], exit_code=1, valid=False))
     output = ok(local_repo, 'show', '--task', 'TASK-1')
     step = next(line for line in output.splitlines() if line.startswith('next step:'))
-    assert 'workorder done --task TASK-1' in step
+    if work == 'failed-test':
+        assert 'fix the code or the test, then run workorder done again' in step
+    else:
+        assert 'workorder done --task TASK-1' in step
     assert 'workorder receipt implemented' not in step
     if work.startswith('any-'):
         assert 'concrete test:' in step

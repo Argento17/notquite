@@ -34,7 +34,7 @@ def test_changed_tests_select_their_owner_without_task_edits(local_repo, status)
         base = commit_all(root)
     (root / 'app.py').write_text('value = 200\n')
     probe.write_text(probe.read_text().replace('== 1', '== 200'))
-    result = cli(root, 'check', '--base', base, '--run-tests')
+    result = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests')
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'lost or changed' in result.stdout and '--allow TASK-1' in result.stdout
     assert f'its tests from {base} fail on this code' in result.stdout
@@ -51,10 +51,10 @@ def test_unowned_test_changes_need_tests_acceptance(local_repo, path):
     (root / 'pyproject.toml').write_text('[tool.pytest.ini_options]\ntestpaths = ["suite"]\n')
     base = commit_all(root)
     target.write_text(target.read_text().replace('1', '2').replace('-q', '-qq'))
-    refused = cli(root, 'check', '--base', base)
+    refused = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert refused.returncode == 1, refused.stdout
     assert path in refused.stdout and '--allow tests' in refused.stdout
-    assert cli(root, 'check', '--base', base, '--allow', 'tests').returncode == 0
+    assert cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'tests').returncode == 0
 
 
 def test_unowned_test_additions_pass_without_acceptance(local_repo):
@@ -86,7 +86,7 @@ def test_work_on_division_cannot_hide_changed_multiplication_tests(local_repo):
     store.receipt(root, 'TASK-2', 'implemented')
     store.receipt(root, 'TASK-2', 'test', [PYTHON, '-m', 'pytest', '-q', 'tests/div'])
     commit_all(root)
-    result = cli(root, 'check', '--base', base, '--run-tests', '--all-tests', '--require-task')
+    result = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--all-tests', '--require-task')
     assert result.returncode == 1, result.stdout + result.stderr
     assert '--allow TASK-1' in result.stdout and 'fail on this code' in result.stdout
 

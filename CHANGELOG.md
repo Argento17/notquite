@@ -2,6 +2,26 @@
 
 ## 0.11.0 (unreleased)
 
+- Run completion evidence fresh for done, receipt test, renew and explicit
+  check --run-tests. Only implicit hooks reuse local runs, with the run's UTC time.
+- Keep branch receipts usable after target-only merges, including parallel
+  pull requests and squash merges. Later branch code edits still need receipts.
+- Report a shared test-file edit once, naming its owners; any owner or --allow
+  tests can accept that file. Test-only changes need no --require-task receipt;
+  renewals of already finished tasks count only with --allow ID.
+- Treat pytest failure/error summaries as failures even with exit 0. Label
+  failure output once and exclude refused claims from supported summaries.
+- Recognise testing helpers and expected, golden and snapshot data. Ignore docs,
+  ignore rules and other non-code material when done requires implementation.
+- Clear next on DONE; explain refusals of already finished tasks directly.
+  Unfinished wrapper tasks get local notes. Tests skip unavailable Node.js.
+- Rebase Windows extended internal symlink paths in test copies; copy ignored
+  dependencies with a note when links are unavailable. Fix Windows test quoting.
+- Add check --base --review warn|refuse, default warn, with GitHub annotations
+  and a review summary. Test changes are flagged in the pull request by default,
+  and refused with --review refuse. Current failures and false claims still refuse.
+  Update workflows, local review advice and the examples for both modes.
+
 - Count a finished task's named test files when they exist in the current code,
   including new files in repositories that already have tests. The generated
   pull-request check accepts these additions without a label.

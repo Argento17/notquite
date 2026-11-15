@@ -2,7 +2,7 @@
 
 **Every task recorded. A clear history. Agents always go back to it.**
 
-[Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder refuses](docs/shortcuts.md)
+[Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder flags](docs/shortcuts.md)
 
 Workorder keeps each task as a record in your repository. A coding agent starts every session from the task, works within it, and leaves it up to date. The next session, or the next agent, picks up where the last one stopped.
 
@@ -75,7 +75,7 @@ work. It never commits or pushes for you. If it refuses, follow its Missing and
 Next lines; use IN_PROGRESS while fixing a task that was previously DONE.
 Ordinary tasks need a code change since the target merge base (or task creation).
 Use `--no-code-change` for verification tasks. Intentional test edits can finish
-with `--needs-review`; tell the reviewer the `workorder-allow:<ID>` label is needed.
+with `--needs-review`; they are flagged in the pull request for a reviewer.
 [Task format and command details](docs/reference.md#task-files).
 
 ## Working with coding agents
@@ -90,7 +90,7 @@ workflow when one is absent. Existing instructions stay in place.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - Work on a branch and open a pull request for review.
 - After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
-- If `done` refuses because you changed tests on purpose, rerun with `--needs-review` and tell the user the pull request needs the label `workorder-allow:<id>`.
+- If `done` refuses because you changed tests on purpose, rerun with `--needs-review` and tell the user its test changes are flagged in the pull request (with `--review refuse` it needs the label `workorder-allow:<id>`).
 - Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 ```
@@ -109,6 +109,7 @@ and default-branch pushes with `--run-tests --all-tests`. A conflicted squash
 can leave main with code that differs from the tested code, so the check on
 main can fail. Run `workorder renew --task <id>` on main and test again.
 
+Test changes are flagged in the pull request by default, and refused with `--review refuse`.
 Review includes repository tests and every task whose tests changed. A task
 owns the files or folders its test names, plus pytest configuration on that
 path. New test files and added Python import names that keep existing bindings

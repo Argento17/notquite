@@ -103,6 +103,8 @@ def relevant_tasks(root):
 
 
 @s.read_session()
+@s.test_reuse()
+@s.test_output_session()
 def run(root, event):
     if event == 'session-start':
         refresh_claim_refs(root)

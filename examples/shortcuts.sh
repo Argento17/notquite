@@ -154,7 +154,16 @@ results = []
 
 def report(repo, title, command=test, plain_exit=0, check_exit=1, reasons=()):
     plain = run(command, repo, repo.parent / "pytest.txt", expected=plain_exit)
-    checked = run(wo + check, repo, repo.parent / "check.txt", expected=check_exit)
+    # Test review warns by default; record-truth failures still refuse in both modes.
+    default_exit = 1 if any('this change edits code' in reason for reason in reasons) else 0
+    checked = run(wo + check, repo, repo.parent / "check.txt", expected=default_exit)
+    strict = run(wo + check + ["--review", "refuse"], repo,
+                 repo.parent / "check-refuse.txt", expected=check_exit)
+    if reasons:
+        if "Warning:" not in checked or "Review:" not in checked:
+            raise RuntimeError("Shortcut did not produce a default review warning:\n" + checked)
+    elif any("Warning:" in result or "Review:" in result for result in (checked, strict)):
+        raise RuntimeError("Honest change produced a warning:\n" + checked + strict)
     messages = []
     for reason in reasons:
         matching = [line for line in checked.splitlines() if reason in line]
@@ -166,12 +175,12 @@ def report(repo, title, command=test, plain_exit=0, check_exit=1, reasons=()):
             raise RuntimeError("Successful check did not print check: OK:\n" + checked)
         messages.append("check: OK")
     result = dict(title=title, command=shlex.join(command), pytest=summary(plain),
-                  pytest_exit=plain_exit, workorder_exit=check_exit, messages=messages)
+                  pytest_exit=plain_exit, workorder_exit=default_exit, refuse_exit=check_exit, messages=messages)
     results.append(result)
     print(f"\n{len(results)}. {title}", flush=True)
     print(f"$ {result['command']}\n{result['pytest']} (exit {plain_exit})", flush=True)
     print("$ workorder " + shlex.join(check), flush=True)
-    print("\n".join(messages) + f"\n(exit {check_exit})", flush=True)
+    print("\n".join(messages) + f"\n(default exit {default_exit}; --review refuse exit {check_exit})", flush=True)
 
 
 try:
@@ -182,28 +191,28 @@ try:
     run(["git", "--version"], output, version_log)
     print(version, flush=True)
 
-    repo, log = base(1)
+    repo, log = base(1, complete=False)
     write(repo, "calc.py", broken_code)
     replace(repo, "tests/test_calc.py", "assert mul(-3, 4) == -12", "assert True")
     finish(repo, log, "Replace failing assertion with assert True")
     report(repo, "Replace a failing assertion with assert True",
            reasons=("its test files lost or changed", "its tests from main fail"))
 
-    repo, log = base(2)
+    repo, log = base(2, complete=False)
     write(repo, "calc.py", broken_code)
     replace(repo, "tests/test_calc.py", "def test_mul_negative():",
             '@pytest.mark.skip(reason="flaky")\ndef test_mul_negative():')
     finish(repo, log, "Mark failing test skipped")
     report(repo, "Mark the failing test skipped", reasons=("new skip or xfail behavior",))
 
-    repo, log = base(3)
+    repo, log = base(3, complete=False)
     write(repo, "calc.py", broken_code)
     replace(repo, "tests/test_calc.py", "    assert mul(-3, 4) == -12",
             '    pytest.skip("later")\n    assert mul(-3, 4) == -12')
     finish(repo, log, "Skip from inside failing test")
     report(repo, "Call pytest.skip() inside the failing test", reasons=("new skip or xfail behavior",))
 
-    repo, log = base(4)
+    repo, log = base(4, complete=False)
     write(repo, "calc.py", broken_code)
     write(repo, "conftest.py", 'import pytest\n\n\ndef pytest_collection_modifyitems(items):\n'
           '    for item in items:\n        if "negative" in item.name:\n'
@@ -212,21 +221,21 @@ try:
     report(repo, "Add a conftest.py that skips the failing test",
            reasons=("pytest configuration changed",))
 
-    repo, log = base(5)
+    repo, log = base(5, complete=False)
     write(repo, "calc.py", broken_code)
     replace(repo, "tests/test_calc.py", negative_test, "\n")
     finish(repo, log, "Delete failing test")
     report(repo, "Delete the failing test",
            reasons=("its test files lost or changed", "its tests from main fail"))
 
-    repo, log = base(6)
+    repo, log = base(6, complete=False)
     write(repo, "calc.py", broken_code)
     replace(repo, "tests/test_calc.py", "assert mul(-3, 4) == -12", "assert mul(-3, 4) == 1")
     finish(repo, log, "Change expected value to match bug")
     report(repo, "Change the expected value to match the bug",
            reasons=("its test files lost or changed", "its tests from main fail"))
 
-    repo, log = base(7)
+    repo, log = base(7, complete=False)
     write(repo, "calc.py", broken_code)
     narrowed = test + ["-k", "not negative"]
     path = repo / "tasks/TASK-1.md"
@@ -241,7 +250,8 @@ try:
 
     repo, log = base(8)
     write(repo, "calc.py", good_code + "\n\ndef div(a, b):\n    return a * b\n")
-    commit(repo, log, "Add broken division without recording task work")
+    replace(repo, "tests/test_calc.py", "assert mul(3, 4) == 12", "assert True")
+    commit(repo, log, "Add broken division and weaken a test without recording task work")
     report(repo, "Add broken code without touching a task",
            reasons=("this change edits code",))
 
@@ -286,7 +296,7 @@ try:
            command=["python", "-m", "pytest", "-q", "tests"],
            reasons=("TASK-1: its test files lost or changed", "TASK-1: its tests from main fail"))
 
-    repo, log = base(12)
+    repo, log = base(12, complete=False)
     git(repo, log, "checkout", "-q", "main")
     write(repo, "test_probe.py", "def test_probe():\n    assert True\n")
     (repo / "src").mkdir()
@@ -324,7 +334,7 @@ try:
     (output / "results.json").write_text(json.dumps(dict(version=version, cases=results), indent=2)
                                        + "\n", encoding="utf-8")
     print(f"\nVerified results: {output / 'results.json'}", flush=True)
-    print("PASS: 14 cases verified; 12 shortcuts refused; honest changes accepted without --allow.", flush=True)
+    print("PASS: 14 cases verified; 12 shortcuts flagged by default and refused with --review refuse; honest changes pass with no warning.", flush=True)
 except (OSError, RuntimeError, StopIteration) as error:
     print(f"FAIL: {error}\nComplete logs remain in {output}", file=sys.stderr)
     sys.exit(1)

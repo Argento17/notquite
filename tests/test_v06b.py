@@ -166,11 +166,11 @@ def test_strict_tests_requires_allow_for_additions(local_repo, change):
     elif change != 'untracked':
         commit_all(root)
     extra = ['--staged'] if change == 'staged' else []
-    ok(root, 'check', '--base', base, *extra)
-    result = cli(root, 'check', '--base', base, '--strict-tests', *extra)
+    ok(root, 'check', '--review', 'refuse', '--base', base, *extra)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', *extra)
     assert result.returncode == 1 and '--allow TASK-1' in result.stdout
     assert 'test files' in result.stdout
-    ok(root, 'check', '--base', base, '--strict-tests', '--allow', 'TASK-1', *extra)
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'TASK-1', *extra)
 
 
 @pytest.mark.parametrize('config', ['conftest.py', 'tests/nested/conftest.py', 'pytest.ini', 'tox.ini', 'setup.cfg', 'pyproject.toml'])
@@ -186,15 +186,15 @@ def test_strict_pytest_config_requires_each_pytest_task(local_repo, config):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('[tool.pytest.ini_options]\naddopts = "--ignore=tests"\n' if config.endswith('.toml') else '# skip tests\n')
     commit_all(root)
-    result = cli(root, 'check', '--base', base, '--strict-tests', '--allow', 'TASK-1')
-    # A nested conftest belongs to the task that names tests/. Root configuration
-    # is on the path of every pytest command that names a path, not a plain script.
-    if config.startswith('tests/'):
-        assert result.returncode == 0, result.stdout + result.stderr
-    else:
-        assert result.returncode == 1 and '--allow TASK-2' in result.stdout
-        assert not any(line.startswith('TASK-3:') for line in result.stdout.splitlines())
-        ok(root, 'check', '--base', base, '--strict-tests', '--allow', 'TASK-1,TASK-2')
+    result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'TASK-1')
+    # One approval covers the shared configuration file; it names every owner.
+    assert result.returncode == 0, result.stdout + result.stderr
+    unapproved = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
+    assert unapproved.returncode == 1
+    assert 'TASK-1' in unapproved.stdout
+    if not config.startswith('tests/'):
+        assert 'TASK-2' in unapproved.stdout
+    assert 'TASK-3:' not in unapproved.stdout
 
 
 def test_strict_pyproject_ignores_other_sections(local_repo):
@@ -489,10 +489,10 @@ def test_strict_pytest_default_discovery_protects_added_tests(local_repo):
     store.add_note(root, "TASK-1", "Working on these tests")
     (root / 'test_new.py').write_text('def test_new(): assert True\n')
     commit_all(root)
-    result = cli(root, 'check', '--base', base, '--strict-tests')
+    result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
     # A pathless pytest command does not own a newly added test file.
     assert result.returncode == 1 and '--allow tests' in result.stdout
-    ok(root, 'check', '--base', base, '--strict-tests', '--allow', 'tests')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'tests')
 
 
 def test_claim_local_progress_is_not_stale(clones):
@@ -563,10 +563,10 @@ def test_strict_pytest_configuration_keeps_default_discovery(local_repo, config,
     store.add_note(root, "TASK-1", "Working on these tests")
     probe.write_text('import sys; sys.exit(0)\n' + probe.read_text())
     commit_all(root)
-    result = cli(root, 'check', '--base', base, '--strict-tests')
+    result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
     # python_files still marks the file as a test. A pathless command does not own it.
     assert result.returncode == 1 and '--allow tests' in result.stdout
-    ok(root, 'check', '--base', base, '--strict-tests', '--allow', 'tests')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'tests')
 
 
 def test_done_failed_test_keeps_handover_note(local_repo):
@@ -591,7 +591,7 @@ def test_strict_pytest_custom_config_and_globs(local_repo, config, option):
     store.add_note(root, "TASK-1", "Working on these tests")
     probe.write_text('import sys; sys.exit(0)\n' + probe.read_text())
     commit_all(root)
-    result = cli(root, 'check', '--base', base, '--strict-tests')
+    result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
     # A custom discovery pattern still marks the file. The pathless command does not own it.
     assert result.returncode == 1 and '--allow tests' in result.stdout
-    ok(root, 'check', '--base', base, '--strict-tests', '--allow', 'tests')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'tests')

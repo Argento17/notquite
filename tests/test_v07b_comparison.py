@@ -28,7 +28,7 @@ def checked(root, base, *flags):
             store.add_note(root, tid, 'Working on these tests')
             if '--staged' in flags:
                 git(root, 'add', f'tasks/{tid}.md')
-    return cli(root, 'check', '--base', base, '--run-tests', *flags)
+    return cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', *flags)
 
 
 @pytest.mark.parametrize('allowed', [False, True])
@@ -142,10 +142,11 @@ def test_finished_shared_test_users_need_acceptance_in_strict_mode(local_repo, s
     probe.write_text(probe.read_text() + '\ndef test_two():\n    assert True\n')
     result = checked(root, base, '--strict-tests', *(['--all-tests'] if all_tests else []))
     assert result.returncode == 1, result.stdout + result.stderr
-    assert '--allow TASK-1' in result.stdout and '--allow TASK-2' in result.stdout
+    assert 'TASK-1, TASK-2:' in result.stdout
+    assert result.stdout.count('its test files or pytest configuration changed') == 1
     assert '1 passed' not in result.stdout  # successful REF output stays quiet
     assert '2 passed' in result.stdout
-    accepted = checked(root, base, '--strict-tests', '--allow', 'TASK-1,TASK-2')
+    accepted = checked(root, base, '--strict-tests', '--allow', 'TASK-2')
     assert accepted.returncode == 0, accepted.stdout
 
 
