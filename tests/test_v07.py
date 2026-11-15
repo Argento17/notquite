@@ -220,9 +220,9 @@ def test_skipped_only_rerun_does_not_also_say_passed(local_repo, all_tests):
 
 def test_release_versions_and_reference_pin():
     from workorder import __version__
-    assert __version__ == '0.10.0'
-    assert 'version = "0.10.0"' in (PACKAGE / 'pyproject.toml').read_text()
-    assert 'workorder==0.10.0' in (PACKAGE / 'docs/reference.md').read_text()
+    assert __version__ == '0.11.0'
+    assert 'version = "0.11.0"' in (PACKAGE / 'pyproject.toml').read_text()
+    assert 'workorder==0.11.0' in (PACKAGE / 'docs/reference.md').read_text()
 
 
 def test_init_workflow_uses_running_version(local_repo, monkeypatch):

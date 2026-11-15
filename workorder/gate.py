@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from collections import Counter
 import configparser
+import difflib
 import fnmatch
 import json
 import os
@@ -783,12 +784,12 @@ def test_files(root, record, base, staged=False):
     return found
 
 
-LANGUAGE_TEST_PATTERNS = ('test_*.py', '*_test.py', '*_test.go', '*.test.*', '*.spec.*')
-TEST_DIR_NAMES = {'test', 'tests', '__tests__'}
+LANGUAGE_TEST_PATTERNS = ('test_*.py', '*_test.py', '*_test.go', '*.test.*', '*.spec.*', '*_spec.*', '*_tests.*')
+TEST_DIR_NAMES = {'test', 'tests', '__tests__', 'spec'}
 
 
 def test_directory(name):
-    return 'test' in name.lower() or 'fixture' in name.lower()
+    return name.lower() == 'spec' or 'test' in name.lower() or 'fixture' in name.lower()
 
 
 def looks_like_test(path):
@@ -816,7 +817,7 @@ def _repository_test_file(path):
     return _language_test_name(path)
 
 
-def paths_named_by_command(command):
+def paths_named_by_command(command, root):
     """Files and folders a test command names, ignoring flags and the repository root."""
     words = command if isinstance(command, list) else s.split_command(command, "--test")
     if not words:
@@ -839,6 +840,13 @@ def paths_named_by_command(command):
     found = []
     for path in named:
         path = path.replace('\\', '/').split('::', 1)[0]
+        try:
+            path = _repository_test_path(root, path)
+            target = s.local_path(root, path)
+        except (s.Refused, ValueError):
+            continue
+        if not (target.is_file() or target.is_dir()):
+            continue
         if path in {'', '.'} or path in found:
             continue
         found.append(path)
@@ -1121,6 +1129,64 @@ def strict_test_files(root, record, base, staged=False):
     return paths
 
 
+def _removed_lines_after_import_additions(old, new):
+    """Discount extended Python imports, keeping every other removed line under review."""
+    try:
+        before, after = ast.parse(old), ast.parse(new)
+    except (SyntaxError, UnicodeError, ValueError):
+        return None
+    old_lines, new_lines = old.splitlines(keepends=True), new.splitlines(keepends=True)
+    imports = (ast.Import, ast.ImportFrom)
+    # A new binding must not replace a name the old tests already use or define.
+    used = {node.id for node in ast.walk(before) if isinstance(node, ast.Name)}
+    used |= {node.name for node in ast.walk(before)
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    used |= {node.asname or node.name.split('.')[0] for node in ast.walk(before)
+             if isinstance(node, ast.alias)}
+
+    def signature(node):
+        return type(node), getattr(node, 'module', None), getattr(node, 'level', None)
+
+    def standalone(node, lines):
+        # Do not discount a semicolon followed by another statement on the same line.
+        try:
+            return len(ast.parse(b''.join(lines[node.lineno - 1:node.end_lineno])).body) == 1
+        except (SyntaxError, UnicodeError, ValueError):
+            return False
+
+    replacements, consumed = [], set()
+    for previous in before.body:
+        if not isinstance(previous, imports) or getattr(previous, 'module', None) == '__future__':
+            continue
+        aliases = [(item.name, item.asname) for item in previous.names]
+        for current in after.body:
+            if (not isinstance(current, imports) or current.lineno in consumed
+                    or signature(previous) != signature(current)):
+                continue
+            added = [(item.name, item.asname) for item in current.names]
+            remaining = iter(added)
+            if len(added) <= len(aliases) or not all(alias in remaining for alias in aliases):
+                continue
+            extra = [item for item in added if item not in aliases]
+            bindings = [alias or (name.split('.')[0] if isinstance(current, ast.Import) else name)
+                        for name, alias in extra]
+            if (not extra or any(name == '*' for name, _ in aliases + added)
+                    or len(set(bindings)) != len(bindings) or used.intersection(bindings)
+                    or not standalone(previous, old_lines) or not standalone(current, new_lines)):
+                continue
+            replacements.append((current.lineno - 1, current.end_lineno,
+                                 old_lines[previous.lineno - 1:previous.end_lineno]))
+            consumed.add(current.lineno)
+            break
+    if not replacements:
+        return None
+    for start, end, lines in sorted(replacements, reverse=True):
+        new_lines[start:end] = lines
+    return sum(end - start for tag, start, end, _, _ in
+               difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False).get_opcodes()
+               if tag in {'delete', 'replace'})
+
+
 def test_file_changes(root, base, record, staged=False, strict=False, protected=None):
     if protected is None:
         protected = strict_test_files(root, record, base, staged)
@@ -1142,6 +1208,11 @@ def test_file_changes(root, base, record, staged=False, strict=False, protected=
         if path not in repository_files(root, base):
             continue  # new files, including binary fixtures, are pure additions
         exists = path in repository_files(root) if staged else s.local_path(root, path).is_file()
+        if exists and removed != '-' and int(removed) and path.endswith('.py'):
+            remaining = _removed_lines_after_import_additions(
+                _test_bytes(root, path, base) or b'', _test_bytes(root, path, staged=staged) or b'')
+            if remaining is not None:
+                removed = str(remaining)
         if removed == "-" or int(removed) or not exists:
             lost += int(removed) if removed != "-" else 0
             binary |= removed == "-"
@@ -1485,36 +1556,21 @@ def _snapshot_write(destination, path, content, mode=None, source_root=None):
             target.chmod(mode & 0o777)
 
 
-def _test_snapshot(root, destination, staged=False):
-    """Copy current files, with an independent Git directory and no checkout of the user's tree."""
-    cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
-                            capture_output=True, encoding='utf-8', errors='replace', timeout=30,
-                            env=s.copy_environment())
-    if cloned.returncode:
-        raise s.Refused('could not create a temporary test copy: ' + cloned.stderr.strip())
+def _copy_submodule_files(root, destination, git_root):
+    destination.mkdir(parents=True, exist_ok=True)
+    if not (root / '.git').exists():
+        return  # an uninitialized submodule has no working files to copy
+    _copy_selected_files(root, destination, isolated=True, git_root=git_root)
+    tracked = set(s._git_run(root, 'ls-files', '-z', isolated=True).stdout.split('\0')) - {''}
+    tracked |= set(s._git_run(root, 'ls-tree', '-r', '--name-only', '-z', 'HEAD',
+                              isolated=True).stdout.split('\0')) - {''}
+    _link_ignored_dependencies(root, destination, tracked, isolated=True, git_root=git_root)
 
-    def ignored(directory, names):
-        return {name for name in names if name in {'.git', '__pycache__', '.pytest_cache'}}
 
-    shutil.copytree(root, destination, dirs_exist_ok=True, symlinks=True, ignore=ignored)
-    for directory, folders, files in os.walk(root, followlinks=False):
-        folders[:] = [name for name in folders if name not in {'.git', '__pycache__', '.pytest_cache'}]
-        for name in folders + files:
-            source = Path(directory) / name
-            if not source.is_symlink():
-                continue
-            target = source.resolve()
-            if target.is_relative_to(root):
-                copied = destination / source.relative_to(root)
-                copied.unlink()
-                copied.symlink_to(os.path.relpath(destination / target.relative_to(root), copied.parent),
-                                  target_is_directory=source.is_dir())
-    s._git_run(destination, 'read-tree', 'HEAD', isolated=True)
+def _copy_selected_files(root, destination, staged=False, *, isolated=False, git_root=None):
+    """Copy the index or working files Git knows, without walking ignored folders."""
+    git_root = destination if git_root is None else git_root
     if staged:
-        indexed = repository_files(root)
-        untracked = set(s.git(root, 'ls-files', '--others', '--exclude-standard', '-z').stdout.split('\0')) - {''}
-        for path in (repository_files(root, 'HEAD') - indexed) | untracked:
-            _snapshot_write(destination, path, None)
         listing = s.git(root, 'ls-files', '--stage', '-z').stdout
         for entry in listing.split('\0'):
             if not entry:
@@ -1524,8 +1580,76 @@ def _test_snapshot(root, destination, staged=False):
             if stage != '0':
                 raise s.Refused(f'unmerged staged test copy: {path}')
             if mode == '160000':
-                continue  # submodules were copied with their current working files
-            _snapshot_write(destination, path, s.read_bytes(root, path, True), int(mode, 8), root)
+                _copy_submodule_files(root / path, destination / path, git_root)
+            else:
+                _snapshot_write(destination, path, s.read_bytes(root, path, True), int(mode, 8), root)
+        return
+    args = ('ls-files', '-z', '--cached', '--others', '--exclude-standard')
+    paths = (s._git_run(root, *args, isolated=True) if isolated else s.git(root, *args)).stdout
+    for path in sorted(set(paths.split('\0')) - {''}):
+        source, target = root / path, destination / path
+        if source.is_symlink():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            link = Path(os.readlink(source))
+            if link.is_absolute() and link.is_relative_to(root):
+                link = os.path.relpath(destination / link.relative_to(root), target.parent)
+            target.symlink_to(link, target_is_directory=source.is_dir())
+        elif source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        elif source.is_dir():
+            # Git lists a submodule as one path; its working files still come from Git.
+            _copy_submodule_files(source, target, git_root)
+
+
+def _link_ignored_dependencies(root, destination, protected, *, isolated=False, git_root=None):
+    """Link ignored paths, collapsing whole folders and preserving tracked code on either side."""
+    git_root = destination if git_root is None else git_root
+    args = ('ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z')
+    ignored = (s._git_run(root, *args, isolated=True) if isolated else s.git(root, *args)).stdout
+    parents = {parent.as_posix() for path in protected for parent in Path(path).parents}
+    linked = []
+
+    def link(path):
+        if (path in protected or any(part in {'.git', '__pycache__', '.pytest_cache'}
+                                    for part in Path(path).parts)):
+            return
+        source, target = root / path, destination / path
+        if path in parents:
+            if source.is_dir() and not source.is_symlink():
+                for child in source.iterdir():
+                    link(child.relative_to(root).as_posix())
+            return
+        if target.exists() or target.is_symlink():
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(source, target_is_directory=source.is_dir())
+        linked.append(target.relative_to(git_root).as_posix())
+
+    for path in ignored.split('\0'):
+        if path:
+            link(path.rstrip('/'))
+    if linked:
+        # A directory-only ignore rule does not match a symlink. Keep these shared
+        # dependencies out of the copy's code fingerprint just as in the source.
+        exclude = git_root / '.git/info/exclude'
+        with exclude.open('a', encoding='utf-8') as stream:
+            for path in linked:
+                stream.write('\n/' + re.sub(r'([\\*?\[\] ])', r'\\\1', path) + '\n')
+
+
+def _test_snapshot(root, destination, staged=False, protected=()):
+    """Copy selected current files, with an independent Git directory and shared dependencies."""
+    cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
+                            capture_output=True, encoding='utf-8', errors='replace', timeout=30,
+                            env=s.copy_environment())
+    if cloned.returncode:
+        raise s.Refused('could not create a temporary test copy: ' + cloned.stderr.strip())
+
+    _copy_selected_files(root, destination, staged)
+    s._git_run(destination, 'read-tree', 'HEAD', isolated=True)
+    _link_ignored_dependencies(root, destination,
+                               set(protected) | repository_files(root) | repository_files(root, 'HEAD'))
 
 
 def _snapshot_command(command, root, destination):
@@ -1624,27 +1748,15 @@ def _ref_test_snapshot(root, destination, commit):
     if cloned.returncode:
         raise s.Refused('could not create a temporary REF copy: ' + cloned.stderr.strip())
     s._git_run(destination, 'checkout', '--quiet', '--detach', commit, isolated=True)
-    # Reuse ignored local dependencies, but never overlay REF's tracked code with current code.
     tracked = repository_files(root, commit)
-    ignored = s.git(root, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z').stdout.split('\0')
-    for path in ignored:
-        if not path or path in tracked or any(part in {'__pycache__', '.pytest_cache'} for part in path.split('/')):
-            continue
-        source, target = root / path, s.local_path(destination, path)
-        if source.is_dir() and not source.is_symlink():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target, follow_symlinks=False)
-    for directory, folders, files in os.walk(destination, followlinks=False):
-        folders[:] = [name for name in folders if name != '.git']
-        for name in folders + files:
-            path = Path(directory) / name
-            if not path.is_symlink():
-                continue
+    for relative in tracked:
+        path = destination / relative
+        if path.is_symlink():
             link = Path(os.readlink(path))
             if link.is_absolute() and link.is_relative_to(root):
                 path.unlink()
                 path.symlink_to(os.path.relpath(destination / link.relative_to(root), path.parent))
+    _link_ignored_dependencies(root, destination, tracked)
 
 
 def test_change_problems(root, base, record, timeout=None, *, staged=False, strict=False, allow=False,
@@ -1725,7 +1837,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
     try:
         with tempfile.TemporaryDirectory(prefix='workorder-tests-') as temporary:
             snapshot = Path(temporary) / 'code'
-            _test_snapshot(root, snapshot, staged)
+            _test_snapshot(root, snapshot, staged, protected=repository_files(root, base))
             current_root = Path(temporary) / 'current'
             shutil.copytree(snapshot, current_root, symlinks=True)
             current_command = _snapshot_command(command, root, current_root)
@@ -2040,7 +2152,8 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             if declared_test(record) is None and declared_test(before) is None:
                 continue
             mapped = {path for path in strict_test_files(root, record, base, staged)
-                      if path in repository_files(root, base)
+                      if (path in repository_files(root, base)
+                          or (path in repository_files(root) if staged else s.local_path(root, path).is_file()))
                       and posixpath.basename(path) not in PYTEST_CONFIG_NAMES | {'conftest.py'}}
             if mapped or not any(_repository_test_file(path) for path in repository_files(root, base)):
                 continue

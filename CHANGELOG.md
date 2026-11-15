@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.0 (unreleased)
+
+- Count a finished task's named test files when they exist in the current code,
+  including new files in repositories that already have tests. The generated
+  pull-request check accepts these additions without a label.
+- Accept added test functions and added names in Python imports when existing
+  bindings stay intact. Removed or changed assertions and test bodies still
+  need review; strict checks still require review for additions.
+- Build temporary test copies from Git's file lists. Working copies include
+  untracked files that are not ignored; staged copies use the index. Link
+  ignored dependencies into current and REF copies instead of copying them.
+- Write inferred test_paths only for files and folders that exist. Wrapper
+  commands such as make test and npm test keep their request for test_paths.
+  Recognise spec/ folders and files named *_spec.* or *_tests.*.
+- Update package versions and install pins to 0.11.0.
+
 ## 0.10.0 (unreleased)
 
 - Isolate temporary Git copies and their test commands from the hook's Git

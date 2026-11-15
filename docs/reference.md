@@ -204,6 +204,8 @@ may be used; any other field (except `x-` fields) is refused, so typos are caugh
   current definitions are read, so deleting a file or removing a path from
   the task cannot hide a change. An explicit empty list selects no test files.
   Changing `test_paths` itself needs `--allow ID` under `--base`.
+  `new --test` writes inferred paths only when they exist at task creation.
+  A test named in the command can be added later without editing the task.
 - `merge_ref`: a full branch ref, such as `refs/heads/release` or
   `refs/remotes/origin/release`. Overrides the computed merge target. Short
   names and tag refs are refused. An absent target does not prove a merge.
@@ -388,8 +390,8 @@ and their dependents. Test review covers repository test files and every task
 whose selected tests changed, even when its task file and receipts are
 untouched. Repository test files include every file under a folder whose name
 contains `test` or `fixture`, such as `testsupport/`, `fixtures/`, `testdata/`
-and `test_data/` (including JSON, YAML, CSV and text data), and files named `test_*.py`, `*_test.py`, `*_test.go`, `*.test.*`
-or `*.spec.*`, plus `conftest.py` and pytest configuration. A test file at the
+and `test_data/`, or named `spec/` (including JSON, YAML, CSV and text data), and files named `test_*.py`, `*_test.py`, `*_test.go`, `*.test.*`,
+`*.spec.*`, `*_spec.*` or `*_tests.*`, plus `conftest.py` and pytest configuration. A test file at the
 repository root does not make the root a test folder, so production code is
 not a test file. Importing a package from a test does not make that package a
 test file. Both REF and current definitions count. Metadata paths under
@@ -397,7 +399,7 @@ test file. Both REF and current definitions count. Metadata paths under
 
 | Change or result | Default | Reviewer acceptance |
 |---|---|---|
-| Only added test lines or new test files, when the base tests passed | Passes | `--strict-tests` requires acceptance for additions too |
+| Only added test lines, new test files, or added Python import names preserving existing bindings, when the base tests passed | Passes | `--strict-tests` requires acceptance for additions too |
 | Any change to a test whose base tests already failed, including an added line | Needs review | `--allow ID`; `--allow tests` does not accept this |
 | Removed or changed test lines, including a rename | Needs review | `--allow ID` for that task; `--allow tests` accepts every changed test line |
 | REF tests fail on current code, including a finished task whose base tests already failed | Needs review | `--allow ID` accepts an intended behavior change or test rename |
@@ -406,6 +408,12 @@ test file. Both REF and current definitions count. Metadata paths under
 | Pytest `-k` or `--deselect` changes | Needs review | `--allow ID` only |
 | Current declared tests fail for a DONE/CLOSED task | Refused | No label excuses the failure |
 | Current tests fail or are missing for IN_PROGRESS/BLOCKED work | A note; no finished claim is made | Test edits and REF regressions still need review |
+
+Adding `div` to `from calc import mul` is an addition when the existing import
+and bindings stay intact. This also covers parenthesised imports and aliases.
+The exception applies to top-level Python imports; it does not accept changed
+modules, removed names, rebinding a name used by the old tests, or changed test
+bodies and assertions. New skip markers and configuration still need review.
 
 With `--run-tests`, tasks this change works on and all tasks whose selected tests
 changed run their current commands and their REF tests on current code. A task
@@ -416,6 +424,15 @@ test files are absent, and deleted files are restored. The checkout is never
 overlaid. If the task or its selected tests did not exist at REF, a note explains
 why no REF run is possible. Unowned test edits receive file review without an
 invented task command.
+
+Temporary copies use tracked files, plus untracked files that are not ignored
+for a working-tree check. A staged check uses index contents; a REF copy uses
+that revision's tracked files. Ignored dependencies such as `node_modules/`
+and `.venv/` are shared through links, without copying their contents. Tracked
+files take precedence over those links. Python bytecode and pytest caches are
+not linked. Tests can read the shared dependencies; writes to a linked
+dependency also affect the local dependency. Source and test files stay in
+independent copies.
 
 When REF tests fail on current code, they also run on REF code before this change
 is blamed. An existing REF-code failure is a note. A failure or timeout on current
@@ -438,7 +455,9 @@ A task owns the files its test command names, the folders it names, and
 and pytest configuration on the path to those files. A named file does not
 include its siblings, and a command that names no path does not own every
 folder called `tests`. `workorder new --test` writes `test_paths` when the
-command names files or folders. Helpers and data count only when they are
+command names files or folders that exist in the repository. A word such as
+`test` in `make test` or `npm test` does not supply a path unless it exists.
+Helpers and data count only when they are
 inside a named folder or named themselves. A test file at the repository root
 does not pull in the rest of the repository, and importing a package does not
 make that package a test file. A missing named test never widens to unrelated
@@ -448,9 +467,11 @@ test line in the change. It does not accept a pytest `-k` or `--deselect`
 change, a base test that fails on the new code, or any change to a test that
 already failed at the base.
 
-A finished task whose declared test maps to no test files at the base, when
-the repository has test files there, is refused:
+A finished task whose declared test maps to no test files in either the base
+or current code, when the repository has test files at the base, is refused:
 `TASK-1: no test files are known for its test; set test_paths`.
+Files named by `test_paths` or the command count when added on the branch.
+New test files are additions and need no label under the default rules.
 
 Commands through make, npm, npx, yarn, pnpm, go, cargo, tox, nox, sh or bash, and
 non-test scripts, require explicit `test_paths` under `--base`. The
@@ -587,7 +608,7 @@ jobs:
         with: {python-version: '3.12'}
       - name: Install project test dependencies
         run: python -m pip install -e '.[test]'
-      - run: python -m pip install workorder==0.10.0
+      - run: python -m pip install workorder==0.11.0
       - name: Check tasks after merge
         if: github.event_name == 'push'
         run: workorder check --run-tests --all-tests
@@ -858,7 +879,7 @@ test dependencies first, choosing and reporting the first match:
 It then installs Workorder at exactly the running version. For a Git installation,
 PEP 610 direct_url.json supplies the URL and resolved commit:
 `python -m pip install 'git+<url>@<commit>'`. A recorded subdirectory is retained.
-Other installations use `workorder==0.10.0` for this release.
+Other installations use `workorder==0.11.0` for this release.
 It runs `workorder check --base "origin/<base>" --run-tests --all-tests --require-task`,
 passing task ids and the special values `tests` and `no-task` from
 `workorder-allow:` labels to `--allow`. Pushes to the default branch run

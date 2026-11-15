@@ -126,7 +126,8 @@ def hooked(root, *args):
     return result
 
 
-def test_task_first_flow_passes_the_hook_and_the_generated_command(tmp_path):
+@pytest.mark.parametrize('existing_tests', [False, True])
+def test_task_first_flow_passes_the_hook_and_the_generated_command(tmp_path, existing_tests):
     remote = tmp_path / 'origin.git'
     root = tmp_path / 'repo'
     git(tmp_path, 'init', '--bare', '-q', '--initial-branch=main', str(remote))
@@ -135,6 +136,9 @@ def test_task_first_flow_passes_the_hook_and_the_generated_command(tmp_path):
     git(root, 'config', 'user.email', 'dev@example.invalid')
     (root / '.gitignore').write_text('__pycache__/\n.pytest_cache/\n')
     (root / 'app.py').write_text('value = 1\n')
+    if existing_tests:
+        (root / 'tests').mkdir()
+        (root / 'tests/test_mul.py').write_text('def test_mul():\n    assert 3 * 4 == 12\n')
     path = task(root, ships='none', test=f'{PYTHON} -m pytest -q tests/test_app.py')
     path.write_text(path.read_text() + '\n## Scope\n\nAdd shape.\n\n## Acceptance\n\n- shape strips spaces.\n')
     assert bootstrap.initialize(root) == 0
@@ -142,7 +146,7 @@ def test_task_first_flow_passes_the_hook_and_the_generated_command(tmp_path):
     hooked(root, 'commit', '-qm', 'Define the task before its test exists')
     hooked(root, 'push', '-q', 'origin', 'HEAD:main')
     hooked(root, 'checkout', '-qb', 'feature')
-    (root / 'tests').mkdir()
+    (root / 'tests').mkdir(exist_ok=True)
     (root / 'tests/test_app.py').write_text(
         'import app\n\ndef test_shape():\n    assert app.shape(" ab ") == "ab"\n')
     noted = cli(root, 'note', '--task', 'TASK-1', '--next', 'Implement shape',

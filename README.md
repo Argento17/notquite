@@ -111,7 +111,8 @@ main can fail. Run `workorder renew --task <id>` on main and test again.
 
 Review includes repository tests and every task whose tests changed. A task
 owns the files or folders its test names, plus pytest configuration on that
-path. `workorder-allow:<ID>` accepts that task's files. `workorder-allow:tests`
+path. New test files and added Python import names that keep existing bindings
+pass without a label. `workorder-allow:<ID>` accepts that task's files. `workorder-allow:tests`
 accepts every changed test line. `workorder-allow:no-task` accepts only the
 code-to-task requirement. Current failures for completed tasks still refuse.
 [Review rules and the full workflow](docs/reference.md#checks-against-a-base).

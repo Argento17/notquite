@@ -158,6 +158,8 @@ def test_allow_tests_accepts_lines_owned_by_every_named_folder(local_repo):
 
 
 def test_new_records_test_paths_when_the_command_names_them(local_repo):
+    (local_repo / 'tests').mkdir()
+    (local_repo / 'tests/test_power.py').write_text('def test_power():\n    assert 2 ** 3 == 8\n')
     ok(local_repo, 'new', '--title', 'Add power', '--owner', 'dev', '--local',
        '--test', f'{PYTHON} -m pytest -q tests/test_power.py')
     record = store.record(local_repo, 'TASK-1')

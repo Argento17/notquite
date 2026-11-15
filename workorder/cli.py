@@ -266,7 +266,7 @@ def main(argv=None):
                                options.needs_review, options.no_code_change)
         elif options.action == "new":
             shared = s.has_origin(root) and not options.local
-            named = gate.paths_named_by_command(options.test) if options.test else None
+            named = gate.paths_named_by_command(options.test, root) if options.test else None
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
                         options.template, options.test, options.local, test_paths=named)
             where = ("reserved on origin" if shared
