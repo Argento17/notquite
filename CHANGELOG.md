@@ -1,5 +1,242 @@
 # Changelog
 
+## 0.12.0 (15 Nov 2026)
+
+- Refuse test review findings by default; `--review warn` remains optional.
+  `done --needs-review` records evidence and leaves IN_PROGRESS with the
+  reviewer-label note. The reviewed pull request can carry DONE and its label;
+  the check on main after merge needs no label.
+- Give one definition-acceptance message for new tasks whose receipts cover
+  the code; document landing the task first or reviewing both in one pull request.
+- Record implementation paths, modes, blob IDs and deletions so matching squash
+  merges survive deleted branches and fresh clones, including parallel work.
+  Continue reading old receipts with their existing matching rules.
+- Scope wrapper requirements to changed tasks and their tests. Ask for explicit
+  `new --test-paths` for wrappers. Refuse changed task test commands in done,
+  pre-commit and Stop, including checks without a remote.
+- Print warnings before `check: OK`, and show each test output once.
+- Look up reusable current and REF results before making test copies. Keep
+  explicit runs fresh and staged content separate from unstaged changes.
+- Run each distinct declared command and timeout once on current code, including
+  unchanged REF comparisons. Document how runtime grows with finished tasks.
+- Normalize CRLF when comparing Python import additions. Apply Git checkout
+  conversion to staged test copies so Windows hooks can reuse working results.
+- Update version, workflow, agent instructions, reference and shortcut examples
+  to 0.12.0. Keep README within 130 lines.
+
+## 0.11.0 (not released on its own; included in 0.12.0)
+
+- Run completion evidence fresh for done, receipt test, renew and explicit
+  check --run-tests. Only implicit hooks reuse local runs, with the run's UTC time.
+- Keep branch receipts usable after target-only merges, including parallel
+  pull requests and squash merges. Later branch code edits still need receipts.
+- Report a shared test-file edit once, naming its owners; any owner or --allow
+  tests can accept that file. Test-only changes need no --require-task receipt;
+  renewals of already finished tasks count only with --allow ID.
+- Treat pytest failure/error summaries as failures even with exit 0. Label
+  failure output once and exclude refused claims from supported summaries.
+- Recognise testing helpers and expected, golden and snapshot data. Ignore docs,
+  ignore rules and other non-code material when done requires implementation.
+- Clear next on DONE; explain refusals of already finished tasks directly.
+  Unfinished wrapper tasks get local notes. Tests skip unavailable Node.js.
+- Rebase Windows extended internal symlink paths in test copies; copy ignored
+  dependencies with a note when links are unavailable. Fix Windows test quoting.
+- Add check --base --review warn|refuse, default warn, with GitHub annotations
+  and a review summary. Test changes are flagged in the pull request by default,
+  and refused with --review refuse. Current failures and false claims still refuse.
+  Update workflows, local review advice and the examples for both modes.
+
+- Count a finished task's named test files when they exist in the current code,
+  including new files in repositories that already have tests. The generated
+  pull-request check accepts these additions without a label.
+- Accept added test functions and added names in Python imports when existing
+  bindings stay intact. Removed or changed assertions and test bodies still
+  need review; strict checks still require review for additions.
+- Build temporary test copies from Git's file lists. Working copies include
+  untracked files that are not ignored; staged copies use the index. Link
+  ignored dependencies into current and REF copies instead of copying them.
+- Write inferred test_paths only for files and folders that exist. Wrapper
+  commands such as make test and npm test keep their request for test_paths.
+  Recognise spec/ folders and files named *_spec.* or *_tests.*.
+- Update package versions and install pins to 0.11.0.
+
+## 0.10.0 (not released on its own; included in 0.12.0)
+
+- Isolate temporary Git copies and their test commands from the hook's Git
+  environment, preserving commit indexes for -a, paths, amend and linked worktrees.
+- Compare tests and requirements with the target merge base; keep its name in
+  diagnostics. New work only on the target no longer looks like removed work.
+- Add done --needs-review for intentional test changes pending a reviewer label.
+  Local hooks report these as notes and still refuse unsupported DONE claims.
+- Require a code change for done; --no-code-change permits verification tasks.
+  --require-task counts tasks from the merge base, or new tasks accepted by --allow ID.
+- Infer helpers and data under folders containing test or fixture in their names.
+- Preserve and chain an existing hook with init --force. Keep successful hook
+  test output quiet, count cached results, and warn when no test dependencies
+  were detected instead of stopping the generated workflow.
+- Isolate test environments from ambient CI and GITHUB_ACTIONS settings.
+
+- When a task's test files changed and its tests already fail at the base, any
+  change to those files needs --allow ID. A finished task whose base tests
+  failed must have those tests pass on the new code unless --allow ID.
+- A task owns only the files or folders its test command or test_paths names,
+  plus conftest.py and pytest configuration on the path to them. `new --test`
+  records test_paths when the command names files or folders. --allow tests
+  accepts every changed test line.
+- Recognise test files named *.test.*, *.spec.* or *_test.go, and files under
+  test/, tests/ or __tests__/. A finished task whose test maps to no test
+  files, in a repository that has test files, is refused until test_paths is set.
+- Count cached test results in the run summary, and say (cached) when they were
+  reused. Do not suggest a reviewer label for a failing current test.
+- Cover tasks/, .workorder/, tests and .github/ in the CODEOWNERS example.
+  Session start re-reads claim and release tags, so a force-release from
+  another clone is no longer shown as held.
+- Update package versions and install pins to 0.10.0.
+
+## 0.9.0 (not released on its own; included in 0.12.0)
+
+- Review all repository test roots and every task whose tests changed, including
+  untouched task records. Existing test edits need the owning task's acceptance,
+  or --allow tests for unowned tests. Pure additions still pass by default.
+- Replay changed tasks' REF tests and check failures on REF code before blaming
+  the change. Require explicit test_paths for wrappers and diagnose repository
+  module removals separately from missing external dependencies.
+- Keep failing or missing current tests for unfinished tasks as progress notes.
+  Allow reopening a finished task with a new counting failed receipt in the same
+  commit; unsupported DONE claims still refuse.
+- Require a new counting receipt on a task with a concrete command for code
+  changes under --require-task. --allow no-task accepts only this requirement.
+- Cache local test results by code, command and timeout. Explicit receipt test
+  and renew runs stay fresh; CI runs bypass the persistent cache. Keep successful
+  comparison output quiet and show diagnostic output when needed.
+- Make Stop refusals exit 2 on stderr and keep the stop-loop guard at exit 0.
+  Explain ships:none claims as supported with nothing to ship, and distinguish
+  implemented code from current code in successful results.
+- Generate pull request and default-branch push workflows, using local refs to
+  choose the push branch. Accept tests and no-task reviewer labels. Push checks
+  run --run-tests --all-tests without a base.
+- Start agent instructions with fetch; pull --rebase only on main, and merge or
+  rebase main into a feature branch as needed before renewing changed evidence.
+- Shorten the README, preserve its introduction, and move detailed rules to the
+  reference. Add two shortcut cases covering unrelated receipts and task work.
+- Update package versions and install pins to 0.9.0.
+- Infer test files from folders named tests or test, folders a command names,
+  test_*.py, *_test.py, conftest.py and pytest configuration. A root-level test
+  file does not make production code a test file, and an import does not make
+  a package a test file.
+- Document task-first development: define the task, commit a failing test with
+  a handover note, implement, run done, then let the generated check and the
+  check on the default branch pass without skipping the hook.
+
+## 0.8.0 (not released on its own; included in 0.12.0)
+
+- Refuse test-change problems in done, pre-commit and Stop when the target is
+  available locally; keep status and give workorder-allow:<ID> label advice.
+- Check failing REF tests on REF code before attributing a failure, and reuse
+  that run. Name missing test commands or modules as environment problems.
+- Cover whole pytest collection folders and imported test helpers by default.
+  Warn about wrapper scripts and protect the script itself.
+- Require reviewer acceptance for reopening finished tasks or cancelling work;
+  Stop refuses a held task newly cancelled here. Stop refusals exit 1.
+- Write a failing dependency placeholder when init cannot infer dependencies;
+  add init --update-workflow with a diff and a read-only --check preview.
+- Group repeated check notes; --verbose prints each one. Explain why a passing
+  done run does not count and how to ignore generated files.
+- Add docs/guarantees.md and tell agents to report done refusals and warnings.
+
+- Use one test-change rule for tasks whose file or receipts change: additions
+  need no label; removed or changed lines need reviewer acceptance. Accept
+  intended REF-test failures and reduced pytest outcomes with --allow ID,
+  while current tests and other tasks' --all-tests checks stay active.
+- Keep missing named tests from widening to repository-wide discovery, and
+  explain every skipped REF comparison. Handle Windows snapshot paths and
+  preserve task line endings and byte order marks during updates.
+- Recognise task files and receipts imported unchanged from a target or merge
+  parent as existing claims. Give branch renewal advice for stale own claims.
+- Require a new implemented or test receipt for code changes under
+  --require-task; exclude documentation and non-code paths.
+- Require acceptance for Scope and Acceptance additions to finished tasks.
+- Limit Stop checks to held or locally changed task files. SessionStart shows
+  held tasks and points to ready without scanning all readiness.
+- Report undecodable task files individually; only suggest pulling finished
+  upstream work when the local status differs.
+- Add the portable shortcut catalogue and its actual 0.8 output.
+- Update package versions and install pins to 0.8.0.
+
+## 0.7.0 (not released on its own; included in 0.12.0)
+
+- Compare changed tests with their base versions on current code in a temporary
+  copy. Passing additions and edits preserving those tests need no label;
+  refuse old-test failures, fewer pytest passes and more skipped/xfailed/deselected
+  tests. New skips, selection flags and pytest configuration need acceptance.
+  Strict mode still requires acceptance for all test edits.
+- Keep test-change acceptance scoped to current work: untouched tasks already
+  DONE/CLOSED at the base need no label for shared test changes, while runtime
+  comparisons and all-task regression runs still cover them.
+- Generate workflows that install detected project test dependencies, pin the
+  running Workorder version (or PEP 610 Git commit), then check with --all-tests
+  and --require-task and reviewer allow labels. Report the dependency choice.
+- Refuse done until Scope and Acceptance are filled in, keep existing status
+  quotes, name merge debt on success, and warn about missing clone hooks and
+  test weakening against locally available origin/main before writing DONE.
+- Add init --claude project hooks: session context for locally held tasks and a
+  Stop refusal for unsupported finished claims, with stop-loop prevention.
+- Use Claimed/Evidence consistently and say the declared test passed on this
+  code. Warn once when the pre-commit hook cannot find Workorder.
+- Add test_timeout and --timeout to test-running commands; record timed-out
+  tests as failed runs with exit 124.
+- Add note --next with an optional Progress note. Teach the agent block to use
+  it, work on a branch, open a pull request and check on main after merging.
+
+- When `done` refuses, say DONE was not written and name the unchanged status
+  before the Missing lines. Keep dated `--note` text on early refusals too,
+  including uncommitted code and missing test commands.
+- Ask for a push after `done` only when the repository has an origin remote.
+- Refuse template-only Acceptance as not filled in; show the edit in the
+  quick start. Use `done` in `show` next steps for implementation, tests and
+  remaining Acceptance work.
+- Update the agent block to pull from origin with an explicit branch and
+  rebase choice, only when origin exists. Explain that every clone runs the
+  idempotent `init`, and remind clones with committed instructions but no hook.
+- Keep `show` and `check` evidence verdicts consistent for stale claims, with
+  the same explanation and renewal advice. Describe unclaimed tasks as
+  unfinished even when their test evidence is in place.
+- Name a single replayed implementation commit as rebase instead of squash.
+- Report skipped-only reruns without also saying the test passed; preserve
+  ordinary and strict exit codes.
+- Update package versions and install pins to 0.7.0. New workflows written
+  by `init` pin the running version.
+
+## 0.6.0 (not released on its own; included in 0.12.0)
+
+- On Windows, receipt writers for one task no longer fail with "permission denied"
+  while another writer releases the task's lock.
+- `init --check` accepts a hook without an executable bit on Windows, where Git
+  runs it anyway.
+- Add idempotent `init`, its read-only `--check`, and `--force` for a different hook.
+- Add `done --task ID [--note TEXT]`: record changed implementation, run the declared test, show Acceptance for confirmation, and set DONE only when supported. Preserve status on refusal; never commit or push.
+- Add opt-in `check --strict-tests`: require acceptance for additions and pytest configuration changes as well as removed or changed test lines. Refuse pytest reruns reporting no passed tests; ordinary reruns note skipped-only output.
+- Add opt-in `--all-tests` for current-code regression runs of every DONE/CLOSED task, once per command, without changing history; add `--require-task` for code changes without task records.
+- Say when supported claims without contracts rest on declared tests alone.
+- Refuse claims from stale clones when upstream has task text or receipts missing locally. Refresh `show` with a short timeout and warn before work starts; start the agent block with `git pull`.
+- Headline unclaimed work as unfinished, explain uncounted timeline tests, and distinguish pre-merge advice from a changed merge. Make Result wording name a stale claim without contradicting computed evidence.
+- Accept `check --task ID`, resolve repository roots from subdirectories, and use `WORKORDER_AGENT` before Git user.name for claims and receipts.
+- Let teammates without Workorder commit with a hook warning; keep empty staged checks silent.
+- Update the agent block, quick start and strict CI example. Explain who can apply allow labels and recommend CODEOWNERS plus required review.
+
+- Keep each task's protected paths separate when several tasks land in one
+  squash. Exclude other tasks' recorded implementation commits and commits
+  covered by the task's previous implemented receipt. Keep protecting paths
+  the current task also changed.
+- Correct `renew` help: it records implementation and tests; merges are computed.
+- List the checks performed by `check --base`, with `--allow` and `--run-tests`.
+- Explain in the task template that status is your claim and `show` and `check`
+  compute what the receipts support.
+- Give `show` a next step when only unclaimed Acceptance work remains, and
+  document which empty planning fields it omits.
+- Reset the unsupported status in the README refusal demo before committing.
+- Update package versions and install pins to 0.6.0.
+
 ## 0.5.0 (14 Nov 2026)
 
 - Check claims after a matched landing against its implementation paths for

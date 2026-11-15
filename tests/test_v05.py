@@ -82,7 +82,7 @@ def test_feature_checkout_recognises_target_merge(local_repo, method, checkout):
         git(root, 'checkout', '-q', '--detach', 'feature')
     ok(root, 'check')
     ok(root, 'check', 'TASK-1')
-    assert 'computed CLOSED' in ok(root, 'show', '--task', 'TASK-1')
+    assert 'Evidence: CLOSED' in ok(root, 'show', '--task', 'TASK-1')
     assert 'TASK-1' not in ok(root, 'ready')
 
 
@@ -143,7 +143,7 @@ def test_check_reports_scope(local_repo, mode, count, claimed):
     git(root, 'add', 'tasks')
     args = [*mode, base] if mode == ['--base'] else mode
     output = ok(root, 'check', *args)
-    assert output.splitlines()[-1] == f'checked {count} tasks ({claimed} claimed DONE or CLOSED)'
+    assert output.splitlines()[-1] == f'checked {count} task{"" if count == 1 else "s"} ({claimed} claimed DONE or CLOSED)'
     assert 'ran ' not in output
 
 
@@ -170,7 +170,7 @@ def test_check_reports_actual_tests_run(local_repo, kind, expected):
         commit_all(root)
     result = cli(root, 'check', '--base', base, '--run-tests')
     assert result.returncode == (0 if kind in {'pass', 'empty'} else 1)
-    assert f'; ran {expected} declared tests' in result.stdout
+    assert f'; ran {expected} declared test{"" if expected == 1 else "s"}' in result.stdout
     assert ('no declared test ran in this check' in result.stdout) == (expected == 0)
 
 
@@ -186,6 +186,7 @@ def test_base_guards_test_files(local_repo, explicit, change):
     if explicit:
         path.write_text(path.read_text().replace('test: "any"', 'test: "any"\ntest_paths: ["tests"]'))
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     if change == 'edit':
         probe.write_text('assert True\nassert 2 == 2\n')
     elif change == 'delete':
@@ -195,15 +196,15 @@ def test_base_guards_test_files(local_repo, explicit, change):
     else:
         probe.write_text(probe.read_text() + 'assert 3 == 3\n')
     commit_all(root)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == (0 if change == 'add' else 1), result.stdout + result.stderr
     if change != 'add':
         lost = 1 if change == 'edit' else 2
         assert f'TASK-1: its test files lost or changed {lost} lines since {base}' in result.stdout
         assert 'tests/test example.py' in result.stdout
         assert 'a reviewer accepts it with --allow TASK-1' in result.stdout
-        ok(root, 'check', '--base', base, '--allow', 'TASK-1')
-    assert 'checked 1 tasks' in result.stdout
+        ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
+    assert 'checked 1 task ' in result.stdout
 
 
 def test_test_file_change_selects_dependents(local_repo):
@@ -212,6 +213,7 @@ def test_test_file_change_selects_dependents(local_repo):
     task(root, ships='none', test='python test_app.py')
     task(root, 'TASK-2', ships='none', status='DONE', waits=['task:TASK-1'])
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     (root / 'test_app.py').write_text('assert True\nassert 1\n')
     commit_all(root)
     result = cli(root, 'check', '--base', base)
@@ -226,8 +228,8 @@ def test_new_finished_definition_needs_allow(local_repo, status):
     finished(root, status=status)
     refused = cli(root, 'check', '--base', base)
     assert refused.returncode == 1
-    assert (f'TASK-1 was created and claimed {status} in the same change; '
-            'a reviewer accepts its definition with --allow TASK-1') in refused.stdout
+    assert ('TASK-1 is new in this pull request: a reviewer accepts its definition with the label '
+            'workorder-allow:TASK-1 (or land the task on main first)') in refused.stdout
     ok(root, 'check', '--base', base, '--allow', 'TASK-1')
 
 
@@ -297,7 +299,7 @@ def test_squashed_done_without_delivery_stays_done_on_a_feature_checkout(local_r
     git(root, 'commit', '-qm', 'Squash completed work')
     git(root, 'checkout', '-q', '-b', 'feat/next')
     ok(root, 'check')
-    assert 'computed CLOSED' in ok(root, 'show', '--task', 'TASK-1')
+    assert 'Evidence: CLOSED' in ok(root, 'show', '--task', 'TASK-1')
     assert 'TASK-1' not in ok(root, 'ready')
 
 
@@ -320,16 +322,18 @@ def test_binary_test_additions_pass_but_edits_need_allow(local_repo):
     path = task(root, ships='none', test='any')
     path.write_text(path.read_text().replace('test: "any"', 'test: "any"\ntest_paths: ["tests"]'))
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     binary = folder / 'fixture.bin'
     binary.write_bytes(b'\0original\xff')
     commit_all(root)
-    ok(root, 'check', '--base', base)
+    ok(root, 'check', '--review', 'refuse', '--base', base)
     base = store.head(root)
+    store.add_note(root, "TASK-1", "Updating the fixture")
     binary.write_bytes(b'\0changed\xff')
     commit_all(root)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'changed binary content' in result.stdout
-    ok(root, 'check', '--base', base, '--allow', 'TASK-1')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
 
 
 def test_empty_test_rename_needs_allow(local_repo):
@@ -338,11 +342,12 @@ def test_empty_test_rename_needs_allow(local_repo):
     test.touch()
     task(root, ships='none', test='python test_empty.py')
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     test.rename(root / 'test_renamed.py')
     commit_all(root)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'lost or changed 0 lines' in result.stdout
-    ok(root, 'check', '--base', base, '--allow', 'TASK-1')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
 
 
 def test_base_test_paths_still_guard_files_after_paths_removed(local_repo):
@@ -355,10 +360,10 @@ def test_base_test_paths_still_guard_files_after_paths_removed(local_repo):
     path.write_text(path.read_text().replace('[test_app.py]', '[]'))
     probe.write_text('pass\n')
     commit_all(root)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'test_paths changed' in result.stdout
     assert 'lost or changed 1 lines' in result.stdout
-    ok(root, 'check', '--base', base, '--allow', 'TASK-1')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
 
 
 @pytest.mark.parametrize('explicit', [False, True])
@@ -372,11 +377,12 @@ def test_test_paths_normalise_parent_components(local_repo, explicit):
     if explicit:
         path.write_text(path.read_text().replace('test: "any"', 'test: "any"\ntest_paths: ["tests/../tests"]'))
     base = commit_all(root)
+    store.add_note(root, "TASK-1", "Working on these tests")
     probe.write_text('pass\n')
     commit_all(root)
-    result = cli(root, 'check', '--base', base)
+    result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'lost or changed 1 lines' in result.stdout
-    ok(root, 'check', '--base', base, '--allow', 'TASK-1')
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
 
 
 def test_old_squash_does_not_excuse_reopened_claim_on_new_code(local_repo):

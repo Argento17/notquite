@@ -256,7 +256,7 @@ def test_computed_merge_closes_without_post_merge_receipts(local_repo, method):
         git(root, "merge", "-q", "--squash", "feature")
         git(root, "commit", "-qm", "Squashed feature")
     shown = ok(root, "show", "--task", "TASK-1")
-    assert "computed CLOSED" in shown and f"merged into main by {method}" in shown
+    assert "Evidence: CLOSED" in shown and f"merged into main by {method}" in shown
     assert "computed" in ok(root, "check", "TASK-1").split("Merge:")[1]
     assert f"by {method}" in ok(root, "check")
     ok(root, "check", "--base", base)
@@ -279,24 +279,24 @@ def test_squash_with_changed_lines_needs_renew(local_repo):
     git(root, "add", "app.py")
     git(root, "commit", "-qm", "Resolve squash")
     refused = cli(root, "check", "TASK-1")
-    assert refused.returncode == 1 and "Computed: DONE" in refused.stdout
+    assert refused.returncode == 1 and "Evidence: DONE" in refused.stdout
     assert "merged code differs from the tested code" in refused.stdout
     assert "workorder renew --task TASK-1 on main" in refused.stdout
     assert "workorder receipt merged --task TASK-1" in refused.stdout
     assert "workorder renew --task TASK-1 on main" in ok(root, "show", "--task", "TASK-1")
     ok(root, "renew", "--task", "TASK-1", "--", PYTHON, "-c", "pass")
-    assert "computed CLOSED" in ok(root, "show", "--task", "TASK-1")
+    assert "Evidence: CLOSED" in ok(root, "show", "--task", "TASK-1")
 
 
 def test_target_merge_is_visible_from_the_feature_branch(local_repo):
     root = local_repo
     feature(root)
-    assert "computed DONE" in ok(root, "show", "--task", "TASK-1")
+    assert "Evidence: DONE" in ok(root, "show", "--task", "TASK-1")
     git(root, "checkout", "-q", "main")
     git(root, "merge", "-q", "--no-ff", "--no-edit", "feature")
-    assert "computed CLOSED" in ok(root, "show", "--task", "TASK-1")
+    assert "Evidence: CLOSED" in ok(root, "show", "--task", "TASK-1")
     git(root, "checkout", "-q", "feature")
-    assert "computed CLOSED" in ok(root, "show", "--task", "TASK-1")
+    assert "Evidence: CLOSED" in ok(root, "show", "--task", "TASK-1")
     assert "Merge:" in ok(root, "check", "TASK-1")
 
 
@@ -324,7 +324,7 @@ def test_merge_target_selection(local_repo, target):
     shown = ok(root, "show", "--task", "TASK-1")
     expected = {"local": "main", "local-master": "master", "remote-main": "origin/main",
                 "remote-master": "origin/master", "override": "release"}[target]
-    assert f"merged into {expected} by ancestry" in shown and "computed CLOSED" in shown
+    assert f"merged into {expected} by ancestry" in shown and "Evidence: CLOSED" in shown
 
 
 @pytest.mark.parametrize("ref", ["main", "refs/tags/release", "refs/heads/bad..ref"])
@@ -344,7 +344,7 @@ def test_live_readbacks_follow_a_computed_squash(local_repo):
     assert readback(root, "live").returncode == 1
     assert readback(root, "deployed").returncode == 0
     assert readback(root, "live").returncode == 0
-    assert "computed CLOSED" in ok(root, "show", "--task", "TASK-1")
+    assert "Evidence: CLOSED" in ok(root, "show", "--task", "TASK-1")
     ok(root, "check")
 
 
@@ -356,7 +356,7 @@ def test_metadata_patches_do_not_stand_in_for_missing_code(local_repo):
     git(root, "checkout", "feature", "--", "tasks", ".workorder")
     git(root, "commit", "-qm", "Metadata only")
     refused = cli(root, "check", "TASK-1")
-    assert refused.returncode == 1 and "merged code differs from the tested code" in refused.stdout
+    assert refused.returncode == 1 and "merge of the tested code is still owed" in refused.stdout
     assert "Merge:" not in refused.stdout
     # One of two patches is also insufficient for a rebase match.
     git(root, "checkout", "feature", "--", "app.py")
@@ -424,7 +424,7 @@ def test_staged_file_receipt_failure_selects_its_task(local_repo):
     ok(root, "check")
     failure = raw_receipt(root, "test", parents=[tested["hash"]], at=2, exit_code=9, valid=False)
     path = receipt_file(root, failure)
-    git(root, "add", str(path.relative_to(root)))
+    git(root, "add", path.relative_to(root).as_posix())
     path.unlink()  # index content must decide, not the checkout's passing test
     refused = cli(root, "check", "--staged")
     assert refused.returncode == 1 and "passing test on" in refused.stdout
@@ -486,7 +486,7 @@ def test_same_code_is_recognised_with_missing_original_commits(local_repo, tmp_p
     git(tmp_path, "clone", "-q", "--no-local", str(root), str(fresh))
     assert all(e["missing"] for e in store.entries(fresh, "TASK-1"))
     shown = ok(fresh, "show", "--task", "TASK-1")
-    assert "computed CLOSED" in shown and "by same code" in shown
+    assert "Evidence: CLOSED" in shown and "by same code" in shown
     assert "Test:     PASS" in ok(fresh, "check", "TASK-1")
 
 
@@ -502,7 +502,7 @@ def test_pushed_main_precedes_local_main_and_target_movement_invalidates_cache(l
     # Pushing moves the local copy of the remote branch; the cached "not merged" must not stick.
     git(root, "update-ref", "refs/remotes/origin/main", "main")
     shown = ok(root, "show", "--task", "TASK-1")
-    assert "merged into origin/main by ancestry" in shown and "computed CLOSED" in shown
+    assert "merged into origin/main by ancestry" in shown and "Evidence: CLOSED" in shown
 
 
 def test_receipt_fields_and_code_are_verified_in_new_files(local_repo):
@@ -526,5 +526,5 @@ def test_computed_merge_keeps_readbacks_before_a_later_merge_receipt(local_repo)
     assert readback(root, "live").returncode == 0
     store.append(root, "TASK-1", dict(kind="merged", commit=store.head(root),
                  code=store.code_digest(root, store.head(root)), ref="refs/heads/main"))
-    assert "computed CLOSED" in ok(root, "show", "--task", "TASK-1")
+    assert "Evidence: CLOSED" in ok(root, "show", "--task", "TASK-1")
     ok(root, "check")

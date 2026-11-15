@@ -10,16 +10,71 @@ import hashlib
 import hmac
 import heapq
 import json
+import math
 import os
 from pathlib import Path
 import re
 import shlex
+import signal
+import stat
 import subprocess
+import sys
+import tempfile
+import time
 import uuid
 
 
 class Refused(ValueError):
     pass
+
+
+_TEST_OUTPUTS = ContextVar("workorder_test_outputs", default=None)
+
+
+@contextmanager
+def test_output_session():
+    if _TEST_OUTPUTS.get() is not None:
+        yield
+        return
+    token = _TEST_OUTPUTS.set(set())
+    try:
+        yield
+    finally:
+        _TEST_OUTPUTS.reset(token)
+
+
+def print_once(message):
+    seen = _TEST_OUTPUTS.get()
+    if seen is None or message not in seen:
+        print(message)
+        if seen is not None:
+            seen.add(message)
+
+
+def print_test_output(output, errors='', failed=False):
+    # The same output can be used for evidence, current, REF and all-task checks.
+    key = ('test-output', failed, re.sub(r' in \d+(?:\.\d+)?s', ' in <time>s', output + errors))
+    seen = _TEST_OUTPUTS.get()
+    if seen is not None:
+        if key in seen:
+            return
+        seen.add(key)
+    if failed:
+        print('Failure:')
+    print(output, end='')
+    print(errors, end='', file=sys.stderr)
+
+
+_REUSE_TESTS = ContextVar("workorder_reuse_tests", default=False)
+
+
+@contextmanager
+def test_reuse(enabled=True):
+    token = _REUSE_TESTS.set(enabled)
+    try:
+        yield
+    finally:
+        _REUSE_TESTS.reset(token)
 
 
 _READS = ContextVar("workorder_reads", default=None)
@@ -92,10 +147,19 @@ def _git_read(root, *args, data=None, required=True):
     return _git_run(root, *args, data=data, required=required)
 
 
-def _git_run(root, *args, data=None, required=True):
+def copy_environment():
+    """A temporary repository must not inherit Git's pointers into the caller's repository."""
+    local = {'GIT_INDEX_FILE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_PREFIX', 'GIT_COMMON_DIR',
+             'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_IMPLICIT_WORK_TREE',
+             'GIT_GRAFT_FILE', 'GIT_SHALLOW_FILE', 'GIT_REPLACE_REF_BASE', 'GIT_NAMESPACE'}
+    return {key: value for key, value in os.environ.items() if key not in local}
+
+
+def _git_run(root, *args, data=None, required=True, isolated=False):
     result = subprocess.run(
         ["git", *args], cwd=root, input=data, capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=30,
+        env=copy_environment() if isolated else None,
     )
     if required and result.returncode:
         raise Refused(result.stderr.strip() or "Git command failed")
@@ -103,8 +167,9 @@ def _git_run(root, *args, data=None, required=True):
 
 
 def who(root):
-    # Only the Git user name: receipts and claims are pushed, and a hostname says more than needed.
-    name = git(root, "config", "user.name", required=False).stdout.strip()
+    # An agent can distinguish itself from others sharing the same Git identity.
+    name = os.environ.get("WORKORDER_AGENT", "").strip()
+    name = name or git(root, "config", "user.name", required=False).stdout.strip()
     if not name:
         raise Refused("set git user.name first")
     return name
@@ -116,9 +181,7 @@ def head(root):
 
 
 def repository(root):
-    top = Path(git(root, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
-    if top != root.resolve():
-        raise Refused("run workorder at the Git repository root")
+    return Path(git(root, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
 
 
 def local_path(root, relative):
@@ -147,8 +210,18 @@ def read_text(root, relative, staged=False):
         text = metadata_texts(root, None, None, True).get(relative)
         if text is None:
             raise Refused(f"missing staged file: {relative}")
-        return text
-    return read_bytes(root, relative, staged).decode("utf-8").removeprefix("\ufeff").replace("\r\n", "\n")
+        return checked_text(text, relative)
+    text = read_bytes(root, relative, staged).decode("utf-8", errors="surrogateescape")
+    return checked_text(text, relative).removeprefix("\ufeff").replace("\r\n", "\n")
+
+
+def checked_text(text, relative):
+    """Reject undecodable bytes only when their owning file is consumed."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        raise Refused(f"{relative}: cannot be read as UTF-8") from None
+    return text
 
 
 @cached_read
@@ -168,7 +241,7 @@ CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract"
 # Optional fields. Dependencies and the test add requirements; merge_ref selects delivery's target,
 # and test_paths selects files guarded by a base check. Planning fields never stand in for evidence.
 EXTENDED_FIELDS = ("business_owner", "priority", "created_at", "mission", "depends_on", "blocks",
-                   "next", "summary", "test", "test_paths", "merge_ref")
+                   "next", "summary", "test", "test_paths", "test_timeout", "merge_ref")
 EXTENDED_ORDER = ("id", "title", "owner", "business_owner", "priority", "created_at", "mission",
                   "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "test",
                   "contract")
@@ -354,6 +427,8 @@ def record(root, tid, staged=False):
             raise Refused(f"{tid}: {key} must be text")
     if fields.get("test", "").strip():
         split_command(fields["test"], f"{tid}: test")
+    if "test_timeout" in fields:
+        fields["test_timeout"] = positive_seconds(fields["test_timeout"], f"{tid}: test_timeout")
     if "test_paths" in fields:
         paths = fields["test_paths"]
         if not isinstance(paths, list) or any(not isinstance(p, str) or not p.strip() for p in paths):
@@ -429,7 +504,7 @@ EXTENDED_BODY = """
 
 ## Progress
 
-<!-- Dated notes: workorder note adds one, workorder show prints them. Status comes from receipts, not from here. -->
+<!-- Dated notes: workorder note adds one, workorder show prints them. The status line is your claim; workorder show and workorder check compute what the receipts support. workorder done sets DONE only when its check supports the claim. -->
 """
 
 
@@ -440,11 +515,15 @@ def task_text(tid, data, template):
     today = dt.datetime.now(dt.timezone.utc).date().isoformat()
     extended = {**dict(business_owner="", priority="", created_at=today, mission="", depends_on=[],
                        blocks=[], next="", summary="", test=""), **data}
-    return ("---\n" + "".join(f"{k}: {packed(extended[k])}\n" for k in EXTENDED_ORDER)
+    order = list(EXTENDED_ORDER)
+    if extended.get("test_paths"):
+        order.insert(order.index("test") + 1, "test_paths")
+    return ("---\n" + "".join(f"{k}: {packed(extended[k])}\n" for k in order)
             + f"---\n\n# {tid}\n" + EXTENDED_BODY)
 
 
-def new(root, title, owner, ships="none", prefix="TASK", template="extended", test="", local_only=False):
+def new(root, title, owner, ships="none", prefix="TASK", template="extended", test="", local_only=False,
+        test_paths=None):
     repository(root)
     if template not in {"simple", "extended"}:
         raise Refused("template must be simple or extended")
@@ -470,7 +549,8 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
                     if ID.fullmatch(p.stem)]
         tid = f"{prefix}-{max(numbers, default=0) + 1}"
         data = dict(id=tid, title=title, owner=owner, status="IN_PROGRESS", ships=ships,
-                    waits_on=[], contract="none", **({"test": test} if test else {}))
+                    waits_on=[], contract="none", **({"test": test} if test else {}),
+                    **({"test_paths": list(test_paths)} if test_paths else {}))
         if local or reserve(root, NAMESPACE + f"ids/{tid}", {**data, "at": now(), "who": who(root)}):
             path = directory / f"{tid}.md"
             with path.open("x", encoding="utf-8", newline="\n") as stream:
@@ -479,7 +559,7 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
     raise Refused("too much allocation contention; retry")
 
 
-def active_claims(root, upstream=None):
+def active_claims(root, upstream=None, snapshot=None):
     refs = remote_refs(root, upstream=upstream is not None)
     latest = {}
     stem = NAMESPACE + "claims/"
@@ -505,21 +585,23 @@ def active_claims(root, upstream=None):
             required=upstream is not None)
     if upstream is not None and branch:
         invalidate_reads()
-        snapshot = git(root, "rev-parse", "refs/workorder/upstream^{commit}").stdout.strip()
-        for path, text in metadata_texts(root, snapshot).items():
+        commit = git(root, "rev-parse", "refs/workorder/upstream^{commit}").stdout.strip()
+        if snapshot is not None:
+            snapshot.update(commit=commit, ref="origin/" + branch[11:])
+        for path, text in metadata_texts(root, commit).items():
             if not path.startswith("tasks/") or not path.endswith(".md"):
                 continue
             tid = path[6:-3]
             if not ID.fullmatch(tid):
                 continue
-            lines = text.splitlines()
             try:
+                lines = checked_text(text, path).splitlines()
                 fields = front_matter(tid, lines[1:lines.index("---", 1)])
             except (Refused, ValueError):
                 continue
             if fields.get("status") in {"DONE", "CLOSED", "CANCELLED"}:
                 upstream[tid] = {"status": fields["status"], "ref": "origin/" + branch[11:],
-                                 "commit": snapshot}
+                                 "commit": commit}
     for tid, (generation, ref, oid) in latest.items():
         released = NAMESPACE + f"releases/{tid}/{oid}" in refs
         try:
@@ -547,11 +629,20 @@ def holds(held, token):
     return isinstance(expected, str) and hmac.compare_digest(expected, token_hash(token))
 
 
+def cache_reservation(root, ref, oid):
+    """Keep successfully pushed claim/release tags available to hooks that never fetch."""
+    if oid:
+        git(root, "update-ref", ref, oid, required=False)
+
+
 def claim(root, tid):
     repository(root)
     record(root, tid)
-    upstream = {}
-    held = active_claims(root, upstream).get(tid)
+    upstream, snapshot = {}, {}
+    held = active_claims(root, upstream, snapshot).get(tid)
+    newer = newer_work(root, tid, snapshot)
+    if newer:
+        raise Refused(f"{snapshot['ref']} has newer work on {tid} ({newer}); pull first")
     if tid in upstream:
         finished = upstream[tid]
         author = git(root, "log", "-1", "--format=%an", finished["commit"], "--", f"tasks/{tid}.md").stdout.strip()
@@ -560,6 +651,7 @@ def claim(root, tid):
     token = token_path.read_text(encoding="utf-8") if token_path.exists() else uuid.uuid4().hex
     if held and not held["released"]:
         if holds(held, token):
+            cache_reservation(root, NAMESPACE + f"claims/{tid}/{held['generation']}", held["oid"])
             return held
         raise Refused(f"{tid} is held by {held['who']} since {held['at']} - not claimed")
     generation = held["generation"] + 1 if held else 1
@@ -568,9 +660,12 @@ def claim(root, tid):
     # Save before pushing: a crash can leave a recoverable claim, never a lost key.
     token_path.parent.mkdir(parents=True, exist_ok=True)
     token_path.write_text(token, encoding="utf-8", newline="\n")
-    if not reserve(root, NAMESPACE + f"claims/{tid}/{generation}", value):
+    ref = NAMESPACE + f"claims/{tid}/{generation}"
+    oid = reserve(root, ref, value)
+    if not oid:
         winner = active_claims(root).get(tid)
         raise Refused(f"{tid} was claimed by {winner['who']} first - not claimed")
+    cache_reservation(root, ref, oid)
     return value
 
 
@@ -588,8 +683,61 @@ def release(root, tid, force=False):
         raise Refused(f"{tid}: only its holder can release it; if that clone or worktree is gone, run"
                       f" workorder release --task {tid} --force")
     value = {"at": now(), "who": who(root), **({} if holder else {"forced": True, "holder": held["who"]})}
-    reserve(root, NAMESPACE + f"releases/{tid}/{held['oid']}", value)
+    ref = NAMESPACE + f"releases/{tid}/{held['oid']}"
+    cache_reservation(root, ref, reserve(root, ref, value))
     return not holder
+
+
+def fetch_upstream(root):
+    """Best-effort show refresh, with one short deadline and no stale-ref fallback."""
+    if not has_origin(root):
+        return None
+    deadline = time.monotonic() + 3
+    for branch in ("main", "master"):
+        try:
+            result = subprocess.run(
+                ["git", "fetch", "--no-tags", "--refmap=", "origin",
+                 f"+refs/heads/{branch}:refs/workorder/upstream"], cwd=root,
+                capture_output=True, timeout=max(.01, deadline - time.monotonic()),
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        except (OSError, subprocess.TimeoutExpired):
+            return {}
+        if result.returncode == 0:
+            invalidate_reads()
+            return {"ref": f"origin/{branch}",
+                    "commit": git(root, "rev-parse", "refs/workorder/upstream^{commit}").stdout.strip()}
+        if time.monotonic() >= deadline:
+            break
+    return {}
+
+
+def newer_work(root, tid, snapshot):
+    """Upstream task work not present here; local additions alone are not stale work."""
+    if not snapshot:
+        return None
+    commit = snapshot["commit"]
+    remote = metadata_texts(root, commit, tid)
+    task_path = f"tasks/{tid}.md"
+    if task_path not in remote:
+        return None
+    base = git(root, "merge-base", "HEAD", commit, required=False).stdout.strip()
+    before = metadata_texts(root, base, tid) if base else {}
+    local = receipt_texts(root, tid)
+    try:
+        local[task_path] = read_text(root, task_path)
+    except (OSError, Refused):
+        pass
+    different = [p for p in remote.keys() | before.keys()
+                 if remote.get(p) != local.get(p) and remote.get(p) != before.get(p)]
+    if not different:
+        return None
+    receipts = len(entries(root, tid, rev=commit))
+    notes = sum(line.lstrip().startswith("- ") for heading, body in task_body_sections(remote[task_path])
+                if heading == "Progress" for line in body)
+    author = git(root, "log", "-1", "--format=%an", commit, "--", task_path,
+                 *(p for p in remote if receipt_task(p) == tid)).stdout.strip()
+    return (f"{receipts} receipt{'s' if receipts != 1 else ''}, "
+            f"{notes} note{'s' if notes != 1 else ''}, by {author}")
 
 
 def task_body_sections(text):
@@ -607,27 +755,63 @@ def task_body_sections(text):
     return sections
 
 
+def set_task_field(root, tid, key, value):
+    """Replace status or next in validated front matter, keeping other bytes and scalar quotes."""
+    record(root, tid)
+    if key not in {"status", "next"}:
+        raise Refused("only status and next can be updated here")
+    path = local_path(root, f"tasks/{tid}.md")
+    lines = path.read_bytes().splitlines(keepends=True)
+    closing = next(i for i in range(1, len(lines)) if lines[i].rstrip(b'\r\n') == b'---')
+    start = next((i for i in range(1, closing) if lines[i].startswith(key.encode() + b':')), closing)
+    newline = b'\r\n' if lines[0].endswith(b'\r\n') else b'\n'
+    raw = lines[start].rstrip(b'\r\n').partition(b':')[2].strip() if start < closing else b''
+    if raw.startswith(b"'") and raw.endswith(b"'") and not any(c in value for c in '\r\n'):
+        encoded = ("'" + value.replace("'", "''") + "'").encode('utf-8')
+    elif key == "status" and not raw.startswith(b'"'):
+        encoded = value.encode('utf-8')
+    else:
+        encoded = packed(value).encode('utf-8')
+    end = start + 1 if start < closing else start
+    if raw.decode('utf-8') in BLOCK_INDICATORS:
+        while end < closing and (not lines[end].strip() or lines[end].startswith(b' ')):
+            end += 1
+        while end > start + 1 and not lines[end - 1].strip():
+            end -= 1
+    prefix = lines[start].partition(b':')[0] + b': ' if start < closing else key.encode() + b': '
+    lines[start:end] = [prefix + encoded + newline]
+    path.write_bytes(b''.join(lines))
+    invalidate_reads()
+
+
 def add_note(root, tid, text):
-    """Add "- YYYY-MM-DD: text" at the end of the task's Progress section (creating it if needed).
-    This is the one change Workorder makes to a task file after new; every other byte is kept."""
+    """Add "- YYYY-MM-DD: text" at the end of Progress, creating the section if needed."""
     record(root, tid)
     text = " ".join(text.split())
     if not text:
         raise Refused("a note needs some text")
     path = local_path(root, f"tasks/{tid}.md")
-    lines = read_text(root, f"tasks/{tid}.md").split("\n")
+    lines = path.read_bytes().splitlines(keepends=True)
+    newline = b'\r\n' if lines[0].endswith(b'\r\n') else b'\n'
     line = f"- {dt.datetime.now(dt.timezone.utc).date().isoformat()}: {text}"
-    starts = [i for i, value in enumerate(lines) if value.strip() == "## Progress"]
+    encoded = line.encode('utf-8') + newline
+    starts = [i for i, value in enumerate(lines) if value.strip() == b"## Progress"]
     if starts:
-        end = next((i for i in range(starts[-1] + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+        end = next((i for i in range(starts[-1] + 1, len(lines)) if lines[i].startswith(b"## ")), len(lines))
         while end > starts[-1] + 1 and not lines[end - 1].strip():
             end -= 1
-        lines[end:end] = [line] if lines[end - 1].strip() and not lines[end - 1].startswith("## ") else ["", line]
+        if not lines[end - 1].endswith(b'\n'):
+            lines[end - 1] += newline
+        lines[end:end] = ([encoded] if lines[end - 1].strip() and not lines[end - 1].startswith(b"## ")
+                          else [newline, encoded])
     else:
-        while lines and not lines[-1].strip():
-            lines.pop()
-        lines += ["", "## Progress", "", line]
-    path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8", newline="\n")
+        if not lines[-1].endswith(b'\n'):
+            lines[-1] += newline
+        if lines[-1].strip():
+            lines.append(newline)
+        lines += [b"## Progress" + newline, newline, encoded]
+    path.write_bytes(b''.join(lines))
+    invalidate_reads()
     return line
 
 
@@ -679,6 +863,8 @@ def metadata_texts(root, rev=None, tid=None, staged=False):
 
 
 def read_blobs(root, oids):
+    # Preserve undecodable bytes in the shared batch. read_text/receipt_texts validate only the
+    # selected file, so an unrelated task's bad encoding cannot poison every cached metadata read.
     cache = _READS.get()
     blobs = cache.setdefault(("blobs", root), {}) if cache is not None else {}
     wanted = sorted(set(oids) - blobs.keys())
@@ -694,7 +880,7 @@ def read_blobs(root, oids):
                 raise Refused("Git could not read a task or receipt blob")
             size = int(header[2])
             raw = result.stdout[end + 1:end + 1 + size]
-            blobs[oid] = raw.decode("utf-8").removeprefix("\ufeff").replace("\r\n", "\n")
+            blobs[oid] = raw.decode("utf-8", errors="surrogateescape").removeprefix("\ufeff").replace("\r\n", "\n")
             offset = end + 2 + size
     return blobs
 
@@ -723,7 +909,7 @@ def receipt_paths(root, staged=False, rev=None, tid=None):
 @cached_read
 def receipt_texts(root, tid, staged=False, rev=None):
     if rev or staged:
-        return {p: text for p, text in metadata_texts(
+        return {p: checked_text(text, p) for p, text in metadata_texts(
             root, rev, tid if rev and rev != "HEAD" else None, staged).items() if receipt_task(p) == tid}
     return {p: read_text(root, p)
             for p in receipt_paths(root, staged, rev, tid) if receipt_task(p) == tid}
@@ -746,6 +932,21 @@ def verify_receipt(root, tid, value):
     present = has_commit(root, item["commit"])
     if present and code_digest(root, item["commit"]) != item["code"]:
         raise Refused(f"{tid}: receipt code does not match its commit")
+    if 'implementation_paths' in item:
+        paths = item['implementation_paths']
+        if (item['kind'] != 'implemented' or not isinstance(paths, dict)
+                or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', str(item.get('implementation_base', '')))):
+            raise Refused(f'{tid}: invalid implementation paths')
+        for path, entry in paths.items():
+            if (not isinstance(path, str) or not path or path.startswith(('/', 'tasks/', '.workorder/', '.notquite/'))
+                    or any(part in {'', '.', '..'} for part in path.split('/'))
+                    or (entry is not None and (not isinstance(entry, str) or not re.fullmatch(
+                        r'(?:100644 blob|100755 blob|120000 blob|160000 commit) [0-9a-f]{40}(?:[0-9a-f]{24})?', entry)))):
+                raise Refused(f'{tid}: invalid implementation path entry')
+        if present:
+            tree = code_tree(root, item['commit'])
+            if any(tree.get(path) != entry for path, entry in paths.items()):
+                raise Refused(f'{tid}: implementation paths do not match its commit')
     if item["kind"] in {"test", "deployed", "live"}:
         if (type(item.get("exit_code")) is not int or type(item.get("valid")) is not bool
                 or not isinstance(item.get("command"), list) or not item["command"]
@@ -987,7 +1188,12 @@ def ledger_lock(root, tid):
             try:
                 handle = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 break
-            except FileExistsError:
+            except (FileExistsError, PermissionError) as error:
+                # On Windows a lock file that another writer is deleting refuses a new create with
+                # "permission denied" instead of "exists"; both mean the lock is busy. Elsewhere a
+                # permission error is real and is raised.
+                if isinstance(error, PermissionError) and os.name != "nt":
+                    raise
                 if time.monotonic() > deadline:
                     raise Refused(f"{tid}: another receipt is being written; if no workorder command is"
                                   f" running, remove {lock}") from None
@@ -1102,6 +1308,14 @@ def _code_digest(root, commit):
     return digest("\0".join(code).encode("utf-8", errors="surrogateescape"))
 
 
+@cached_read
+def code_tree(root, revision):
+    """Git mode, object type and object ID for each code path, independent of checkout endings."""
+    return {path: entry for value in git(root, 'ls-tree', '-r', '-z', revision).stdout.split('\0') if value
+            for entry, path in [value.split('\t', 1)]
+            if not path.startswith(('tasks/', '.workorder/', LEGACY_DIR))}
+
+
 def index_code(root):
     """The code fingerprint of what the next commit would contain (the index)."""
     return code_digest(root, git(root, "write-tree").stdout.strip())
@@ -1122,9 +1336,226 @@ def describe_dirty(paths):
     return f"uncommitted or untracked files: {shown} (commit them, or add build output to .gitignore)"
 
 
-def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main"):
+def positive_seconds(value, what="timeout"):
+    try:
+        seconds = float(value) if not isinstance(value, bool) else 0
+    except (ValueError, TypeError, OverflowError):
+        seconds = 0
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise Refused(f"{what} must be a positive number of seconds")
+    return seconds
+
+
+def test_timeout(record, override=None):
+    value = override if override is not None else record.get("test_timeout")
+    return positive_seconds(value) if value is not None else None
+
+
+def run_test(command, root, timeout=None, capture_output=True, *, isolated=False):
+    """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
+    # Keep the ordinary subprocess path when there is no deadline. With a deadline,
+    # use a process group so child test runners cannot keep captured pipes open.
+    if timeout is None:
+        return subprocess.run(list(command), cwd=root, capture_output=capture_output,
+                              encoding="utf-8", errors="replace",
+                              env=copy_environment() if isolated else None)
+    with subprocess.Popen(list(command), cwd=root, stdout=subprocess.PIPE if capture_output else None,
+                          stderr=subprocess.PIPE if capture_output else None,
+                          encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
+                          env=copy_environment() if isolated else None) as process:
+        try:
+            output, errors = process.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(command, process.returncode, output, errors)
+        except subprocess.TimeoutExpired:
+            if os.name != 'nt':
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            else:
+                process.kill()
+            output, errors = process.communicate()
+            message = f"test timed out after {timeout:g} seconds (exit 124)\n"
+            if capture_output:
+                errors = (errors or "") + message
+            else:
+                print(message, end='', file=sys.stderr, flush=True)
+            return subprocess.CompletedProcess(command, 124, output, errors)
+
+
+def _test_state(root, isolated=False):
+    """Fingerprint the files actually executed, including dirty snapshot overlays.
+
+    HEAD alone cannot identify a staged copy or current code with REF tests overlaid.
+    Ignore only Git-ignored files and Workorder metadata, as with ordinary code checks.
+    Read Git afresh because a declared command can change files or refs in this process.
+    """
+    commit = _git_run(root, 'rev-parse', '--verify', 'HEAD^{commit}', isolated=isolated).stdout.strip()
+    listing = _git_run(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard',
+                       '--', *CODE_PATHS, isolated=isolated).stdout
+    fingerprint = hashlib.sha256()
+    for relative in sorted(set(listing.split('\0')) - {''}):
+        path = root / relative
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            continue  # tracked deletion in the working tree or a snapshot overlay
+        if stat.S_ISLNK(mode):
+            content, kind = os.fsencode(os.readlink(path)), 'symlink'
+        elif stat.S_ISREG(mode):
+            content, kind = path.read_bytes(), 'executable' if mode & 0o111 else 'file'
+        else:
+            # A gitlink or special file needs more than its own bytes to identify
+            # executable code. Run fresh rather than reuse an incomplete fingerprint.
+            return None
+        fingerprint.update(packed([relative, kind, digest(content)]).encode('ascii') + b'\n')
+    return commit, fingerprint.hexdigest()
+
+
+def ci_environment():
+    return any(os.environ.get(name, '').lower() not in {'', '0', 'false', 'no'}
+               for name in ('CI', 'GITHUB_ACTIONS'))
+
+
+def test_cache_path(root, fingerprint, command, timeout):
+    folder = root / git(root, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
+    key = digest(packed([2, fingerprint, list(command), timeout]).encode('ascii'))
+    return folder / (key + '.json')
+
+
+def read_test_cache(path, command):
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+        if (isinstance(value, dict) and type(value.get('returncode')) is int
+                and isinstance(value.get('stdout'), str) and isinstance(value.get('stderr'), str)
+                and re.fullmatch(r'\d{2}:\d{2}', value.get('at', ''))):
+            run = subprocess.CompletedProcess(command, value['returncode'], value['stdout'], value['stderr'])
+            run.cached = True
+            run.reused_at = value['at']
+            return run
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def checkout_bytes(root, path):
+    """Index contents with Git's checkout conversion, as a user would run them."""
+    # Attribute rules must come from the index too, not unstaged .gitattributes.
+    tree = index_tree(root)
+    result = subprocess.run(['git', 'cat-file', '--filters', f':{path}'], cwd=root,
+                            capture_output=True, timeout=30,
+                            env={**os.environ, 'GIT_ATTR_SOURCE': tree})
+    if result.returncode:
+        raise Refused(f'could not read staged checkout content: {path}')
+    return result.stdout
+
+
+@cached_read
+def index_tree(root):
+    # write-tree updates the index's tree cache. Preserve the caller's index,
+    # including an alternate index supplied by Git while running a hook.
+    source = Path(git(root, 'rev-parse', '--git-path', 'index').stdout.strip())
+    if not source.is_absolute():
+        source = root / source
+    with tempfile.TemporaryDirectory(prefix='workorder-index-') as temporary:
+        index = Path(temporary) / 'index'
+        index.write_bytes(source.read_bytes())
+        result = subprocess.run(['git', 'write-tree'], cwd=root, capture_output=True,
+                                encoding='utf-8', errors='surrogateescape', timeout=30,
+                                env={**os.environ, 'GIT_INDEX_FILE': str(index)})
+        if result.returncode:
+            raise Refused(result.stderr.strip() or 'could not read the staged tree')
+        return result.stdout.strip()
+
+
+def cached_test(command, root, timeout=None, *, cache_root=None, logical_command=None, fresh=False):
+    """Reuse a stable test result within this clone; CI and explicit reruns run fresh.
+
+    Snapshot callers name their original repository and command so a temporary
+    path does not defeat sharing. Results remain local in Git's private directory,
+    never in receipts or cloned files. A fresh run replaces any earlier result.
+    """
+    owner = cache_root if cache_root is not None else root
+    isolated = owner != root
+    logical = list(command if logical_command is None else logical_command)
+    timeout = positive_seconds(timeout) if timeout is not None else None
+    ci = ci_environment()
+    cached_path = None
+    before = owner_head = None
+    if not ci:
+        try:
+            before = _test_state(root, isolated)
+            owner_head = (_git_run(owner, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
+                          if owner != root else before[0] if before else None)
+            if before:
+                cached_path = test_cache_path(owner, before[1], logical, timeout)
+                if not fresh:
+                    run = read_test_cache(cached_path, command)
+                    if run is not None:
+                        return run
+        except (OSError, Refused, ValueError):
+            pass  # an absent, malformed or unwritable cache must never prevent a run
+    if cached_path is not None:
+        try:
+            cached_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
+        run = run_test(command, root, timeout, capture_output=True, isolated=isolated)
+    finally:
+        invalidate_reads()
+    # Pytest can report a failure even when application shutdown code forces exit 0.
+    from .gate import pytest_counts
+    outcomes = pytest_counts((run.stdout or '') + (run.stderr or '')) or {}
+    if run.returncode == 0 and any(outcomes.get(name, 0) for name in ('failed', 'error', 'errors')):
+        run.returncode = 1
+    run.cached = False
+    if cached_path is not None:
+        temporary = cached_path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
+        try:
+            if (_test_state(root, isolated) == before
+                    and _git_run(owner, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip() == owner_head):
+                cached_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary.write_text(packed(dict(returncode=run.returncode, stdout=run.stdout or '',
+                                                 stderr=run.stderr or '', at=dt.datetime.now(dt.timezone.utc).strftime('%H:%M'))), encoding='utf-8')
+                os.replace(temporary, cached_path)
+        except (OSError, Refused, ValueError):
+            pass
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return run
+
+
+def missing_test_dependency(command, code, output, root=None):
+    """Name a missing executable or Python module without attributing it to the code."""
+    if code == 0:
+        return None
+    module = re.search(r"No module named\s+['\"]?([\w.]+)", output)
+    if module:
+        if root is not None:
+            name = module[1].split('.')[0]
+            for base in (root, root / 'src'):
+                package = base / name
+                if ((base / (name + '.py')).is_file()
+                        or package.is_dir() and any(package.rglob('*.py'))):
+                    return (f"cannot import this repository's own module '{module[1]}'; "
+                            'check the working directory and PYTHONPATH')
+        return f"{module[1]} is not installed in this environment"
+    if code == 127 or (isinstance(code, str) and 'No such file or directory' in code):
+        name = Path(command[0]).name
+        missing = re.search(r'(?:^|\n).*?:\s*(?:\d+:\s*)?([\w./-]+): (?:command )?not found', output)
+        if missing:
+            name = missing[1]
+        return f"{name} is not installed in this environment"
+    return None
+
+
+def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None):
     repository(root)
-    record(root, tid)
+    definition = record(root, tid)
     commit = head(root)
     if kind not in KINDS:
         raise Refused("unknown receipt kind")
@@ -1132,6 +1563,13 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main"):
         raise Refused("commit the code before recording implementation or tests; "
                       + describe_dirty(dirty_paths(root)))
     data = {"kind": kind, "commit": commit, "code": code_digest(root, commit)}
+    if kind == 'implemented':
+        from . import gate
+        base, _ = gate.implementation_base(root, definition)
+        paths = gate.implementation_paths(root, {**data, 'task': tid, 'hash': None}, base)
+        tree = code_tree(root, commit)
+        data.update(implementation_base=base,
+                    implementation_paths={path: tree.get(path) for path in sorted(paths)})
     if kind == "merged":
         if not ref.startswith("refs/heads/"):
             raise Refused("merge ref must be a full branch ref")
@@ -1146,12 +1584,22 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main"):
         if kind in {"deployed", "live"} and not target:
             raise Refused("read-backs need --target")
         try:
-            run = subprocess.run(list(command), cwd=root, capture_output=kind != "test",
-                                 encoding="utf-8", errors="replace")
+            if kind == "test":
+                run = cached_test(command, root, test_timeout(definition, timeout), fresh=True)
+                print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0)
+            else:
+                run = subprocess.run(list(command), cwd=root, capture_output=True,
+                                     encoding="utf-8", errors="replace")
             exit_code = run.returncode
             output = run.stdout or ""
         except OSError as error:
             exit_code, output = 127, str(error)
+        if kind == 'test':
+            missing = missing_test_dependency(command, exit_code,
+                                              output + (run.stderr or '') if exit_code != 127 else output,
+                                              root=root)
+            if missing:
+                print(f'{tid}: {missing}')
         valid = exit_code == 0
         if kind == "test":
             valid = valid and clean_code(root) and head(root) == commit
