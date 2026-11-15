@@ -114,7 +114,33 @@ def has_test_extra(path):
     return 'test' in project.get('optional-dependencies', {})
 
 
+def dependency_group(path):
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding='utf-8')
+    try:
+        import tomllib
+    except ImportError:
+        groups, section = set(), False
+        for line in text.splitlines():
+            if re.match(r'^\s*\[', line):
+                section = bool(re.match(r"^\s*\[\s*['\"]?dependency-groups['\"]?\s*\]", line))
+            elif section:
+                match = re.match(r"^\s*['\"]?(test|tests|dev)['\"]?\s*=\s*\[", line)
+                if match:
+                    groups.add(match[1])
+    else:
+        try:
+            groups = tomllib.loads(text).get('dependency-groups', {})
+        except ValueError as error:
+            raise s.Refused(f'pyproject.toml cannot be read: {error}') from None
+    return next((name for name in ('test', 'tests', 'dev') if name in groups), None)
+
+
 def project_install(root):
+    group = dependency_group(s.local_path(root, 'pyproject.toml'))
+    if group:
+        return f"python -m pip install --upgrade 'pip>=25.1' && python -m pip install --group {group} ."
     if has_test_extra(s.local_path(root, 'pyproject.toml')):
         return "python -m pip install -e '.[test]'"
     for name in ('requirements-dev.txt', 'requirements.txt'):
@@ -176,6 +202,10 @@ def claude_settings(root):
 
 def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
+    from .python_imports import installed_src
+    installed = installed_src(root)
+    if installed:
+        print('src layout: installed ' + ', '.join(installed) + '; comparison copies put src/ first and verify imports.')
     settings = claude_settings(root) if claude else None
     written = []
     hook = root / s.git(root, 'rev-parse', '--git-path', 'hooks/pre-commit').stdout.strip()

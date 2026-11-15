@@ -112,6 +112,7 @@ def test_new_wrapper_requests_explicit_test_paths_before_writing(local_repo):
 def test_changed_command_refuses_locally(local_repo, monkeypatch, capsys, action):
     root = local_repo
     reviewed_task(root)
+    store.receipt(root, "TASK-1", "implemented")
     (root / 'app.py').write_text('items = [1]\n')
     definition = root / 'tasks/TASK-1.md'
     definition.write_text(definition.read_text().replace('test_app.py', '-c pass'))
@@ -241,6 +242,7 @@ def test_command_edit_without_remote_is_refused_against_head(local_repo, monkeyp
     root = local_repo
     fill_sections(task(root, ships='none', test=store.join_command([PYTHON, '-c', 'print(1)'])))
     commit_all(root)
+    store.receipt(root, "TASK-1", "implemented")
     (root / 'tasks/TASK-1.md').write_text((root / 'tasks/TASK-1.md').read_text().replace('print(1)', 'pass'))
     if action == 'done':
         result = cli(root, 'done', '--task', 'TASK-1', '--no-code-change', '--needs-review')
@@ -341,6 +343,7 @@ def test_recorded_squash_paths_keep_deletions_modes_and_content(local_repo, tmp_
 def test_stop_refuses_command_change_on_unfinished_task(local_repo, monkeypatch, capsys):
     root = local_repo
     reviewed_task(root)
+    store.receipt(root, "TASK-1", "implemented")
     definition = root / 'tasks/TASK-1.md'
     definition.write_text(definition.read_text().replace('test_app.py', '-c pass'))
     monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))

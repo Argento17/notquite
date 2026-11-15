@@ -5,7 +5,7 @@ import re
 import sys
 
 
-ALLOW_LABEL = re.compile(r'workorder-allow:([A-Z][A-Z0-9]*-[1-9][0-9]*|tests|no-task|workflow)\Z')
+ALLOW_LABEL = re.compile(r'workorder-allow:((?:scope:)?[A-Z][A-Z0-9]*-[1-9][0-9]*|tests|no-task|workflow)\Z')
 
 
 def accepted_labels(pull_request, pages):

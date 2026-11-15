@@ -160,7 +160,7 @@ def test_conflicted_rebase_show_and_check_keep_same_evidence_verdict(local_repo,
     before = {p: p.read_bytes() for p in (root / '.workorder').rglob('*.json')}
     checked = cli(root, 'check', 'TASK-1')
     shown = ok(root, 'show', '--task', 'TASK-1')
-    expected = 'CLOSED' if ships == 'none' else 'DONE'
+    expected = 'claim not supported on this code' if ships == 'none' else 'DONE'
     assert checked.returncode == 1 and f'Evidence: {expected}' in checked.stdout
     assert f'Claimed:  DONE\n  Evidence: {expected}' in shown
     reason = 'the DONE claim is on code other than the tested code; run workorder renew --task TASK-1'

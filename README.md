@@ -78,6 +78,8 @@ Use `--no-code-change` only when no code files changed. For intentional test edi
 `--needs-review` writes DONE pending a reviewer label or approval. Use `--refactor`
 for unchanged tests passing before and after. `new --code-paths src/calc.py` sets code scope. [Task format](docs/reference.md#task-files).
 
+For installed `src/` projects (including `pip install -e .`), copies put `src/` and the copy root first on `PYTHONPATH` and verify package locations before comparing.
+
 ## Working with coding agents
 
 Run `workorder init` in every clone: Git does not clone hooks. It adds the block
@@ -109,19 +111,19 @@ The pre-commit hook checks staged work; finished-task command repairs get review
 
 A completed task's test must fail on the target's merge-base code when its own code or tests changed. `--refactor` accepts unchanged tests passing on both versions; `--no-code-change` exempts work with no code edits. Each exemption remains a separate task note.
 
-Python tests need an assertion or helper; literal-only assertions and `value == value` refuse. Tests must also fail when all changed Python functions are replaced with bodies that raise an error in a temporary copy. Refactor and no-code-change runs are exempt; unusual valid tests need the task's explicit reviewer label. [Test checks](docs/reference.md#checks-against-a-base).
+New or changed Python test functions need an assertion or helper (including `pytest.warns`); literal-only assertions and `value == value` refuse. Tests must also fail when all changed Python functions are replaced with bodies that raise an error in a temporary copy. Refactor and no-code-change runs are exempt; unusual valid tests need the task's explicit reviewer label. [Test checks](docs/reference.md#checks-against-a-base).
 
 The default workflow checks pull requests with `--base origin/<base> --run-tests --all-tests --require-task`, and default-branch pushes with `--run-tests --all-tests`.
-`check/done --jobs N` runs distinct current commands concurrently, defaulting to the CPU count; output stays in task order. Identical commands and timeouts share one run. If merged code differs, run `workorder renew --task <id>`.
+`check/done --jobs N` runs distinct current commands concurrently, defaulting to the CPU count; output stays in task order. Identical commands and timeouts share one run. If merged code differs, run `workorder renew --task <id>`. Renewal preserves a refactor declaration.
 Lockfiles need no task evidence. Repeat `check --require-task-ignore GLOB` for other path exceptions; these affect only the code-to-task requirement.
 
 An APPROVED current-head review by someone other than the author accepts ordinary review findings. Old-test failures, assertion findings, tests that pass with changed functions replaced, test-first exceptions, reopened tasks with failing tests and workflow edits need explicit labels.
 
-`workorder-allow:<ID>` accepts that task's findings; `workorder-allow:tests` accepts changed test lines; `workorder-allow:no-task` accepts only the code-to-task requirement. `workorder-allow:workflow` accepts changes to the default or renamed generated workflow.
+`workorder-allow:scope:<ID>` (or an approving review) accepts scope findings; `workorder-allow:<ID>` accepts that task's test findings; `workorder-allow:tests` accepts changed test lines; `workorder-allow:no-task` accepts only the code-to-task requirement. `workorder-allow:workflow` accepts changes to the default or renamed generated workflow.
 Shared test and configuration files produce one finding naming their owners. Current failures for completed tasks and runs reporting no passed tests still refuse. Author-added labels are ignored. [Review rules](docs/reference.md#checks-against-a-base).
 
 `init --check` reports missing setup without changing it. `init --update-workflow` shows a diff and refreshes the workflow. `--force` keeps a different hook as `pre-commit.workorder-previous` and calls it first.
 Generated workflows install detected test dependencies and pin the running Workorder version or installed Git commit. With no detected test dependencies, they install no extra test tools and print a warning. [Team setup](docs/reference.md#team-setup).
 Existing 0.14 receipts need no migration. Local task IDs respect reservation tags already fetched; missing test-origin evidence never claims that a test landed earlier.
 
-[Full reference](docs/reference.md) · [Examples](examples/) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
+[Full reference](docs/reference.md) · [Real-project proof](examples/real-projects.sh) · [Examples](examples/) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)

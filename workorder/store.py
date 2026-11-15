@@ -1415,16 +1415,18 @@ def test_timeout(record, override=None):
 
 def run_test(command, root, timeout=None, capture_output=True, *, isolated=False):
     """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
+    from .python_imports import environment
+    env = environment(root, copy_environment() if isolated else os.environ.copy())
     # Keep the ordinary subprocess path when there is no deadline. With a deadline,
     # use a process group so child test runners cannot keep captured pipes open.
     if timeout is None:
         return subprocess.run(list(command), cwd=root, capture_output=capture_output,
                               encoding="utf-8", errors="replace",
-                              env=copy_environment() if isolated else None)
+                              env=env)
     with subprocess.Popen(list(command), cwd=root, stdout=subprocess.PIPE if capture_output else None,
                           stderr=subprocess.PIPE if capture_output else None,
                           encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
-                          env=copy_environment() if isolated else None) as process:
+                          env=env) as process:
         try:
             output, errors = process.communicate(timeout=timeout)
             return subprocess.CompletedProcess(command, process.returncode, output, errors)
@@ -1481,7 +1483,7 @@ def ci_environment():
 
 def test_cache_path(root, fingerprint, command, timeout):
     folder = root / git(root, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
-    key = digest(packed([2, fingerprint, list(command), timeout]).encode('ascii'))
+    key = digest(packed([3, fingerprint, list(command), timeout]).encode('ascii'))
     return folder / (key + '.json')
 
 
@@ -1561,6 +1563,13 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
     """
     owner = cache_root if cache_root is not None else root
     isolated = owner != root
+    if isolated:
+        from .python_imports import check, environment
+        failure = check(root, owner, command, environment(root, copy_environment()), timeout)
+        if failure:
+            run = subprocess.CompletedProcess(command, failure, '', '')
+            run.cached = False
+            return run
     logical = list(command if logical_command is None else logical_command)
     timeout = positive_seconds(timeout) if timeout is not None else None
     ci = ci_environment()

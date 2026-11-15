@@ -90,6 +90,7 @@ def parser():
     renew = commands.add_parser("renew", help="record implemented and the task's test again on the current"
                                 " commit (after a squash merge or rebase); merges are computed")
     renew.add_argument("--task", required=True)
+    renew.add_argument("--refactor", action="store_true", help="keep the refactor declaration after a rebase")
     note = commands.add_parser("note", help="set the next action or add a dated Progress line")
     note.add_argument("--task", required=True)
     note.add_argument("--next", dest="next_text", help="set the task's next field")
@@ -160,15 +161,32 @@ def invalid_reason(root, item):
     return "the code changed while the command ran"
 
 
+def finding_tasks(text):
+    return set(re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', text))
+
+
 def done_refusal(tid, status, lines):
-    """Describe the refusal without presenting the proposed DONE as a written claim."""
+    """Show this task's findings once and one next action; summarize other tasks."""
+    reasons = list(dict.fromkeys(part.strip() for line in lines if line.startswith('  Missing:')
+                                 for part in line.removeprefix('  Missing:').splitlines() if part.strip()))
+    own, other = [], set()
+    for reason in reasons:
+        owners = finding_tasks(reason)
+        if owners and tid not in owners:
+            other |= owners
+        else:
+            own.append(reason)
     if status in gate.FINISHED:
-        reasons = [line.removeprefix('  Missing:').strip() for line in lines if line.startswith('  Missing:')]
-        print(f"{tid} stays {status}; this change was refused: " + '; '.join(reasons))
-        lines = [line for line in lines if line.startswith('  Next:')]
+        print(f'{tid} stays {status}; this change was refused:')
     elif status is not None:
-        print(f"{tid}: DONE was not written; the status stays {status}")
-    print("\n".join(line for line in lines if line.startswith(("  Missing:", "  Next:"))))
+        print(f'{tid}: DONE was not written; the status stays {status}')
+    for reason in own:
+        print(f'  Missing:  {reason}')
+    if other:
+        print(f'  Other:    {len(other)} other tasks have findings ({", ".join(sorted(other))}); '
+              'workorder check --base <target> --run-tests shows them')
+    steps = [line for line in lines if line.startswith('  Next:')]
+    print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
 
 
 @s.test_output_session()
@@ -221,7 +239,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             raise s.Refused(f'{tid}: its test files changed; use --needs-review')
         material = gate.repository_test_files(root, revision, gate.records(root, errors={}))
         material |= gate.strict_test_files(root, record, revision)
-        assertion_problems = gate.assertion_problems(root, revision, record, paths=material)
+        assertion_problems = gate.assertion_problems(root, revision, record,
+            paths=gate.refactor_test_files(root, record, revision), material=material)
         if assertion_problems:
             raise s.Refused('\n'.join(assertion_problems))
         if not no_code_change and not any(gate.needs_task_receipt(path)
@@ -256,7 +275,10 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         results = {}
         stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results)
-        if stub:
+        if stub and needs_review and isinstance(stub, gate.ComparisonProblem):
+            if not base:
+                print(f'Note: {stub}')
+        elif stub:
             done_refusal(tid, status, [f'  Missing:  {stub}'])
             return 1
         if base:
@@ -279,9 +301,19 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                                                        notes=notes, results=results, pending_review=needs_review, jobs=jobs)
             if not needs_review:
                 problems += [note for note in notes if gate._accepts_allow_label(note)]
-            for review_note in notes:
-                if review_note != wrapper:
+            problems = list(dict.fromkeys(problems))
+            other_notes = set()
+            for review_note in dict.fromkeys(notes):
+                owners = finding_tasks(review_note)
+                if review_note in problems:
+                    continue
+                if owners and tid not in owners and gate._accepts_allow_label(review_note):
+                    other_notes |= owners
+                elif review_note != wrapper:
                     print(f"Note: {review_note}")
+            if other_notes and not problems:
+                print(f'Note: {len(other_notes)} other tasks have findings ({", ".join(sorted(other_notes))}); '
+                      'workorder check --base <target> --run-tests shows them')
             if problems:
                 done_refusal(tid, status, [f'  Missing:  {problem}' for problem in problems])
                 return 1
@@ -372,6 +404,11 @@ def main(argv=None):
                                 'so changes to its tests are reviewed')
             named = (options.test_paths if options.test_paths is not None else
                      gate.paths_named_by_command(options.test, root) if options.test else None)
+            requested = (options.test_paths if options.test_paths is not None else
+                         gate.paths_named_by_command(options.test, root, include_missing=True) if options.test else [])
+            for path in requested:
+                if not s.local_path(root, path).exists():
+                    print(f'Warning: {path} does not exist; create it in this change or correct --test.')
             for path in [*(named or []), *(options.code_paths or [])]:
                 s.local_path(root, path)
             if options.test_first:
@@ -437,11 +474,12 @@ def main(argv=None):
             if not command:
                 raise s.Refused(f"{options.task} declares no test; add test: to tasks/{options.task}.md,"
                                 " or put the test command after --")
+            refactor = options.refactor or gate.latest_test_run(root, record).get('refactor', False)
             failed = False
             # Merges are computed from Git history; renew never records one that might not count.
             for kind in ("implemented", "test"):
                 item = s.receipt(root, options.task, kind, command if kind == "test" else (),
-                                 timeout=options.timeout)
+                                 timeout=options.timeout, refactor=refactor if kind == "test" else False)
                 detail = f" exit {item['exit_code']}" if "exit_code" in item else ""
                 print(f"{options.task} {kind} {item['commit'][:7]}{detail} - recorded")
                 reason = gate.uncounted(root, s.record(root, options.task), s.entries(root, options.task))

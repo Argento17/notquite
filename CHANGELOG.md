@@ -1,6 +1,29 @@
 # Changelog
 
-## 0.15.0 (unreleased)
+## 0.15.0 (15 Nov 2026)
+
+- Put each test checkout's src/ and root first on PYTHONPATH. Probe project
+  imports with the test interpreter before using a comparison, including a
+  cached or parallel run. Outside imports are unavailable comparisons accepted
+  only by the task label, never evidence of weak tests or a passing refactor.
+  Init notices installed src packages. Add real offline editable-install tests.
+- Count pytest.warns, deprecated_call, raises and fail, plus unittest assertion
+  context managers. Scan only added or changed test functions against the base
+  syntax tree; leave unchanged functions and comment-only edits alone.
+- Warn about missing paths named by new --test. Permit local command repairs on
+  unfinished tasks without receipts. Renew preserves a refactor declaration
+  after a rebase and accepts --refactor explicitly.
+- Require workorder-allow:scope:ID or an approving review for code outside a
+  task's scope; a test-change label cannot accept it. Print shared assertion
+  findings once. Done lists its task's findings, one summary for other tasks,
+  and one next step. Unsupported claims no longer display Evidence: CLOSED.
+- Detect PEP 735 test, tests or dev dependency groups. Generated workflows
+  upgrade pip to 25.1 or newer and install the selected group and project.
+- During a merge commit, include MERGE_HEAD when finding the target merge base,
+  so target-owned test changes are not attributed to the branch's refactor.
+- Add an editable src case to shortcuts.sh and a Linux/Python 3.12 job for
+  real-projects.sh, exercising Click and attrs with three honest changes and
+  three shortcuts each. Network setup must be verified on a connected host.
 
 - Count assertion helpers in the test file, path conftest files and imported
   test material, following up to four calls. Recognise assert, verify, check,

@@ -546,7 +546,9 @@ def test_workflow_installs_kit_runs_tests_and_checker():
              (PACKAGE / ".github/workflows/check.yml").read_text().splitlines()
              if line.strip().startswith("- run:")]
     assert steps == ["- run: python -m pip install -e '.[test]'",
-                     "- run: python -m pytest -n auto", "- run: workorder check"]
+                     "- run: python -m pytest -n auto", "- run: workorder check",
+                     "- run: python -m pip install -e '.[test]'",
+                     "- run: sh examples/real-projects.sh python"]
 
 
 def test_test_before_implementation_does_not_complete_task(clones):
@@ -1998,9 +2000,9 @@ def test_show_owes_what_check_owes_for_a_stale_claim(local_repo):
     git(local_repo, "commit", "-qam", "Later change")
     task(local_repo, "TASK-1", ships="none", status="DONE")
     shown = ok(local_repo, "show", "--task", "TASK-1")
-    assert "Evidence: CLOSED" in shown and "a passing test on the code marked DONE" in shown
+    assert "Evidence: claim not supported on this code" in shown and "a passing test on the code marked DONE" in shown
     checked = cli(local_repo, "check", "TASK-1")
-    assert checked.returncode == 1 and "Evidence: CLOSED" in checked.stdout
+    assert checked.returncode == 1 and "Evidence: claim not supported on this code" in checked.stdout
     reason = "the DONE claim is on code other than the tested code; run workorder renew --task TASK-1"
     assert reason in shown and reason in checked.stdout
     assert cli(local_repo, "check").returncode == 1

@@ -22,7 +22,7 @@ Install: `pipx install workorder`.
 | `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--review warn\|refuse] [--all-tests] [--require-task] [--require-task-ignore GLOB] [--require-test-first] [--approving-review] [--timeout SECONDS] [--jobs N]` | Checks changed task records and receipts, all repository test roots, every task whose tests changed, and dependents. Refuses stale claims, changed receipts, unsupported definitions and removed tasks; test changes are refused unless a reviewer adds the label or approves the current head; --review warn is optional. `--allow` accepts reviewed definition/test changes, REF failures and outcome changes, and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
 | `workorder show --task ID` | The task as a record: Claimed and Evidence status, what is still owed, dependencies, title, owner and test; mission, summary and next when filled in; body sections, a dated receipt timeline, any computed merge and Progress notes. Prints a next step for outstanding evidence or unclaimed Acceptance work |
 | `workorder note --task ID [--next TEXT] [NOTE]` | Sets next when supplied; adds `- YYYY-MM-DD: NOTE` at the end of Progress when a note is supplied. Give either or both |
-| `workorder renew --task ID [--timeout SECONDS] [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded by `renew` |
+| `workorder renew --task ID [--refactor] [--timeout SECONDS] [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded by `renew` |
 | `workorder repair --task ID` | Verifies a conflicted legacy append, keeps the common prefix, and converts each side's extra lines to receipt files |
 | `workorder claim --task ID` / `release --task ID [--force]` | Takes or gives up a task with a pushed tag; `--force` releases a claim whose clone or worktree is gone, and records that it was forced |
 | `workorder claims` | Active claims |
@@ -70,6 +70,10 @@ a note. The pull-request check refuses it by default until the task label or a
 current-head approving review accepts it, even if no test files changed.
 The label supplies `--allow TASK-6`. The main check after merge needs no label.
 Later `renew`, `receipt test` or `done` runs do not clear an unmerged review request.
+An unfinished task with no receipts can repair its command locally without a
+label; once receipts exist, the existing review rule applies. `new --test`
+warns about a named path that does not exist yet. Creating it before `new`,
+including an untracked file in the same change, avoids the warning.
 The flag does not accept failed current tests, assertion-free Python tests,
 missing evidence, changed test commands or dependencies. Without it, `done`
 refuses test changes locally. Pre-commit and Stop report test-file changes as
@@ -85,7 +89,9 @@ selected helpers and configuration, must be unchanged since the merge base, and
 its declared test must pass on both versions. A local target must be available.
 A pytest command without paths includes discovered test files in this check.
 Explicit `test_paths` cannot hide test files selected by the command.
-The test receipt records optional `refactor: true`. The pull-request check reruns
+The test receipt records optional `refactor: true`. `renew` keeps that declaration
+across rebases; `renew --refactor` also sets it explicitly. A later ordinary
+`receipt test` starts a run without the declaration. The pull-request check reruns
 the comparison with `--run-tests` and prints:
 
 ```text
@@ -136,7 +142,7 @@ matter between two `---` lines, one
 `key: value` per line, each key once. These seven fields are required: `id`,
 `title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
 
-A value is plain single-line text, a JSON string, or a list. `note` appends a line under Progress. `done` clears `next` and changes the status line to DONE after checking the claim, and `done --note` also appends a dated line. Other task text is preserved. `note --next "TEXT"` replaces or adds the next field, including existing folded/literal values; an empty string clears it. With no NOTE it adds no Progress entry. `done --note` writes the handover line and new receipts only when DONE is written. A refusal leaves both unchanged, so retries do not duplicate them. Use `workorder note` to record progress separately during unfinished work. Refusal says `TASK-1: DONE was not written; the status stays IN_PROGRESS`, then the Missing lines. If already finished, it says `TASK-7 stays DONE; this change was refused: <reason>`. After a real failure, Next says `fix the code or the test, then run workorder done again`. `done` refuses a missing or empty Scope or Acceptance section, including sections containing only HTML template comments: `fill in Scope and Acceptance first`. It checks this before recording evidence. It preserves the status line's plain, single-quoted or double-quoted style, and its existing line endings. Success says `TASK-1 DONE: its declared test passed on this code`, followed by `; still owes: merge of the tested code` when applicable (and any other delivery debt). A separate line asks you to commit tasks/ and .workorder/, adding `and push` only with an origin remote. It warns when this clone has no pre-commit hook. With a locally available target, it runs the test-change checks below against the merge base of HEAD and that ref, plus the tests of affected finished tasks, before writing DONE and refuses with exit 1 when they find a problem, preserving the prior status. It adds `a reviewer accepts it with the label workorder-allow:<ID> (or an approving review)` to the same diagnostic. It does not fetch. Without a target it prints `could not compare with the target: fetch origin first`. Local main/master is used on a branch when no remote target is available. A passing run that does not count reports whether files or HEAD changed while it ran; generated files such as __pycache__/ should be added to .gitignore before committing and running done again. `done` needs a concrete declared command; use the individual receipts for `test: any`. A task
+A value is plain single-line text, a JSON string, or a list. `note` appends a line under Progress. `done` clears `next` and changes the status line to DONE after checking the claim, and `done --note` also appends a dated line. Other task text is preserved. `note --next "TEXT"` replaces or adds the next field, including existing folded/literal values; an empty string clears it. With no NOTE it adds no Progress entry. `done --note` writes the handover line and new receipts only when DONE is written. A refusal leaves both unchanged, so retries do not duplicate them. Use `workorder note` to record progress separately during unfinished work. Refusal says `TASK-1: DONE was not written; the status stays IN_PROGRESS`, then the task's distinct Missing lines and one Next line. Findings about other tasks get one summary line; `check --base REF --run-tests` shows their details. If already finished, it says `TASK-7 stays DONE; this change was refused:` followed by its reason. After a real failure, Next says `fix the code or the test, then run workorder done again`. `done` refuses a missing or empty Scope or Acceptance section, including sections containing only HTML template comments: `fill in Scope and Acceptance first`. It checks this before recording evidence. It preserves the status line's plain, single-quoted or double-quoted style, and its existing line endings. Success says `TASK-1 DONE: its declared test passed on this code`, followed by `; still owes: merge of the tested code` when applicable (and any other delivery debt). A separate line asks you to commit tasks/ and .workorder/, adding `and push` only with an origin remote. It warns when this clone has no pre-commit hook. With a locally available target, it runs the test-change checks below against the merge base of HEAD and that ref, plus the tests of affected finished tasks, before writing DONE and refuses with exit 1 when they find a problem, preserving the prior status. It adds `a reviewer accepts it with the label workorder-allow:<ID> (or an approving review)` to the same diagnostic. It does not fetch. Without a target it prints `could not compare with the target: fetch origin first`. Local main/master is used on a branch when no remote target is available. A passing run that does not count reports whether files or HEAD changed while it ran; generated files such as __pycache__/ should be added to .gitignore before committing and running done again. `done` needs a concrete declared command; use the individual receipts for `test: any`. A task
 file that cannot be read is reported as a problem of that task; the other tasks
 are still checked. Fields starting with `x-` (such as `x-issue`) are your own:
 they are kept and never checked.
@@ -569,8 +575,7 @@ Declared refactors and valid no-code-change runs are exempt. This check only
 covers Python function changes; a failing run does not prove that every changed
 function was exercised or that the test checks the intended result.
 
-In new or changed Python test files, a test function without a recognised
-assertion is refused by `done` and the base check, even without `--run-tests`:
+An added or changed Python test function without a recognised assertion is refused by `done` and the base check, even without `--run-tests`:
 
 ```text
 TASK-2: test_div in tests/test_div.py asserts nothing that can fail
@@ -581,7 +586,8 @@ and treated like `assert True`. This includes `assert 1 == 1`, literal container
 and arithmetic on literals. Equality with the same name, attribute or subscript
 on both sides, such as `assert value == value` or `assert row['id'] == row['id']`,
 is also refused. Expressions are inspected, never evaluated.
-`pytest.raises` (including aliases) and calls whose names start with `assert`,
+`pytest.raises`, `pytest.warns`, `pytest.deprecated_call`, `pytest.fail` (including aliases),
+`self.assertWarns`, `self.assertRaises` and `self.assertLogs` and calls whose names start with `assert`,
 `verify`, `check`, `expect` or `ensure` count. Other called functions count when
 their bodies contain an assertion: Workorder follows up to four helper calls
 within the test file, conftest.py files on its path, and imported test-material
@@ -593,8 +599,10 @@ The task's explicit `workorder-allow:TASK-2` label accepts an unusual valid test
 approving review alone and `--review warn` do not accept it. `done` still refuses
 unrecognised syntax; record passing evidence with `renew`, set the completion
 claim after checking Acceptance, and obtain the task label for the pull request.
-Current test failures still refuse even with the label. Unchanged files are left
-alone. A missing new module alone cannot make an assertion-free function evidence
+Current test failures still refuse even with the label. Only added or changed test functions are scanned, by comparing syntax trees
+with the merge base. Comments and unchanged functions in an edited file are
+left alone. A smoke test that only checks that a call does not raise can be
+accepted with the task label. A missing new module alone cannot make an assertion-free function evidence
 for a change. These checks do not judge assertion meaning.
 
 Adding `div` to `from calc import mul` is an addition when the existing import
@@ -851,9 +859,10 @@ the check says `main moved since TASK-2 was tested: merge it and run workorder r
 
 When all tasks adding receipts declare optional `code_paths`, changed code
 outside their combined files and folders is refused, for example
-`src/unrelated.py is outside the code paths of TASK-2`. A contributing task
-label (or an approving review) accepts it; `workorder-allow:no-task` also
-accepts the code-to-task requirement. Tasks without the field keep the
+`src/unrelated.py is outside the code paths of TASK-2`. The contributing task's
+`workorder-allow:scope:TASK-2` label (or an approving review) accepts it.
+`workorder-allow:TASK-2` accepts test changes only; `workorder-allow:no-task`
+accepts only the code-to-task requirement, not scope findings. Tasks without the field keep the
 existing behavior; no task or receipt migration is needed. Files are exact
 matches and folders include descendants, not similarly named siblings.
 When a task omits `code_paths`, `done` lists the code files touched by the change:
@@ -1171,7 +1180,7 @@ Other claimed tasks retain their Claimed and Evidence statuses. If HEAD differs
 from the implementation, a successful Result says the declared test passed on
 implemented code, naming that commit; it does not say it passed on current code. A timeline test that does not count includes `(does not count: <reason>)`, even if the command exited 0. For implementation, tests or Acceptance work, `show` suggests `workorder done --task ID`. With `test: any`, that advice asks for a concrete command first; individual receipts remain available for tasks keeping `any`.
 
-Before a merge, `merge of the tested code` is owed. Advice about differing merged code is used only if the target has commits since the merge base touching implementation paths. A stale claim does not change the recorded evidence's computed state; its Result names the mismatch, for example: `Result: the DONE claim is on code other than the tested code; run workorder renew --task TASK-1`.
+Before a merge, `merge of the tested code` is owed. Advice about differing merged code is used only if the target has commits since the merge base touching implementation paths. A stale claim does not change the recorded evidence's computed state, but an unsupported claim displays `Evidence: claim not supported on this code` instead of `Evidence: CLOSED`; its Result names the mismatch, for example: `Result: the DONE claim is on code other than the tested code; run workorder renew --task TASK-1`.
 
 ## Task-first development
 
@@ -1225,10 +1234,12 @@ shows the diff without writing and exits 1 if an update is needed.
 A generated workflow installs project
 test dependencies first, choosing and reporting the first match:
 
-1. A `test` extra in pyproject.toml: `python -m pip install -e '.[test]'`.
-2. requirements-dev.txt, otherwise requirements.txt: `python -m pip install -r FILE`.
-3. A task command that uses pytest: `python -m pip install pytest`.
-4. Otherwise a warning step says `No project test dependencies detected` and
+1. A `test`, `tests` or `dev` group under `[dependency-groups]`, in that order:
+   `python -m pip install --upgrade 'pip>=25.1' && python -m pip install --group GROUP .`.
+2. A `test` extra in pyproject.toml: `python -m pip install -e '.[test]'`.
+3. requirements-dev.txt, otherwise requirements.txt: `python -m pip install -r FILE`.
+4. A task command that uses pytest: `python -m pip install pytest`.
+5. Otherwise a warning step says `No project test dependencies detected` and
    installs no extra test tools. Add the dependencies your tests need. The check
    reports `pytest is not installed` when a command needs it but it is absent.
    Pytest is installed automatically only for a detected pytest task.
@@ -1314,3 +1325,49 @@ it cannot detect a completion claim made only in chat.
 `init --claude --check` reports missing hook setup without writing it. Codex users
 keep the AGENTS.md block; it uses `workorder note --task ID --next "TEXT" "NOTE"`
 to leave the next action and progress together.
+
+### Installed Python projects and comparison copies
+
+Tests run with the checkout's `src/` (when present), then its root, before the
+inherited `PYTHONPATH`. This also protects a current clone sharing another
+clone's editable environment. Base-code, old-test, stub and REF self-runs use
+the copy's roots. Before using a copy result, a short probe uses the same
+interpreter, startup flags, environment and working directory to locate its
+own top-level packages, including src and flat namespaces. Cached package comparisons
+still create the copy and probe imports; projects without packages retain the
+fast cache lookup. `init` prints one line when its Python environment can find
+an installed package belonging to a src layout.
+
+An outside import reports, for example:
+
+```text
+TASK-1: could not compare with origin/main: the tests import click from /checkout/src/click, outside the comparison copy; add pythonpath = ["src"] under [tool.pytest.ini_options] or install the package non-editable
+```
+
+This is a comparison that could not run. It never proves that a test is weak,
+that it passes on main's code, or that a refactor passed. The task's explicit
+`workorder-allow:TASK-1` label accepts the unavailable comparison; approval and
+warning mode do not. `done --needs-review` can record a pending review for it.
+Current test failures still refuse. A wrapper whose Python interpreter cannot
+be identified also produces an unavailable comparison. The probe checks Python
+startup resolution; tests or plugins can subsequently change import behavior.
+
+When `MERGE_HEAD` exists, comparison uses the merge base between the target and
+the pending merge's parents. A merge of main therefore compares against the
+incoming main tip. Test changes brought by main are not branch edits; changes
+made by the branch or conflict resolution remain subject to review.
+
+For dependency groups, pip 25.1 or newer supports `--group`. If upgrading pip
+is unavailable, use `uv pip install --group tests -e .` with a group-capable uv,
+or install the group's requirements (including included groups) from a
+maintained requirements file, then `python -m pip install -e .`. Choose the
+actual group name from the project. Workorder's generated workflow uses the
+pip upgrade route; it does not silently omit a group when installation fails.
+
+`sh examples/real-projects.sh python` prepares disposable editable installs of
+Click and attrs, then checks an honest feature, bug fix and refactor plus
+assert-True, edited-expected-value and skip shortcuts in each. It needs network
+access for clones and dependencies, saves commands and results under a fresh
+temporary directory, and prints a single final PASS/FAIL result. The repository
+runs it on Linux with Python 3.12. This proof covers the example operations,
+not each upstream project's complete test suite.

@@ -18,6 +18,8 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import sysconfig
+import venv
 
 
 parent = Path(sys.argv[1]).expanduser().resolve()
@@ -336,10 +338,43 @@ try:
     report(repo, "Add a second test_mul_negative that shadows the failing one",
            reasons=("asserts nothing that can fail", "so any change needs review", "its tests from main fail"))
 
+    repo, log = base(15, honest=True)
+    git(repo, log, "checkout", "-q", "main")
+    (repo / "src/calc").mkdir(parents=True)
+    (repo / "calc.py").rename(repo / "src/calc/__init__.py")
+    write(repo, "pyproject.toml", '[build-system]\nrequires = []\nbuild-backend = "build_backend"\nbackend-path = ["."]\n')
+    write(repo, "build_backend.py", "import pathlib, zipfile\n\ndef build_editable(wheel_directory, config_settings=None, metadata_directory=None):\n    filename = 'wo_sample-1.0-py3-none-any.whl'\n    with zipfile.ZipFile(pathlib.Path(wheel_directory) / filename, 'w') as z:\n        z.writestr('wo_sample.pth', str(pathlib.Path('src').resolve()) + '\\n')\n        z.writestr('wo_sample-1.0.dist-info/METADATA', 'Metadata-Version: 2.1\\nName: wo-sample\\nVersion: 1.0\\n')\n        z.writestr('wo_sample-1.0.dist-info/WHEEL', 'Wheel-Version: 1.0\\nGenerator: local-test\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n')\n        z.writestr('wo_sample-1.0.dist-info/RECORD', '')\n    return filename\n")
+    commit(repo, log, "Move calc into an editable src package")
+    git(repo, log, "checkout", "-q", "change")
+    git(repo, log, "merge", "-q", "main")
+    environment = repo.parent / "venv"
+    venv.EnvBuilder(with_pip=True).create(environment)
+    executable = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    site = subprocess.check_output([str(executable), "-c", 'import sysconfig; print(sysconfig.get_path("purelib"))'], text=True).strip()
+    (Path(site) / "test_tools.pth").write_text(sysconfig.get_path("purelib") + "\n")
+    run([str(executable), "-m", "pip", "install", "--no-index", "--no-build-isolation", "--no-deps", "-e", "."], repo, log)
+    command = [str(executable), "-m", "pytest", "-q", "tests/test_calc.py"]
+    # Set the interpreter in the task before implementation, on main.
+    git(repo, log, "checkout", "-q", "main")
+    for tid in ("TASK-1", "TASK-2"):
+        path = repo / f"tasks/{tid}.md"
+        path.write_text(re.sub(r"(?m)^test: .*", lambda _: "test: " + json.dumps(shlex.join(command)), path.read_text()))
+    commit(repo, log, "Use the editable environment for tests")
+    run(wo + ["renew", "--task", "TASK-1"], repo, log)
+    commit(repo, log, "Renew the existing task in its editable environment")
+    git(repo, log, "checkout", "-q", "change")
+    git(repo, log, "merge", "-q", "main")
+    write(repo, "src/calc/__init__.py", good_code + "\n\ndef div(a, b):\n    return a / b\n")
+    write(repo, "tests/test_calc.py", test_code + "\n\ndef test_div():\n    from calc import div\n    assert div(6, 3) == 2\n")
+    commit(repo, log, "Implement division in the installed src package")
+    run(wo + ["done", "--task", "TASK-2"], repo, log)
+    commit(repo, log, "Record editable src completion")
+    report(repo, "Honest src-layout feature with an editable install", command=command, check_exit=0)
+
     (output / "results.json").write_text(json.dumps(dict(version=version, cases=results), indent=2)
                                        + "\n", encoding="utf-8")
     print(f"\nVerified results: {output / 'results.json'}", flush=True)
-    print("PASS: 14 cases verified; 12 shortcuts refused by default; 4 still refused with --review warn; honest changes pass with no warning.", flush=True)
+    print("PASS: 15 cases verified; 12 shortcuts refused by default; 4 still refused with --review warn; honest changes pass with no warning.", flush=True)
 except (OSError, RuntimeError, StopIteration) as error:
     print(f"FAIL: {error}\nComplete logs remain in {output}", file=sys.stderr)
     sys.exit(1)

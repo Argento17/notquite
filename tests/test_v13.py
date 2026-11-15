@@ -130,7 +130,9 @@ def test_local_completion_refuses_other_finished_task_regression(local_repo, act
         git(root, 'add', 'tasks', '.workorder')
         result = cli(root, 'check', '--staged')
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "regression: TASK-1's test fails on this code" in result.stdout
+    expected = ('1 other tasks have findings (TASK-1)' if action == 'done'
+                else "regression: TASK-1's test fails on this code")
+    assert expected in result.stdout
 
 
 def test_done_reports_missing_target_once(local_repo):
@@ -328,11 +330,11 @@ def test_done_reviews_changed_tests_of_other_finished_tasks(local_repo):
     commit_all(root)
     result = cli(root, 'done', '--task', 'TASK-2')
     assert result.returncode == 1, result.stdout + result.stderr
-    assert 'TASK-1: its test files lost or changed' in result.stdout
+    assert '1 other tasks have findings (TASK-1)' in result.stdout
     assert store.record(root, 'TASK-2')['status'] == 'IN_PROGRESS'
     output = ok(root, 'done', '--task', 'TASK-2', '--needs-review')
     assert 'pending review: the pull request needs workorder-allow:TASK-2' in output
-    assert 'workorder-allow:TASK-1' in output
+    assert '1 other tasks have findings (TASK-1)' in output
     ok(root, 'check', '--base', 'origin/main', '--run-tests', '--all-tests', '--allow', 'TASK-1,TASK-2')
 
 
