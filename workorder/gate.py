@@ -2304,7 +2304,8 @@ def local_command_problems(root, base, record, staged=False, *, allow_finished=F
                 for change in requirement_changes(root, base, record, staged)
                 if change.startswith('test changed:')]
     if (not problems or not allow_finished or record['status'] not in FINISHED
-            or committed_status(root, record['id'], base) not in FINISHED):
+            or (committed_status(root, record['id'], base) not in FINISHED
+                and not any(entry['kind'] == 'test' for entry in s.entries(root, record['id'], staged)))):
         return problems
     results = {} if results is None else results
     key = _test_key(record, timeout)
@@ -2317,8 +2318,13 @@ def local_command_problems(root, base, record, staged=False, *, allow_finished=F
     if failed:
         return problems + [failed]
     if notes is not None:
-        notes.extend(problems)
+        notes.append(test_update_note(record['id'], 'test command'))
     return []
+
+
+def test_update_note(tid, what):
+    return (f'{tid}: {what} changed and passes on this code; after committing run workorder renew --task {tid}; '
+            f'the pull request needs workorder-allow:{tid}')
 
 
 def local_test_update(root, record, staged=False, *, counts=None, timeout=None):
@@ -2335,6 +2341,16 @@ def local_test_update(root, record, staged=False, *, counts=None, timeout=None):
     changed = changed_paths(root, 'HEAD', staged)
     if not staged:
         changed |= changed_paths(root, 'HEAD', True)
+    # Stop also checks the index when the edit is staged, so an unstaged repair
+    # cannot stand in for the code about to be committed.
+    test_staged = staged or bool((paths | {f'tasks/{tid}.md'}) & changed_paths(root, 'HEAD', True))
+    if test_staged:
+        merge_head = root / s.git(root, 'rev-parse', '--git-path', 'MERGE_HEAD').stdout.strip()
+        if merge_head.is_file():
+            for parent in merge_head.read_text(encoding='ascii').split():
+                # Content brought in by the other parent is not a branch test edit.
+                paths = {path for path in paths if _test_bytes(root, path, staged=True)
+                         != _test_bytes(root, path, parent)}
     if not command_changed and not paths & changed:
         return None, None
     history = s.entries(root, tid, rev='HEAD')
@@ -2345,9 +2361,6 @@ def local_test_update(root, record, staged=False, *, counts=None, timeout=None):
     command = declared_test(record)
     if not command:
         return None, None
-    # Stop also checks the index when the edit is staged, so an unstaged repair
-    # cannot stand in for the code about to be committed.
-    test_staged = staged or bool((paths | {f'tasks/{tid}.md'}) & changed_paths(root, 'HEAD', True))
     if test_staged and declared_test(s.record(root, tid, True)) != command:
         return None, None
     with tempfile.TemporaryDirectory(prefix='workorder-update-') as temporary:
@@ -2357,8 +2370,7 @@ def local_test_update(root, record, staged=False, *, counts=None, timeout=None):
     if failure:
         return None, failure
     what = 'test command' if command_changed else 'test files'
-    return (f'{tid}: {what} changed and passes on this code; after committing run workorder renew --task {tid}; '
-            f'the pull request needs workorder-allow:{tid}'), None
+    return test_update_note(tid, what), None
 
 
 def local_test_problems(root, base, record, *, pending_review=False, command_notes=False, **kwargs):
@@ -3056,14 +3068,17 @@ def has_work_receipt(root, base, changed, staged=False, allow=(), new_tasks=None
     return False
 
 
-def check_summary(counts, run_tests=False, single_unclaimed=False):
+def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all_tests=False):
     claims = "not claimed finished" if single_unclaimed else f"{counts['claimed']} claimed DONE or CLOSED"
     line = f"checked {_count(counts['tasks'], 'task')} ({claims})"
     if run_tests:
         ran = counts.get('tests', 0)
         cached = counts.get('cached', 0)
         tasks = len(counts.get('tested_tasks', ()))
-        line += f"; ran {tasks} " + ("task's declared test" if tasks == 1 else "tasks' declared tests")
+        if unchanged_all_tests:
+            line = 'no task changed in this change'
+        line += f"; ran {tasks} " + ('finished ' if unchanged_all_tests else '')
+        line += "task's declared test" if tasks == 1 else "tasks' declared tests"
         if cached and cached == ran:
             line += " (cached)"
         elif cached:
@@ -3081,6 +3096,10 @@ def check_summary(counts, run_tests=False, single_unclaimed=False):
 def summarize_notes(notes, verbose=False):
     """Group identical kinds of task notes, retaining the full lines with --verbose."""
     notes = list(dict.fromkeys(notes))
+    # A command repair already gives the same renewal and review advice as a file edit.
+    file_repairs = {test_update_note(note.split(':', 1)[0], 'test files') for note in notes
+                    if ': test command changed and passes on this code;' in note}
+    notes = [note for note in notes if note not in file_repairs]
     if verbose:
         return notes
     groups = {}

@@ -171,7 +171,8 @@ def finding_tasks(text):
 
 def other_findings(other):
     if other:
-        print(f'  Other:    {len(other)} other tasks have findings ({", ".join(sorted(other))}); '
+        wording = 'task has' if len(other) == 1 else 'tasks have'
+        print(f'  Other:    {len(other)} other {wording} findings ({", ".join(sorted(other))}); '
               'workorder check --base <target> --run-tests shows them')
 
 
@@ -256,7 +257,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             raise s.Refused('\n'.join(assertion_problems))
         if not no_code_change and not any(gate.needs_task_receipt(path)
                                           for path in gate.changed_paths(root, revision)):
-            raise s.Refused(f'{tid}: no code changed since {reference}; nothing was implemented')
+            raise s.Refused(f'{tid}: no code changed since {reference}; nothing was implemented; '
+                            'land the task on main first, then do the work on a branch')
         if 'code_paths' not in record:
             code = sorted(path for path in gate.changed_paths(root, revision) - material
                           if gate.needs_task_receipt(path))
@@ -388,7 +390,8 @@ def main(argv=None):
             if options.all_tests and not options.run_tests:
                 raise s.Refused("--all-tests goes with --run-tests")
             if options.task and options.run_tests:
-                raise s.Refused("--run-tests checks every selected task; leave out the task")
+                raise s.Refused('--run-tests does not run with a task name; '
+                                'use workorder check --run-tests without a task')
             if options.timeout is not None and not options.run_tests:
                 raise s.Refused("--timeout goes with --run-tests")
         if options.action == "receipt" and options.timeout is not None and options.kind != "test":
@@ -569,7 +572,10 @@ def main(argv=None):
                 print("\n".join(f"Note: {note}" for note in gate.summarize_notes(notes, options.verbose)))
             if options.run_tests and counts["tests"] == 0:
                 print("no declared test ran in this check")
-            print(gate.check_summary(counts, options.run_tests or bool(counts.get('tests'))))
+            print(gate.check_summary(counts, options.run_tests or bool(counts.get('tests')),
+                                    unchanged_all_tests=bool(options.base and options.all_tests
+                                                             and not counts['tasks']
+                                                             and counts.get('tested_tasks'))))
             return int(bool(problems))
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:

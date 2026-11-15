@@ -179,7 +179,7 @@ def test_done_reports_other_findings_once_in_summary(local_repo):
     assert result.returncode == 1
     missing = [line for line in result.stdout.splitlines() if 'Missing:' in line]
     assert not any('TASK-3' in line for line in missing), result.stdout
-    assert result.stdout.count('other tasks have findings') == 1, result.stdout
+    assert result.stdout.count('other task has findings') == 1, result.stdout
     assert result.stdout.count('Next:') == 1, result.stdout
 
 

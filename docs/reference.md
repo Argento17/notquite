@@ -36,7 +36,8 @@ why). Every command resolves the repository root, so commands also work from sub
 `done` also requires the implemented code to differ from the target merge base.
 Without a target, it compares with the commit that created the task (HEAD for an
 uncommitted task). Otherwise it refuses: `TASK-1: no code changed since <ref>;
-nothing was implemented`. Documentation, ignore rules, license files and image assets do not count as code changes. Use `--no-code-change` only for verification tasks with no code edits, including
+nothing was implemented; land the task on main first, then do the work on a branch`.
+Documentation, ignore rules, license files and image assets do not count as code changes. Use `--no-code-change` only for verification tasks with no code edits, including
 no edits to test scripts. The comparison uses the target merge base, or task
 creation without a target. A changed code file refuses even with review flags:
 
@@ -77,15 +78,19 @@ including an untracked file in the same change, avoids the warning.
 The flag does not accept failed current tests, assertion-free Python tests,
 missing evidence, changed test commands or dependencies. Without it, `done`
 refuses test changes locally. The pre-commit hook notes test changes, including
-test edits made while merging main. The pull-request check refuses them without
+branch edits made while merging main. During a pending merge, test files whose
+staged content equals the incoming parent's content get no test-change note.
+The pull-request check refuses branch test changes without
 the reviewer's `workorder-allow:<ID>` label (or an approving review where allowed).
 For a finished task's changed test command or files, a passing new command lets
 the local hooks note the stale test receipt. Pre-commit runs the staged code;
 Stop also uses staged test edits when present, otherwise the working copy.
 Commit the test change, run `workorder renew --task ID`, then commit its receipts.
-The note names the task label needed for the pull request. `done` still refuses
-changed commands, as do hooks for tasks unfinished at the base. Failing tests
-and other missing completion evidence still refuse.
+The note names the task label needed for the pull request. A task marked DONE/CLOSED
+with test receipts gets this treatment even when it was finished on this branch.
+`done` still refuses changed commands. Hooks keep their existing command checks
+for tasks without test receipts; failing tests and other missing completion
+evidence still refuse.
 
 For a declared refactor, use `done --task ID --refactor`. Its test files, including
 selected helpers and configuration, must be unchanged since the merge base, and
@@ -791,6 +796,9 @@ a summary, except `--staged` with nothing in scope:
 checked 3 tasks (2 claimed DONE or CLOSED); ran 2 tasks' declared tests
 ```
 
+When `--base ... --run-tests --all-tests` runs finished tasks but no task changed,
+the summary says `no task changed in this change; ran 2 finished tasks' declared tests`.
+
 The run count appears when tests run and counts tasks, including failures and
 cached results. Current-code and base-code runs of one task count once. When all
 comparisons were cached the summary says `(cached)`; when some were, it says
@@ -1276,7 +1284,7 @@ fi
 if command -v workorder >/dev/null 2>&1; then
     exec workorder check --staged
 fi
-echo "pre-commit: warning: workorder is not on PATH (pipx install workorder); skipping task check" >&2
+echo "pre-commit: warning: workorder is not on PATH (pipx install workorder, or put the virtualenv that has workorder on PATH); skipping task check" >&2
 exit 0
 ```
 
@@ -1323,7 +1331,9 @@ with the NOT DONE refusal lines on stderr if one of those claims lacks support.
 With a locally available remote target, it runs the same test-change comparison
 for those completion claims. A held task newly set to CANCELLED also refuses,
 including a cancellation committed on this branch. Test-file changes are notes;
-command repairs for tasks already finished at the base are notes if the new command passes; other command changes refuse;
+command repairs for DONE/CLOSED tasks with test receipts are notes if the new command passes,
+including tasks finished on this branch. Stop uses staged test edits when present,
+otherwise the working copy. Tasks without test receipts keep their existing command checks;
 cancellation refusals include reviewer-label advice. A valid claim or unfinished work without such definition changes exits 0. This checks task records;
 it cannot detect a completion claim made only in chat.
 

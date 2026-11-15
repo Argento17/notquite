@@ -13,11 +13,11 @@ from . import store as s
 
 AGENT_BLOCK = r"""## Tasks
 - Start every session from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed, then run `workorder renew --task <id>` if the tested code changed. Use the repository's default branch name if it is not main. Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
-- Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
+- When agents share one Git identity, set `WORKORDER_AGENT` so claims tell them apart. Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - When creating a task, use `workorder new --code-paths <files or folders>` to set its code scope. Work on a branch and open a pull request. Land the task on main first, or include it with code whose test fails on the merge-base code and passes now; that new task needs no label. Otherwise a reviewer must accept the new definition with `workorder-allow:<id>` or an approving review.
-- After committing code and confirming every Acceptance item is met, fetch origin before `done` when there is an origin remote: `git fetch origin`. Then run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test on current and target code, checks affected finished tasks, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
+- After committing code and confirming every Acceptance item is met, fetch origin before `done` when there is an origin remote: `git fetch origin`. Then run `workorder done --task <id> --note "<what was done>"`. It records implementation when needed, runs the declared test on current and target code, checks affected finished tasks, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
 - For a refactor with unchanged test files that pass before and after, use `done --task <id> --refactor`. For intentional test changes, use `done --task <id> --needs-review`. It writes DONE with a pending review receipt; the pull request still needs `workorder-allow:<id>` or an approving review. Report the pending review to the user. A refused `done` writes no Progress note or receipts; use `workorder note` to leave a handover while fixing it.
-- Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
+- For unfinished work, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`; `done` clears `next`. Before stopping, commit tasks/ and .workorder/ with your work and push.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 """
 
@@ -29,7 +29,7 @@ fi
 if command -v workorder >/dev/null 2>&1; then
     exec workorder check --staged
 fi
-echo "pre-commit: warning: workorder is not on PATH (pipx install workorder); skipping task check" >&2
+echo "pre-commit: warning: workorder is not on PATH (pipx install workorder, or put the virtualenv that has workorder on PATH); skipping task check" >&2
 exit 0
 """
 

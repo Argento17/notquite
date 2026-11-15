@@ -2,6 +2,19 @@
 
 ## 0.15.0 (15 Nov 2026)
 
+- Let finished tasks with test receipts commit passing command repairs even
+  when completion was recorded on the branch. Pre-commit and Stop print one
+  repair note, without a command-change refusal beside it. Failing commands
+  still refuse; renewal and pull-request review remain required.
+- During a pending merge, omit the test-change note for staged test content
+  identical to the incoming parent's content. Branch test edits still count.
+- Use singular words for one other task's findings, and explain unchanged-task
+  runs of --all-tests plainly. Point missing-hook users to their virtualenv as
+  well as pipx. Add task-first advice when done finds no code change, and say
+  that --run-tests with a task name refuses without running tests.
+- Explain the expected missing-test warning and computed CLOSED in the quick
+  start. Keep note --next for unfinished work and tell agents sharing a Git
+  identity to set WORKORDER_AGENT in the generated instructions and README.
 - Put each test checkout's src/ and root first on PYTHONPATH. Probe project
   imports with the test interpreter before using a comparison, including a
   cached or parallel run. Outside imports are unavailable comparisons accepted
@@ -55,7 +68,7 @@
   the review label; done still refuses changed commands. A passing finished-task
   test rename or edit can be committed before renewal; the note says to run
   renew after committing. The pre-commit hook notes test changes, including
-  test edits made while merging main. The pull-request check refuses them
+  branch test edits made while merging main. The pull-request check refuses them
   without the reviewer label (or an approving review where allowed).
 - Keep failures as local progress notes when finished tasks are reopened, but
   require the task's explicit reviewer label when its current test fails in a

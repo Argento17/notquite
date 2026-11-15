@@ -109,7 +109,7 @@ def test_new_wrapper_requests_explicit_test_paths_before_writing(local_repo):
 
 
 @pytest.mark.parametrize('action', ['done', 'staged', 'stop'])
-def test_changed_command_refuses_locally(local_repo, monkeypatch, capsys, action):
+def test_changed_command_refuses_done_but_finished_hooks_note(local_repo, monkeypatch, capsys, action):
     root = local_repo
     reviewed_task(root)
     store.receipt(root, "TASK-1", "implemented")
@@ -128,14 +128,18 @@ def test_changed_command_refuses_locally(local_repo, monkeypatch, capsys, action
         if action == 'staged':
             git(root, 'add', 'tasks', '.workorder')
             result = cli(root, 'check', '--staged')
-            assert result.returncode == 1, result.stdout
+            assert result.returncode == 0, result.stdout
             output = result.stdout + result.stderr
         else:
             monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
-            assert hooks.run(root, 'stop') == 2
+            assert hooks.run(root, 'stop') == 0
             captured = capsys.readouterr()
             output = captured.out + captured.err
-    assert 'test changed:' in output
+    if action == 'done':
+        assert 'test changed:' in output
+    else:
+        assert output.count('test command changed and passes on this code') == 1
+        assert 'test changed:' not in output
     assert 'workorder-allow:TASK-1' in output
 
 
@@ -238,7 +242,7 @@ def test_all_tests_does_not_rerun_identical_current_and_ref_commands(local_repo)
 
 
 @pytest.mark.parametrize('action', ['done', 'stop'])
-def test_command_edit_without_remote_is_refused_against_head(local_repo, monkeypatch, capsys, action):
+def test_command_edit_without_remote_refuses_done_but_finished_stop_notes(local_repo, monkeypatch, capsys, action):
     root = local_repo
     fill_sections(task(root, ships='none', test=store.join_command([PYTHON, '-c', 'print(1)'])))
     commit_all(root)
@@ -253,8 +257,12 @@ def test_command_edit_without_remote_is_refused_against_head(local_repo, monkeyp
         store.receipt(root, 'TASK-1', 'test', [PYTHON, '-c', 'pass'])
         store.set_task_field(root, 'TASK-1', 'status', 'DONE')
         monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
-        assert hooks.run(root, 'stop') == 2
-        assert 'test changed:' in capsys.readouterr().err
+        assert hooks.run(root, 'stop') == 0
+        captured = capsys.readouterr()
+        assert not captured.err
+        assert captured.out.count('test command changed and passes on this code') == 1
+        assert 'workorder-allow:TASK-1' in captured.out
+        assert 'test changed:' not in captured.out
 
 
 @pytest.mark.parametrize('attributes', [False, True])
