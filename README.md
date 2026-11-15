@@ -94,13 +94,14 @@ workflow when one is absent. Existing instructions stay in place.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 ```
 
-`workorder init --claude` also installs Claude Code SessionStart and Stop hooks.
-SessionStart shows held tasks; Stop checks relevant completion claims and writes
-refusals to stderr with exit 2. The stop-loop guard exits 0.
+`workorder init --claude` installs Claude Code SessionStart and Stop hooks. SessionStart shows held tasks;
+Stop checks relevant completion claims and writes refusals to stderr with exit 2. The stop-loop guard exits 0.
 [Agent hook details](docs/reference.md#agent-hooks).
 
 ## Hooks and workflows
 `workorder init --light` writes a trial workflow with `--review warn` and no `--require-task`.
+For test-first work, write a failing test, run `new --test-first --test "..."`, and land the task and test on main before implementation.
+Use `init --test-first` to add `check --require-test-first`; tests added or changed with the work need the task's explicit reviewer label.
 
 The pre-commit hook checks staged work. With a target available locally, `done`
 also tests affected finished tasks. Fetch origin before `done`. A completed task's
@@ -113,7 +114,7 @@ The default workflow checks pull requests with
 pushes with `--run-tests --all-tests`. Each distinct command runs once per code
 version and timeout. If merged code differs, run `workorder renew --task <id>`.
 
-An APPROVED review on the current head by someone other than the author accepts review findings; labels still work.
+An APPROVED review on the current head by someone other than the author accepts review findings, except old-test failures and test-first exceptions, which need explicit labels.
 Review includes repository tests and every task whose tests changed. A task
 owns the files or folders its test names, plus pytest configuration on that path.
 New tests, harmless Python assertion edits and added import names need no
@@ -123,8 +124,7 @@ accepts only the code-to-task requirement. Current failures for completed tasks
 and runs reporting no passed tests still refuse. Labels added by the pull request's author are ignored; the workflow
 reads label events to identify who added them. [Review rules](docs/reference.md#checks-against-a-base).
 
-`init --check` reports missing setup without changing it. `init --update-workflow`
-shows a diff and refreshes the workflow. `--force` keeps a different hook as `pre-commit.workorder-previous` and calls it first.
+`init --check` reports missing setup without changing it. `init --update-workflow` shows a diff and refreshes the workflow. `--force` keeps a different hook as `pre-commit.workorder-previous` and calls it first.
 Generated workflows install detected test dependencies and pin the running Workorder version or installed Git commit. With no detected test dependencies, they install no extra test tools and print a warning. [Team setup](docs/reference.md#team-setup).
 
 [Full reference](docs/reference.md) · [Examples](examples/) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)

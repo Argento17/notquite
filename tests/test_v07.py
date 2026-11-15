@@ -45,9 +45,9 @@ def test_done_final_refusal_restores_record(local_repo, monkeypatch, capsys, fin
     fill_sections(path)
     explain = gate.explain
 
-    def refuse(root, tid, claim=None):
+    def refuse(root, tid, claim=None, rerun=False):
         if claim is not None:
-            return explain(root, tid, claim)
+            return explain(root, tid, claim, rerun=rerun)
         assert store.record(root, tid)['status'] == 'DONE'
         if final_error:
             raise store.Refused('final refusal')

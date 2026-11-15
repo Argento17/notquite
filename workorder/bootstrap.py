@@ -172,7 +172,7 @@ def claude_settings(root):
     return path, updated, changed
 
 
-def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False):
+def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
     settings = claude_settings(root) if claude else None
     hook = root / s.git(root, 'rev-parse', '--git-path', 'hooks/pre-commit').stdout.strip()
@@ -237,7 +237,8 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         workflow = WORKFLOW.replace('@DEPENDENCIES@', dependency_step).replace(
             '@WORKORDER@', shlex.quote(workorder_install())).replace(
             '@DEFAULT_BRANCH@', json.dumps([default_branch(root)])).replace(
-            '@REVIEW_OPTIONS@', '--review warn' if light else '--require-task').replace(
+            '@REVIEW_OPTIONS@', ('--review warn' if light else '--require-task')
+            + (' --require-test-first' if test_first else '')).replace(
             '@REVIEW_COMMENT@', '# Trial setup: restore defaults with workorder init --update-workflow.' if light
             else '# Test changes are refused unless a reviewer other than the author adds the label or approves this head; --review warn is optional.')
         original = path.read_text(encoding='utf-8') if path.exists() else ''

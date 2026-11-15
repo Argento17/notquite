@@ -228,7 +228,7 @@ def test_all_tests_runs_untouched_claims_once_without_history_change(local_repo,
         assert f"regression: {tid}'s test fails on this code" in result.stdout
         assert gate.verdict(root, store.record(root, tid)) == before[tid]
     assert receipts == {p: p.read_bytes() for p in (root / '.workorder').rglob('*.json')}
-    assert 'ran 1 declared test' in result.stdout
+    assert "ran 2 tasks' declared tests" in result.stdout
 
 
 def test_require_task_records_code_changes(local_repo):
@@ -466,11 +466,11 @@ def test_done_restores_status_if_final_check_errors(local_repo, monkeypatch, cap
     before = path.read_bytes()
     real_explain = gate.explain
 
-    def final_error(root, tid, claim=None):
+    def final_error(root, tid, claim=None, rerun=False):
         if claim is None:
             assert store.record(root, tid)['status'] == 'DONE'
             raise store.Refused('final check refused')
-        return real_explain(root, tid, claim)
+        return real_explain(root, tid, claim, rerun=rerun)
 
     monkeypatch.setattr(gate, 'explain', final_error)
     monkeypatch.chdir(root)

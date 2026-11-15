@@ -92,7 +92,7 @@ def test_workflow_review_event_and_allowances(local_repo, tmp_path):
     result = subprocess.run(['/bin/sh', '-eu', '-c', command], cwd=root, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     args = json.loads(result.stdout)
-    assert set(args[args.index('--allow') + 1].split(',')) == {'TASK-3', 'tests', 'no-task'}
+    assert '--allow' not in args  # approval does not manufacture explicit labels
     assert '--approving-review' in args
 
 

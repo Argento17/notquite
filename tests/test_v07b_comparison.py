@@ -184,7 +184,7 @@ def test_pytest_default_discovery_compares_changed_tests(local_repo):
     assert result.returncode == 0, result.stdout + result.stderr
     assert '2 passed' in result.stdout and '1 passed' not in result.stdout
     # The pathless command runs the new test. It does not own the file, so there is no REF replay.
-    assert 'ran 1 declared test' in result.stdout
+    assert "ran 1 task's declared test" in result.stdout
 
 
 @pytest.mark.parametrize('kind', ['script', 'binary'])
@@ -374,6 +374,8 @@ def test_malformed_base_task_definition_does_not_stop_other_tasks(local_repo):
 
 @pytest.mark.parametrize('config', ['.pytest.ini', 'pytest.toml', '.pytest.toml'])
 def test_alternate_standard_pytest_configs_cannot_hide_selection(local_repo, config):
+    if config.endswith('.toml') and pytest.version_tuple < (9,):
+        pytest.skip('pytest.toml and .pytest.toml are read by pytest 9 or newer')
     root = local_repo
     _, base = setup_tests(root, 'def test_one():\n    assert True\ndef test_two():\n    assert True\n',
                           f'{PYTHON} -m pytest -q')
@@ -386,6 +388,8 @@ def test_alternate_standard_pytest_configs_cannot_hide_selection(local_repo, con
 
 @pytest.mark.parametrize('config', ['.pytest.ini', 'pytest.toml', '.pytest.toml'])
 def test_alternate_pytest_configs_supply_custom_discovery_patterns(local_repo, config):
+    if config.endswith('.toml') and pytest.version_tuple < (9,):
+        pytest.skip('pytest.toml and .pytest.toml are read by pytest 9 or newer')
     root = local_repo
     _, _ = setup_tests(root, '', f'{PYTHON} -m pytest -q')
     body = '[pytest]\npython_files = ["check_*.py"]\n' if config.endswith('.toml') else '[pytest]\npython_files = check_*.py\n'

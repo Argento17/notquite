@@ -87,7 +87,7 @@ def test_check_and_show_use_claimed_and_evidence(local_repo):
     ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     for args in [('check', 'TASK-1'), ('show', '--task', 'TASK-1')]:
         output = ok(local_repo, *args)
-        assert 'Claimed:  DONE' in output and 'Evidence: supports the claim (nothing to ship)' in output
+        assert 'Claimed:  DONE' in output and 'Evidence: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)' in output
         assert 'computed CLOSED' not in output and 'Computed:' not in output
     assert 'Result: the declared test passed on this code' in ok(local_repo, 'check', 'TASK-1')
 

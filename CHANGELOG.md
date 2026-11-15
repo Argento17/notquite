@@ -1,7 +1,18 @@
 # Changelog
 
-## 0.14.0 (unreleased)
+## 0.14.0 (15 Nov 2026)
 
+- Show whether a finished task's tests landed before the change. Add
+  `new --test-first`, `done/check --require-test-first` and `init --test-first`.
+- Compare unowned Python tests from the base on current code. An approving
+  review cannot accept old-test failures or test-first exceptions; explicit
+  reviewer labels are required, and the check names uncovered findings.
+- Keep receipts through clean rebases when recorded paths match and all other
+  changes come from the target. Later edits still need new receipts.
+- Distinguish recorded evidence from fresh test runs and count tested tasks
+  instead of counting current-code and base-code runs as separate tests.
+- Skip the four pytest.toml cases below pytest 9 and exercise pytest 8.3.3 in
+  one test job. Keep the declared pytest minimum at 7.
 - Add `done --refactor` for unchanged test files passing on merge-base and current
   code. Record the optional declaration and show it to the pull-request reviewer.
 - Have `done --needs-review` write DONE with an optional pending review receipt.

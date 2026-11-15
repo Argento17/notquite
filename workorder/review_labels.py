@@ -1,7 +1,6 @@
 """Reviewer allowances from GitHub issue events, used by the generated workflow."""
 
 import json
-from pathlib import Path
 import re
 import sys
 
@@ -73,16 +72,7 @@ def main():
         return
     with open(sys.argv[3], encoding='utf-8') as stream:
         approved = accepted_review(pull_request, json.load(stream))
-    if approved:
-        from . import gate, store
-        root = store.repository(Path.cwd())
-        names = set(gate.task_names(root))
-        # Include removed tasks and orphaned receipts which the check can also name.
-        paths = store.metadata_texts(root, sys.argv[4])
-        names |= {Path(path).stem for path in paths if path.startswith('tasks/') and store.ID.fullmatch(Path(path).stem)}
-        names |= {store.receipt_task(path) for path in paths} - {None}
-        names |= {store.receipt_task(path) for path in store.receipt_paths(root)} - {None}
-        allowed = sorted(set(allowed) | names | {'tests', 'no-task'})
+    # Keep explicit labels separate: an approval cannot accept an old-test failure.
     arguments = ['--allow', ','.join(allowed)] if allowed else []
     if approved:
         arguments.append('--approving-review')

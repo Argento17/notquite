@@ -85,7 +85,7 @@ def test_reviewed_test_rename_runs_ref_command_on_restored_file(local_repo):
     path.write_text(path.read_text().replace('test_app.py', 'test_renamed.py'))
     result = check(root, base, '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'ran 2 declared tests' in result.stdout
+    assert "ran 1 task's declared test" in result.stdout
 
 
 @pytest.mark.parametrize('status', ['IN_PROGRESS', 'DONE'])
@@ -125,7 +125,7 @@ def test_worked_task_runs_fresh_ref_tests_without_test_file_edits(local_repo):
     touch(root)
     result = check(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'ran 1 declared test' in result.stdout
+    assert "ran 1 task's declared test" in result.stdout
     assert 'cached' not in result.stdout
 
 

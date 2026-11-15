@@ -4,6 +4,10 @@ Test changes are refused unless a reviewer adds the label. `--review warn` is an
 option that reports review findings without refusing them. A reviewer decides
 whether the intended behavior is right.
 
+The hooks run the test commands written in task files. Task files deserve the
+same review as code. `show` and plain `check` read recorded receipts; they do not
+rerun those commands. Use `check --run-tests` for a fresh run.
+
 | What Workorder checks | What it does not establish |
 | --- | --- |
 | Receipts record commands, results and the code they refer to. `done`, `receipt test`, `renew` and explicit `check --run-tests` execute fresh tests. | Anyone with write access can create a receipt. Receipt contents alone do not prove a command ran. |
@@ -17,7 +21,7 @@ whether the intended behavior is right.
 | `--all-tests --run-tests` runs every distinct DONE/CLOSED command and timeout once on current code; unchanged REF commands share that run. `--strict-tests` also reviews additions and refuses finished pytest runs with no passes. | Unfinished tasks' current failures are progress notes. |
 | `--require-task` applies to non-test code. It needs a new counting receipt on a task unfinished at the merge base, a new task proven red before green, or explicit `--allow ID`. | Renewing an unrelated finished task does not satisfy it without that approval. It does not prove the task describes every changed line. `--allow no-task` bypasses only this rule. |
 | New implementation receipts retain changed paths, blob IDs, modes and deletions, so matching squashes survive deleted branches and fresh clones. | A different landing on those paths still needs fresh evidence. Old receipts retain their existing matching rules. |
-| A branch receipt survives target-only changes when the current code exactly matches a clean merge of the receipt's code and the target. | Later branch edits and conflict resolutions still need fresh receipts. |
+| A branch receipt survives target-only changes when the current code exactly matches a clean merge of the receipt's code and the target. A rebase also counts when recorded paths match the receipt and every other path matches the target. | Later branch edits and changes to recorded paths still need fresh receipts. |
 | Only implicit hook runs may reuse local results, marked `(reused from HH:MM UTC)`. | Reuse does not detect changed environment variables, services or ignored dependencies. Explicit commands run fresh; CI bypasses the persistent cache. |
 | `--allow ID` accepts reviewed definition/test changes or complete retirement. | It never supplies missing evidence or excuses current failures for finished tasks, invalid dependencies or changed retained receipts. |
 | A finished task's current test must fail on the merge-base code with its new or changed tests. `done --refactor` accepts unchanged tests passing before and after; `done --no-code-change` exempts verification runs. | A failure does not establish that every assertion checks the requirement. Missing external dependencies do not count as proof. |
@@ -26,6 +30,8 @@ whether the intended behavior is right.
 | Refused `done` runs leave Progress and receipts unchanged. `new --code-paths` sets optional scope; `done` names changed code when scope is absent. | Scope is optional and does not prove that changed lines satisfy Acceptance. |
 | `done` and task-related staged checks run affected finished tasks when a target is available locally. | They do not fetch; a missing target is reported by `done`. Old receipts without paths require a broader code scope. |
 | Generated workflows accept allowance labels only when the latest add event names someone other than the pull request author. | Label access still needs repository review rules. A label never excuses a finished task's current failure. |
+| An approving review accepts ordinary review findings. Old tests failing on new code need the owning task's label, or `tests` for an unowned file. | Approval alone does not accept these behaviour changes. Unowned Python tests are compared using pytest; other unowned files receive static review. |
+| `--require-test-first` refuses finished claims with tests added or changed in the change unless the task label accepts them. `new --test-first` requires existing, failing tests. | A failing test can still be weak. Neither provenance nor assertion syntax establishes that it checks the requirement. |
 
 Recognised test folders have whole names `test`, `tests`, `testing`, `__tests__`,
 `spec`, `specs`, `fixtures`, `testdata`, `test_data`, `testsupport`, `test_support`,

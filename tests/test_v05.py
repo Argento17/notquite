@@ -82,7 +82,7 @@ def test_feature_checkout_recognises_target_merge(local_repo, method, checkout):
         git(root, 'checkout', '-q', '--detach', 'feature')
     ok(root, 'check')
     ok(root, 'check', 'TASK-1')
-    assert 'Evidence: CLOSED' in ok(root, 'show', '--task', 'TASK-1')
+    assert 'computed: CLOSED' in ok(root, 'show', '--task', 'TASK-1')
     assert 'TASK-1' not in ok(root, 'ready')
 
 
@@ -170,7 +170,8 @@ def test_check_reports_actual_tests_run(local_repo, kind, expected):
         commit_all(root)
     result = cli(root, 'check', '--base', base, '--run-tests')
     assert result.returncode == (0 if kind in {'pass', 'empty'} else 1)
-    assert f'; ran {expected} declared test{"" if expected == 1 else "s"}' in result.stdout
+    summary = f"; ran {expected} " + ("task's declared test" if expected == 1 else "tasks' declared tests")
+    assert summary in result.stdout
     assert ('no declared test ran in this check' in result.stdout) == (expected == 0)
 
 
@@ -299,7 +300,7 @@ def test_squashed_done_without_delivery_stays_done_on_a_feature_checkout(local_r
     git(root, 'commit', '-qm', 'Squash completed work')
     git(root, 'checkout', '-q', '-b', 'feat/next')
     ok(root, 'check')
-    assert 'Evidence: CLOSED' in ok(root, 'show', '--task', 'TASK-1')
+    assert 'computed: CLOSED' in ok(root, 'show', '--task', 'TASK-1')
     assert 'TASK-1' not in ok(root, 'ready')
 
 
