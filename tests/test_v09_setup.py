@@ -47,9 +47,17 @@ def execute(command, root, tmp_path, labels):
                     'pathlib.Path(os.environ["ARGS_LOG"]).write_text(json.dumps(sys.argv[1:]))\n')
     tool.chmod(0o755)
     event = tmp_path / 'event.json'
-    event.write_text(json.dumps({'pull_request': {'labels': [{'name': name} for name in labels]}}))
-    env = {**os.environ, 'PATH': str(binary) + os.pathsep + os.environ['PATH'],
-           'ARGS_LOG': str(log), 'GITHUB_EVENT_PATH': str(event), 'BASE': 'origin/main'}
+    event.write_text(json.dumps({'pull_request': {'user': {'id': 1, 'login': 'author'},
+                                                'labels': [{'name': name} for name in labels]}}))
+    gh = binary / 'gh'
+    pages = [[{'event': 'labeled', 'label': {'name': name}, 'actor': {'id': 2, 'login': 'reviewer'}}
+              for name in labels]]
+    gh.write_text(f'#!{PYTHON}\nimport json\nprint(json.dumps({pages!r}))\n')
+    gh.chmod(0o755)
+    env = {**os.environ, 'PATH': str(binary) + os.pathsep + str(Path(PYTHON).parent) + os.pathsep + os.environ['PATH'],
+           'ARGS_LOG': str(log), 'GITHUB_EVENT_PATH': str(event), 'BASE': 'origin/main',
+           'RUNNER_TEMP': str(tmp_path), 'GH_REPO': 'example/project', 'PR_NUMBER': '7',
+           'PYTHONPATH': str(PACKAGE)}
     process = subprocess.run(['/bin/sh', '-eu', '-c', command], cwd=root, env=env,
                              capture_output=True, text=True)
     assert process.returncode == 0, process.stdout + process.stderr
@@ -186,7 +194,7 @@ def test_claude_stop_command_blocks_at_the_client_boundary(local_repo):
     task(local_repo, status='DONE')
     blocked = stop('{}')
     assert blocked.returncode == 2
-    assert 'NOT QUITE' in blocked.stderr and 'owes' in blocked.stderr
+    assert 'NOT DONE' in blocked.stderr and 'owes' in blocked.stderr
     looping = stop('{"stop_hook_active": true}')
     assert looping.returncode == 0
     assert looping.stderr == ''
@@ -200,4 +208,4 @@ def test_claude_stop_command_blocks_at_the_client_boundary(local_repo):
     path.write_text(path.read_text().replace('"IN_PROGRESS"', '"DONE"'))
     allowed = stop('{}')
     assert allowed.returncode == 0, allowed.stdout + allowed.stderr
-    assert 'NOT QUITE' not in allowed.stderr
+    assert 'NOT DONE' not in allowed.stderr

@@ -1450,6 +1450,28 @@ def checkout_bytes(root, path):
     return result.stdout
 
 
+def checkout_contents(root, entries):
+    """Materialize index files in one Git call with the index's checkout rules.
+
+    cat-file --batch --filters reports the unfiltered size even when conversion
+    changes the byte count. checkout-index provides unambiguous file boundaries,
+    including binary data and newline paths, without keeping every blob in memory.
+    """
+    if not entries:
+        return
+    requests = b''.join(os.fsencode(path) + b'\0' for path, _, _ in entries)
+    with tempfile.TemporaryDirectory(prefix='workorder-checkout-') as temporary:
+        destination = Path(temporary)
+        result = subprocess.run(['git', 'checkout-index', '--stdin', '-z', '--ignore-skip-worktree-bits',
+                                 '--prefix=' + destination.as_posix() + '/'], cwd=root,
+                                input=requests, capture_output=True, timeout=30,
+                                env={**os.environ, 'GIT_ATTR_SOURCE': index_tree(root)})
+        if result.returncode:
+            raise Refused('could not read staged checkout content: ' + result.stderr.decode('utf-8', 'replace').strip())
+        for path, _, mode in entries:
+            yield path, mode, (destination / path).read_bytes()
+
+
 @cached_read
 def index_tree(root):
     # write-tree updates the index's tree cache. Preserve the caller's index,
@@ -1553,7 +1575,8 @@ def missing_test_dependency(command, code, output, root=None):
     return None
 
 
-def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None):
+def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None,
+            no_code_change=False):
     repository(root)
     definition = record(root, tid)
     commit = head(root)
@@ -1563,6 +1586,8 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         raise Refused("commit the code before recording implementation or tests; "
                       + describe_dirty(dirty_paths(root)))
     data = {"kind": kind, "commit": commit, "code": code_digest(root, commit)}
+    if kind == 'test' and no_code_change:
+        data['no_code_change'] = True
     if kind == 'implemented':
         from . import gate
         base, _ = gate.implementation_base(root, definition)

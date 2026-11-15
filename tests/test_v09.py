@@ -18,7 +18,7 @@ def test_hook_stop_blocks_with_exit_2_and_reason_on_stderr_exits_0_when_stop_hoo
     monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
     assert hooks.run(local_repo, 'stop') == 2
     output = capsys.readouterr()
-    assert 'NOT QUITE' in output.err and 'owes' in output.err
+    assert 'NOT DONE' in output.err and 'owes' in output.err
     monkeypatch.setattr(sys, 'stdin', io.StringIO('{"stop_hook_active": true}'))
     assert hooks.run(local_repo, 'stop') == 0
     assert not capsys.readouterr().err

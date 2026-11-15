@@ -134,7 +134,7 @@ def run(root, event):
     problems = []
     if claimed:
         for line in gate.check(root):
-            owner = re.match(r'(?:NOT QUITE\s+)?([A-Z][A-Z0-9]*-[1-9][0-9]*)\b', line)
+            owner = re.match(r'(?:NOT DONE\s+)?([A-Z][A-Z0-9]*-[1-9][0-9]*)\b', line)
             if owner and owner[1] in claimed:
                 problems.append(line)
     _, owned = local_claims(root)
@@ -163,7 +163,7 @@ def run(root, event):
     for note in gate.summarize_notes(notes):
         print(f'Note: {note}')
     if problems:
-        print('\n'.join(line if line.startswith('NOT QUITE') else 'NOT QUITE  ' + line
+        print('\n'.join(line if line.startswith('NOT DONE') else 'NOT DONE  ' + line
                         for line in problems), file=sys.stderr)
         return 2
     return 0

@@ -237,7 +237,7 @@ def test_done_reports_missing_ref_instead_of_silently_skipping(local_repo):
     filled_task(local_repo)
     result = cli(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'REF comparison skipped' in result.stdout and 'not available locally' in result.stdout
+    assert 'could not compare with the target: fetch origin first' in result.stdout
 
 
 def test_staged_finished_scope_addition_is_checked_from_index(local_repo):

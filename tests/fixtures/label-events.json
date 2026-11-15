@@ -1,0 +1,31 @@
+{
+  "pull_request": {
+    "number": 7,
+    "user": {"login": "author", "id": 10},
+    "labels": [
+      {"name": "workorder-allow:TASK-2"},
+      {"name": "workorder-allow:TASK-3"},
+      {"name": "workorder-allow:tests"},
+      {"name": "workorder-allow:no-task"},
+      {"name": "workorder-allow:TASK-4"},
+      {"name": "workorder-allow:TASK-5"},
+      {"name": "workorder-allow:TASK-6;touch injected"}
+    ]
+  },
+  "pages": [
+    [
+      {"id": 101, "event": "labeled", "label": {"name": "workorder-allow:TASK-2"}, "actor": {"id": 10, "login": "Author"}},
+      {"id": 102, "event": "labeled", "label": {"name": "workorder-allow:no-task"}, "actor": {"id": 20, "login": "reviewer"}},
+      {"id": 103, "event": "labeled", "label": {"name": "workorder-allow:TASK-3"}, "actor": {"id": 10, "login": "author"}},
+      {"id": 104, "event": "unlabeled", "label": {"name": "workorder-allow:TASK-3"}, "actor": {"id": 20, "login": "reviewer"}}
+    ],
+    [
+      {"id": 105, "event": "unlabeled", "label": {"name": "workorder-allow:no-task"}, "actor": {"id": 10, "login": "author"}},
+      {"id": 106, "event": "labeled", "label": {"name": "workorder-allow:no-task"}, "actor": {"id": 10, "login": "author"}},
+      {"id": 107, "event": "labeled", "label": {"name": "workorder-allow:TASK-3"}, "actor": {"id": 20, "login": "reviewer"}},
+      {"id": 108, "event": "labeled", "label": {"name": "workorder-allow:tests"}, "actor": {"id": 20, "login": "reviewer"}},
+      {"id": 109, "event": "labeled", "label": {"name": "workorder-allow:TASK-5"}, "actor": null},
+      {"id": 110, "event": "labeled", "label": {"name": "workorder-allow:TASK-6;touch injected"}, "actor": {"id": 20, "login": "reviewer"}}
+    ]
+  ]
+}

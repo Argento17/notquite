@@ -39,16 +39,17 @@ def fake_commands(tmp_path):
     folder = tmp_path / 'bin'
     folder.mkdir()
     log = tmp_path / 'commands.jsonl'
-    for name in ('python', 'workorder', 'jq'):
+    for name in ('python', 'workorder', 'gh'):
         path = folder / name
         path.write_text(f'#!{PYTHON}\n'
                         'import json, os, pathlib, sys\n'
                         'with open(os.environ["COMMAND_LOG"], "a") as stream:\n'
                         '    stream.write(json.dumps([pathlib.Path(sys.argv[0]).name, *sys.argv[1:]]) + "\\n")\n'
-                        'if pathlib.Path(sys.argv[0]).name == "jq": print("TASK-8")\n')
+                        'if sys.argv[1:3] == ["-m", "workorder.review_labels"]: print("TASK-8")\n')
         path.chmod(0o755)
     return {**os.environ, 'PATH': str(folder), 'COMMAND_LOG': str(log),
-            'BASE': 'origin/review-branch', 'GITHUB_EVENT_PATH': '/tmp/event.json'}, log
+            'BASE': 'origin/review-branch', 'GITHUB_EVENT_PATH': '/tmp/event.json',
+            'RUNNER_TEMP': str(tmp_path), 'GH_REPO': 'example/project', 'PR_NUMBER': '7'}, log
 
 
 @pytest.fixture
@@ -299,7 +300,7 @@ def test_stop_blocks_only_unsupported_completion_claims(local_repo, monkeypatch,
     output = capsys.readouterr()
     assert output.out == ''
     if expected:
-        assert 'NOT QUITE  TASK-1' in output.err
+        assert 'NOT DONE  TASK-1' in output.err
     else:
         assert output.err == ''
 
@@ -337,7 +338,7 @@ def test_stop_handles_malformed_tasks_according_to_their_claim(local_repo, monke
     assert hooks.run(local_repo, 'stop') == expected
     output = capsys.readouterr()
     assert output.out == ''
-    assert ('NOT QUITE' in output.err) == bool(expected)
+    assert ('NOT DONE' in output.err) == bool(expected)
 
 
 @pytest.mark.parametrize('direct', [
@@ -370,5 +371,5 @@ def test_git_install_pin_follows_metadata_not_the_readme_text(local_repo, publis
                    "      - name: Add your test dependencies here\n"
                    "        run: |\n"
                    '          echo "::warning::No project test dependencies detected; add your test dependencies here" >&2\n')
-    assert text.strip().replace(shlex.quote(pin), 'workorder==0.12.0') in reference.replace(
+    assert text.strip().replace(shlex.quote(pin), 'workorder==0.13.0') in reference.replace(
         example_dependencies, placeholder)

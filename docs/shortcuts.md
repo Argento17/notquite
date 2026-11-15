@@ -9,7 +9,8 @@ The first seven cases break negative multiplication: `mul(-3, 4)` returns `1`
 instead of `-12`. Their task exists unfinished on main, and the branch records
 fresh implementation and passing test receipts. The problem is in the changed
 tests, not missing receipts. Cases 10 and 11 leave the multiplication task's
-records untouched; its changed tests are still reviewed.
+records untouched; its changed tests are still reviewed. Case 11 also checks
+that `done` refuses locally, then sets DONE manually to exercise the base check.
 
 The runner checks every case with both commands:
 
@@ -35,7 +36,8 @@ workorder check --base main --run-tests --all-tests --require-task --review warn
 | 13 | Add `return` before an assertion that already failed on main, then claim DONE | Edit to a base-failing test; REF failure |
 | 14 | Append a second test function that shadows the base-failing one | Edit to a base-failing test; REF failure |
 
-Case 12's task is unfinished on main. A renewal of a task already DONE there
+Case 12's task stays unfinished, so it makes no completion claim. Finishing a
+refactor whose tests pass on the base needs `--allow ID`. A renewal of a task already DONE there
 would need `--allow ID` to satisfy `--require-task`. A root test file does not
 make the production files test material.
 

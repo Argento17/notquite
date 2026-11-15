@@ -163,7 +163,7 @@ def test_check_reports_actual_tests_run(local_repo, kind, expected):
     if kind != 'empty':
         task(root, ships='none', status='DONE', test=command)
         first = raw_receipt(root)
-        tested = raw_receipt(root, 'test', parents=[first['hash']], at=1,
+        tested = raw_receipt(root, 'test', parents=[first['hash']], at=1, no_code_change=True,
                              command=store.split_command(command) if command != 'any' else [PYTHON, '-c', 'pass'])
         for item in (first, tested):
             store.write_receipt(root, 'TASK-1', item)

@@ -159,14 +159,14 @@ def test_needs_review_records_a_deliberate_test_change(local_repo, monkeypatch, 
     hook_output = hook.stdout + hook.stderr
     assert hook.returncode == 0, hook_output
     assert 'lost or changed' in hook_output
-    assert 'NOT QUITE' not in hook_output
+    assert 'NOT DONE' not in hook_output
     local_claim(root, 'TASK-6')
     refuse_network(monkeypatch)
     monkeypatch.setattr(sys, 'stdin', __import__('io').StringIO('{}'))
     assert hooks.run(root, 'stop') == 0
     stopped = capsys.readouterr()
     assert 'lost or changed' in stopped.out
-    assert 'NOT QUITE' not in stopped.err
+    assert 'NOT DONE' not in stopped.err
     blocked = cli(root, 'check', '--review', 'refuse', '--base', 'origin/main')
     assert blocked.returncode == 1
     assert 'lost or changed' in blocked.stdout
@@ -198,7 +198,8 @@ def test_done_refuses_until_code_changes(local_repo):
     (root / 'app.py').write_text('items = [1]\n', encoding='utf-8')
     commit_all(root, 'Implement')
     finished = cli(root, 'done', '--task', 'TASK-1')
-    assert finished.returncode == 0, finished.stdout + finished.stderr
+    assert finished.returncode == 1, finished.stdout + finished.stderr
+    assert "its test passes on origin/main's code too" in finished.stdout
 
 
 def test_require_task_needs_a_task_from_the_merge_base_or_allow(local_repo):
@@ -392,7 +393,7 @@ def test_local_checks_ignore_tests_and_requirements_added_only_on_target(local_r
     (root / 'app.py').write_text('items = [1]\n', encoding='utf-8')
     commit_all(root, 'Implement')
     if action == 'done':
-        result = cli(root, 'done', '--task', 'TASK-1')
+        result = cli(root, 'done', '--no-code-change', '--task', 'TASK-1')
         code, output = result.returncode, result.stdout + result.stderr
     else:
         store.receipt(root, 'TASK-1', 'implemented')

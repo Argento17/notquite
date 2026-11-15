@@ -667,7 +667,7 @@ def test_explain_refuses_false_done_and_says_what_to_do(clones):
     task(one, status="DONE")
     result = cli(one, "check", "TASK-1")
     assert result.returncode == 1
-    assert result.stdout.startswith("NOT QUITE  TASK-1")
+    assert result.stdout.startswith("NOT DONE  TASK-1")
     assert "Claimed:  DONE" in result.stdout and "Missing:  implementation" in result.stdout
     assert "Next:     commit the code, then: workorder receipt implemented --task TASK-1" in result.stdout
     assert "Result: NOT DONE" in result.stdout

@@ -59,7 +59,7 @@ def test_two_tasks_in_one_squash_protect_their_own_paths(local_repo, mode, prote
     # A base check still rejects TASK-1's stale claim, but must accept TASK-2.
     result = cli(root, "check", "--base", landing, *(["--staged"] if mode == "staged" else []))
     assert result.returncode == 1 and "TASK-1" in result.stdout
-    assert "NOT QUITE  TASK-2" not in result.stdout
+    assert "NOT DONE  TASK-2" not in result.stdout
     if mode != "committed":
         commit_all(root, "Commit TASK-2 claim")
     # Shared paths and earlier unreceipted work still belong to TASK-2.

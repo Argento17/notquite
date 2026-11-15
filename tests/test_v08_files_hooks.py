@@ -43,7 +43,7 @@ def test_stop_blocks_task_file_changes_against_target(local_repo, monkeypatch, c
     if change == 'committed':
         commit_all(local_repo)
     assert stop(local_repo, monkeypatch) == 2
-    assert 'NOT QUITE  TASK-1' in capsys.readouterr().err
+    assert 'NOT DONE  TASK-1' in capsys.readouterr().err
 
 
 def test_stop_checks_held_task_even_when_unchanged(local_repo, monkeypatch, capsys):
@@ -51,7 +51,7 @@ def test_stop_checks_held_task_even_when_unchanged(local_repo, monkeypatch, caps
     commit_all(local_repo)
     local_claim(local_repo, 'TASK-1')
     assert stop(local_repo, monkeypatch) == 2
-    assert 'NOT QUITE  TASK-1' in capsys.readouterr().err
+    assert 'NOT DONE  TASK-1' in capsys.readouterr().err
 
 
 def test_stop_respects_task_merge_target(local_repo, monkeypatch, capsys):
@@ -64,7 +64,7 @@ def test_stop_respects_task_merge_target(local_repo, monkeypatch, capsys):
     commit_all(local_repo)
     git(local_repo, 'update-ref', 'refs/heads/main', 'HEAD')
     assert stop(local_repo, monkeypatch) == 2
-    assert 'NOT QUITE  TASK-1' in capsys.readouterr().err
+    assert 'NOT DONE  TASK-1' in capsys.readouterr().err
 
 
 def test_session_start_shows_only_held_tasks_without_ready_scan(local_repo, monkeypatch, capsys):
@@ -102,7 +102,7 @@ def test_check_reports_undecodable_task_only_and_checks_others(local_repo, mode)
     assert result.returncode == 1
     assert 'Traceback' not in output
     assert 'tasks/TASK-1.md' in output and 'UTF-8' in output
-    assert 'NOT QUITE  TASK-2' in output
+    assert 'NOT DONE  TASK-2' in output
     assert 'TASK-2: tasks/TASK-1.md' not in output
 
 

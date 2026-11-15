@@ -73,7 +73,7 @@ def test_local_commands_review_test_changes(local_repo, monkeypatch, capsys, act
         assert store.record(root, 'TASK-1')['status'] == 'DONE'
     assert code == (1 if action == 'done' else 0), output
     if action != 'done':
-        assert 'Note:' in output and 'NOT QUITE' not in output
+        assert 'Note:' in output and 'NOT DONE' not in output
     assert reason in output
     assert 'a reviewer can accept it in the pull request with the workorder-allow:TASK-1 label' in output
 

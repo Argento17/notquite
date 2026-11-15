@@ -21,16 +21,16 @@ def fill_sections(path):
     return path
 
 
-def evidence(root, tid='TASK-1'):
+def evidence(root, tid='TASK-1', verification=False):
     store.receipt(root, tid, 'implemented')
-    store.receipt(root, tid, 'test', gate.declared_test(store.record(root, tid)))
+    store.receipt(root, tid, 'test', gate.declared_test(store.record(root, tid)), no_code_change=verification)
 
 
 def supported(root, status='DONE', tid='TASK-1', test=PASS):
     path = task(root, tid, ships='none', test=test)
     if git(root, 'status', '--porcelain'):
         commit_all(root)
-    evidence(root, tid)
+    evidence(root, tid, verification=True)  # fixture verifies code already present at the base
     path.write_text(path.read_text().replace('"IN_PROGRESS"', f'"{status}"'))
     return path
 
@@ -69,7 +69,7 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
     pin = shlex.quote(bootstrap.workorder_install())
     generated = snapshot[3].decode()
     assert pin in generated
-    assert generated.strip().replace(pin, 'workorder==0.12.0') in reference.replace(
+    assert generated.strip().replace(pin, 'workorder==0.13.0') in reference.replace(
         example_dependencies, placeholder)
 
 
@@ -518,7 +518,7 @@ def test_acceptance_summary_counts_only_supported_contractless_claims(local_repo
 def test_docs_state_review_rights_and_opt_in_policies():
     text = (PACKAGE / 'docs/reference.md').read_text()
     for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
-                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.12.0'):
+                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.13.0'):
         assert phrase in text
     readme = (PACKAGE / 'README.md').read_text()
     for target in ('docs/reference.md', 'docs/guarantees.md', 'docs/shortcuts.md'):

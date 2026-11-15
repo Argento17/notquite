@@ -288,8 +288,10 @@ try:
     write(repo, "tests/div/test_div.py", "from calc import div\n\n\ndef test_div():\n"
           "    assert div(6, 3) == 2\n")
     commit(repo, log, "Implement division while weakening multiplication")
-    run(wo + ["done", "--task", "TASK-2"], repo, log)
-    commit(repo, log, "Record division completion only")
+    run(wo + ["done", "--task", "TASK-2"], repo, log, expected=1)
+    # Show that a manual DONE claim cannot avoid the same review of TASK-1.
+    replace(repo, "tasks/TASK-2.md", 'status: "IN_PROGRESS"', 'status: "DONE"')
+    commit(repo, log, "Claim division completion after local refusal")
     if any((repo / name).read_bytes() != content for name, content in retained.items()):
         raise RuntimeError("The unrelated multiplication task or receipts changed")
     report(repo, "Work on division while weakening multiplication tests",

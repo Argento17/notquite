@@ -15,7 +15,7 @@ AGENT_BLOCK = r"""## Tasks
 - Start every session from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed, then run `workorder renew --task <id>` if the tested code changed. Use the repository's default branch name if it is not main. Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - Land the task on main before starting its code, then work on a branch and open a pull request. If task and code must share a pull request, ask a reviewer to accept the new definition with `workorder-allow:<id>`.
-- After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
+- After committing code and confirming every Acceptance item is met, fetch origin before `done` when there is an origin remote: `git fetch origin`. Then run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test on current and target code, checks affected finished tasks, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
 - If `done` refuses because you changed tests on purpose, rerun with `--needs-review`. It records evidence and leaves IN_PROGRESS with a pending review note. Set DONE in the reviewed pull request when Acceptance is met; test changes are refused unless a reviewer adds the label `workorder-allow:<id>`. Report the pending review to the user.
 - Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
@@ -39,7 +39,7 @@ on:
     types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: @DEFAULT_BRANCH@
-permissions: {contents: read}
+permissions: {contents: read, pull-requests: read, issues: read}
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -56,11 +56,15 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE: origin/${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # Reviewed task ids, unowned tests, or the code-to-task requirement.
-          allow=$(jq -r '[.pull_request.labels[].name | select(test("^workorder-allow:([A-Z][A-Z0-9]*-[1-9][0-9]*|tests|no-task)$")) | sub("^workorder-allow:"; "")] | join(",")' "$GITHUB_EVENT_PATH")
-          # Test changes are refused unless a reviewer adds the label; --review warn is optional.
-          workorder check --base "$BASE" --run-tests --all-tests --require-task ${allow:+--allow "$allow"}
+          gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/events" > "$RUNNER_TEMP/workorder-label-events.json"
+          allow=$(python -m workorder.review_labels "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/workorder-label-events.json")
+          @REVIEW_COMMENT@
+          workorder check --base "$BASE" --run-tests --all-tests @REVIEW_OPTIONS@ ${allow:+--allow "$allow"}
 """
 
 
@@ -163,7 +167,7 @@ def claude_settings(root):
     return path, updated, changed
 
 
-def initialize(root, check=False, force=False, claude=False, update_workflow=False):
+def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
     settings = claude_settings(root) if claude else None
     hook = root / s.git(root, 'rev-parse', '--git-path', 'hooks/pre-commit').stdout.strip()
@@ -224,7 +228,10 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
                                '          echo "::warning::No project test dependencies detected; add your test dependencies here" >&2\n')
         workflow = WORKFLOW.replace('@DEPENDENCIES@', dependency_step).replace(
             '@WORKORDER@', shlex.quote(workorder_install())).replace(
-            '@DEFAULT_BRANCH@', json.dumps([default_branch(root)]))
+            '@DEFAULT_BRANCH@', json.dumps([default_branch(root)])).replace(
+            '@REVIEW_OPTIONS@', '--review warn' if light else '--require-task').replace(
+            '@REVIEW_COMMENT@', '# Trial setup: restore defaults with workorder init --update-workflow.' if light
+            else '# Test changes are refused unless a reviewer other than the author adds the label; --review warn is optional.')
         original = path.read_text(encoding='utf-8') if path.exists() else ''
         if update_workflow:
             print(''.join(difflib.unified_diff(original.splitlines(keepends=True),

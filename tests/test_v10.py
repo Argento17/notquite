@@ -62,7 +62,7 @@ def test_task_first_added_lines_cannot_hide_a_failing_ref_test(local_repo, monke
                                     capture_output=True, text=True)
             output = result.stdout + result.stderr
             assert result.returncode == 0, output
-            assert "Note:" in output and "NOT QUITE" not in output
+            assert "Note:" in output and "NOT DONE" not in output
         elif action == 'stop':
             local_claim(root, 'TASK-1')
             refuse_network(monkeypatch)
