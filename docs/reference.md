@@ -19,7 +19,7 @@ Install: `pipx install workorder`.
 | `workorder receipt live --task ID --target NAME -- CMD...` | Same, recorded after the deployment |
 | `workorder check [ID or tasks/ID.md]` / `check --task ID` | No argument: reads every task; one line per problem, or `check: OK`. With a task: an explanation of that task alone |
 | `workorder check --staged` | For the pre-commit hook: checks the staged versions of the tasks this commit touches (task file, receipts, contract or its evidence) and the tasks that depend on them; refuses a commit that newly claims DONE or CLOSED on code other than the implemented code, and changes to a task's test command; notes other requirement changes |
-| `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--review warn\|refuse] [--all-tests] [--require-task] [--timeout SECONDS]` | Checks changed task records and receipts, all repository test roots, every task whose tests changed, and dependents. Refuses stale claims, changed receipts, unsupported definitions and removed tasks; test changes are refused unless a reviewer adds the label; --review warn is optional. `--allow` accepts reviewed definition/test changes, REF failures and outcome changes, and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
+| `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--review warn\|refuse] [--all-tests] [--require-task] [--timeout SECONDS]` | Checks changed task records and receipts, all repository test roots, every task whose tests changed, and dependents. Refuses stale claims, changed receipts, unsupported definitions and removed tasks; test changes are refused unless a reviewer adds the label or approves the current head; --review warn is optional. `--allow` accepts reviewed definition/test changes, REF failures and outcome changes, and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
 | `workorder show --task ID` | The task as a record: Claimed and Evidence status, what is still owed, dependencies, title, owner and test; mission, summary and next when filled in; body sections, a dated receipt timeline, any computed merge and Progress notes. Prints a next step for outstanding evidence or unclaimed Acceptance work |
 | `workorder note --task ID [--next TEXT] [NOTE]` | Sets next when supplied; adds `- YYYY-MM-DD: NOTE` at the end of Progress when a note is supplied. Give either or both |
 | `workorder renew --task ID [--timeout SECONDS] [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded by `renew` |
@@ -43,7 +43,7 @@ When tests changed on purpose, rerun `done --task ID --needs-review`. Passing,
 supported evidence is recorded, but status stays IN_PROGRESS with a Progress note:
 
 ```text
-TASK-6 IN_PROGRESS; pending review: the pull request needs workorder-allow:TASK-6
+TASK-6 IN_PROGRESS; pending review: the pull request needs workorder-allow:TASK-6 (or an approving review)
 ```
 
 Changed shared test data and affected finished tasks are checked too. The note
@@ -51,7 +51,7 @@ lists their task labels or `workorder-allow:tests` for files without an owner.
 Current test failures still refuse completion with `--needs-review`.
 
 Set status DONE in the reviewed pull request once its evidence and Acceptance are
-complete. The label supplies `--allow TASK-6` to the pull-request check. The main
+complete. A current-head approving review also accepts the findings. The label supplies `--allow TASK-6` to the pull-request check. The main
 check after merge needs no label. The flag does not accept failed current tests,
 missing evidence, changed test commands or dependencies. Without it, `done`
 refuses test changes locally. Pre-commit and Stop report test-file changes as
@@ -68,7 +68,7 @@ matter between two `---` lines, one
 `key: value` per line, each key once. These seven fields are required: `id`,
 `title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
 
-A value is plain single-line text, a JSON string, or a list. `note` appends a line under Progress. `done` clears `next` and changes the status line to DONE after checking the claim, and `done --note` also appends a dated line. Other task text is preserved. `note --next "TEXT"` replaces or adds the next field, including existing folded/literal values; an empty string clears it. With no NOTE it adds no Progress entry. `done --note` keeps the handover line on every refusal, including uncommitted code or a missing declared test. Refusal says `TASK-1: DONE was not written; the status stays IN_PROGRESS`, then the Missing lines. If already finished, it says `TASK-7 stays DONE; this change was refused: <reason>`. After a real failure, Next says `fix the code or the test, then run workorder done again`. `done` refuses a missing or empty Scope or Acceptance section, including sections containing only HTML template comments: `fill in Scope and Acceptance first`. It checks this before recording evidence. It preserves the status line's plain, single-quoted or double-quoted style, and its existing line endings. Success says `TASK-1 DONE: its declared test passed on this code`, followed by `; still owes: merge of the tested code` when applicable (and any other delivery debt). A separate line asks you to commit tasks/ and .workorder/, adding `and push` only with an origin remote. It warns when this clone has no pre-commit hook. With a locally available target, it runs the test-change checks below against the merge base of HEAD and that ref, plus the tests of affected finished tasks, before writing DONE and refuses with exit 1 when they find a problem, preserving the prior status. It adds `a reviewer can accept it in the pull request with the workorder-allow:<ID> label` to the same diagnostic. It does not fetch. Without a target it prints `could not compare with the target: fetch origin first`. Local main/master is used on a branch when no remote target is available. A passing run that does not count reports whether files or HEAD changed while it ran; generated files such as __pycache__/ should be added to .gitignore before committing and running done again. `done` needs a concrete declared command; use the individual receipts for `test: any`. A task
+A value is plain single-line text, a JSON string, or a list. `note` appends a line under Progress. `done` clears `next` and changes the status line to DONE after checking the claim, and `done --note` also appends a dated line. Other task text is preserved. `note --next "TEXT"` replaces or adds the next field, including existing folded/literal values; an empty string clears it. With no NOTE it adds no Progress entry. `done --note` keeps the handover line on every refusal, including uncommitted code or a missing declared test. Refusal says `TASK-1: DONE was not written; the status stays IN_PROGRESS`, then the Missing lines. If already finished, it says `TASK-7 stays DONE; this change was refused: <reason>`. After a real failure, Next says `fix the code or the test, then run workorder done again`. `done` refuses a missing or empty Scope or Acceptance section, including sections containing only HTML template comments: `fill in Scope and Acceptance first`. It checks this before recording evidence. It preserves the status line's plain, single-quoted or double-quoted style, and its existing line endings. Success says `TASK-1 DONE: its declared test passed on this code`, followed by `; still owes: merge of the tested code` when applicable (and any other delivery debt). A separate line asks you to commit tasks/ and .workorder/, adding `and push` only with an origin remote. It warns when this clone has no pre-commit hook. With a locally available target, it runs the test-change checks below against the merge base of HEAD and that ref, plus the tests of affected finished tasks, before writing DONE and refuses with exit 1 when they find a problem, preserving the prior status. It adds `a reviewer accepts it with the label workorder-allow:<ID> (or an approving review)` to the same diagnostic. It does not fetch. Without a target it prints `could not compare with the target: fetch origin first`. Local main/master is used on a branch when no remote target is available. A passing run that does not count reports whether files or HEAD changed while it ran; generated files such as __pycache__/ should be added to .gitignore before committing and running done again. `done` needs a concrete declared command; use the individual receipts for `test: any`. A task
 file that cannot be read is reported as a problem of that task; the other tasks
 are still checked. Fields starting with `x-` (such as `x-issue`) are your own:
 they are kept and never checked.
@@ -148,7 +148,7 @@ everything else with a message naming the line:
   at the start of the file is ignored.
 - Lists, on one line: JSON (`["TASK-1", "task:TASK-2"]`) or simple
   (`[TASK-1, task:TASK-2]`, items without spaces or quotes).
-- Indented lists for `depends_on`, `blocks`, `waits_on` and `test_paths` only:
+- Indented lists for `depends_on`, `blocks`, `waits_on`, `test_paths` and `code_paths` only:
 
   ```yaml
   depends_on:
@@ -220,6 +220,11 @@ may be used; any other field (except `x-` fields) is refused, so typos are caugh
   A test named in the command can be added later without editing the task.
   Wrapper commands require `new --test-paths PATH ...`; those paths may name
   future files or folders. The wrapper script alone does not describe its tests.
+- `code_paths`: optional files or folders, for example `["src/calc.py", "src/math"]`.
+  Under `--require-task`, when every task adding a receipt
+  declares this field, changed code must fall within their combined paths.
+  An empty list covers no code. If any such task omits it, the usual rule applies.
+  See [code changes](#code-changes-need-task-evidence).
 - `merge_ref`: a full branch ref, such as `refs/heads/release` or
   `refs/remotes/origin/release`. Overrides the computed merge target. Short
   names and tag refs are refused. An absent target does not prove a merge.
@@ -421,7 +426,7 @@ not a test file. Importing a package from a test does not make that package a
 test file. Both REF and current definitions count. Metadata paths under
 `tasks/`, `.workorder/` and `.notquite/` stay outside test discovery.
 
-Test changes are refused unless a reviewer adds the label. `--review refuse` is
+Test changes are refused unless a reviewer adds the label or approves the current head. `--review refuse` is
 the default. `--review warn` is an option: each finding has a `Warning:` line
 and a `Review: N test changes need a reviewer's look` summary. `check: OK` follows
 the warnings. With `GITHUB_ACTIONS` set, warnings also have file and line
@@ -497,7 +502,7 @@ For example, an intentional change from 10% to 20% needs acceptance for edited
 assertions and failing REF assertions:
 
 ```text
-TASK-1: its tests from origin/main fail on this code; a reviewer accepts this intended behavior change or test rename with --allow TASK-1
+TASK-1: its tests from origin/main fail on this code; a reviewer accepts it with the label workorder-allow:TASK-1 (or an approving review)
 ```
 
 A task owns the files its test command names, the folders it names, and
@@ -556,7 +561,7 @@ of its definition. The same applies when its receipts cover code under
 no task recorded the code:
 
 ```text
-TASK-4 is new in this pull request: a reviewer accepts its definition with the label workorder-allow:TASK-4 (or land the task on main first)
+TASK-4 is new in this pull request: a reviewer accepts its definition with the label workorder-allow:TASK-4 (or an approving review)
 ```
 
 Removing a task is refused by default, including a task with no receipts. With
@@ -617,16 +622,26 @@ Supported finished claims without a contract also get the Acceptance reminder;
 unclaimed and refused tasks do not contribute to its count. Checks exit 0 for
 acceptance and 1 for refusal.
 
-Pytest runs reporting only skips get `its test ran, but reported only skipped
-tests`, without a passing-test note. With `--strict-tests --run-tests`, no passes
-refuse a finished claim, for example `its test ran but no test passed (2 skipped)`.
+A run reporting zero passed tests never supports DONE, including skipped or
+xfailed-only runs. `done`, hooks and `check` refuse without extra flags, for
+example `its test ran but no test passed (1 skipped)`. A label or approval cannot
+accept it. New receipts record `valid: false` and optional `no_tests_passed` detail;
+0.12.0 readers already refuse that validity value. Old receipts stay readable;
+`--run-tests` checks their current results too.
 
-CI time grows with the sum of the durations of distinct finished-task commands
+Test time grows with the sum of the durations of distinct finished-task commands
 and effective timeouts, rather than simply the number of tasks. Shared commands
 run once; a task with a new command adds that command's runtime.
 Tasks being worked on and tasks whose tests changed also need REF comparisons.
 New workflows enable `--all-tests`; projects can deliberately choose narrower
 checks.
+
+For Python test functions, line edits need no review when their syntax trees
+match after ignoring comments, docstrings and assert messages and ordering the
+two operands of `==` or `!=`. Chained comparisons, changed conditions, decorators,
+imports that change bindings, deletions and other edits still need review.
+`--strict-tests` continues to review every test-file edit. Repeated reuse notices
+for the same UTC time print once.
 
 ### Code changes need task evidence
 
@@ -645,14 +660,26 @@ fingerprint used by receipts. Generated pull request checks enable the rule.
 A receipt recorded on a branch still covers its own changes when later code
 matches the exact clean merge of that receipt's commit and the target. This
 works on the pull request merge commit and after merging main into the branch,
-including parallel pull requests with squash merges. It does not accept later
+including parallel pull requests with squash merges. A local squash commit with
+the hook enabled also accepts the recorded paths when their staged contents,
+modes and deletions match the implemented receipt, even when another task landed
+first. Both claims remain checkable in a fresh clone after branch deletion; no
+renewal is needed for those matching paths. It does not accept later
 branch edits without a new receipt. When renewal is needed after main moved,
 the check says `main moved since TASK-2 was tested: merge it and run workorder renew --task TASK-2`.
 
 
+When all tasks adding receipts declare optional `code_paths`, changed code
+outside their combined files and folders is refused, for example
+`src/unrelated.py is outside the code paths of TASK-2`. A contributing task
+label (or an approving review) accepts it; `workorder-allow:no-task` also
+accepts the code-to-task requirement. Tasks without the field keep the
+existing behavior; no task or receipt migration is needed. Files are exact
+matches and folders include descendants, not similarly named siblings.
+
 ### GitHub Actions
 
-The workflow runs on pull requests and pushes to the default branch. Pull
+The workflow runs on pull requests, submitted pull-request reviews and pushes to the default branch. Pull
 requests use `--base` and read `workorder-allow:<ID>`, `workorder-allow:tests` and
 `workorder-allow:no-task` labels as data. Pushes run current claims and tests
 without `--base`, so reviewer decisions already made on the pull request do not
@@ -665,6 +692,8 @@ name: Workorder
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted]
   push:
     branches: ["main"]
 permissions: {contents: read, pull-requests: read, issues: read}
@@ -673,7 +702,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: {fetch-depth: 0}   # receipts refer to earlier commits
+        with:
+          fetch-depth: 0   # receipts refer to earlier commits
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - name: Install project test dependencies
@@ -683,18 +714,19 @@ jobs:
         if: github.event_name == 'push'
         run: workorder check --run-tests --all-tests
       - name: Check tasks and run their tests
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review'
         env:
-          BASE: origin/${{ github.base_ref }}
+          BASE: origin/${{ github.event.pull_request.base.ref }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # Reviewed task ids, unowned tests, or the code-to-task requirement.
           gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/events" > "$RUNNER_TEMP/workorder-label-events.json"
-          allow=$(python -m workorder.review_labels "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/workorder-label-events.json")
-          # Test changes are refused unless a reviewer other than the author adds the label; --review warn is optional.
-          workorder check --base "$BASE" --run-tests --all-tests --require-task ${allow:+--allow "$allow"}
+          gh api --paginate --slurp "repos/$GH_REPO/pulls/$PR_NUMBER/reviews" > "$RUNNER_TEMP/workorder-reviews.json"
+          allowances=$(python -m workorder.review_labels "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/workorder-label-events.json" "$RUNNER_TEMP/workorder-reviews.json" "$BASE")
+          # Test changes are refused unless a reviewer other than the author adds the label or approves this head; --review warn is optional.
+          workorder check --base "$BASE" --run-tests --all-tests --require-task $allowances
 ```
 
 The workflow reads every page of issue label events. Only a current allowance
@@ -704,6 +736,22 @@ Removing a label cancels its prior approval; an author re-adding it does not
 restore a reviewer's earlier approval. Missing event history or actor identity
 supplies no allowance. Account IDs and case-insensitive logins identify authors.
 The API uses the workflow's read-only token; a failed API request stops the check.
+
+The workflow also reads every page of pull-request reviews. An APPROVED review
+by someone other than the author must name the current head commit. Old-head,
+dismissed and author reviews supply no allowance. A later request for changes
+from that reviewer replaces their approval; an ordinary comment leaves it in
+place. Account IDs and case-insensitive logins identify the author. An accepted
+review passes `--allow` for every task the check can name, plus `tests` and
+`no-task`, and `--approving-review` attributes the findings it accepted, for example:
+
+```text
+accepted by an approving review: TASK-3 (new task), tests/test_calc.py (changed lines)
+```
+
+The attribution flag alone supplies no allowance. Failed tests and unsupported
+claims still refuse. The checkout uses the event's head commit, so a review for
+an earlier head cannot accept changes on a later head.
 
 Anyone with triage rights can apply labels. Protect acceptance with CODEOWNERS
 and required code owner review on task, test and configuration paths. For example:
@@ -868,8 +916,10 @@ protect `workorder/*` tags if it matters.
 ## Compatibility
 
 Version 0.13 keeps the 0.12 task syntax, receipt hashes and matching rules.
-Existing files need no migration or rewriting. The optional verification marker
-on new test receipts does not change the required fields.
+Existing files need no migration or rewriting. Optional verification and
+zero-pass details on new test receipts do not change the required fields.
+The optional `code_paths` field is understood from 0.13 onward; tasks that omit
+it remain readable by 0.12.0.
 
 - Workorder was called NotQuite up to 0.2.0 (PyPI `notquite`). From 0.3.0 the
   command, the package and the data paths are `workorder`: receipts in
@@ -944,7 +994,7 @@ pre-commit hook from `workorder init`:
 
 Making a failing base test pass by adding `return`, or by adding a second
 function with the same name, changes a test that already failed. That change
-is refused unless a reviewer adds the label (`--allow ID`); `--review warn` is optional. This also applies to a finished task whose base tests fail on the new code.
+is refused unless a reviewer adds the label (`--allow ID`) or approves the current head; `--review warn` is optional. This also applies to a finished task whose base tests fail on the new code.
 
 A conflicted squash can change the tested lines. The check on the default
 branch can then fail. Run `workorder renew --task ID` there and test again.
@@ -978,7 +1028,7 @@ PEP 610 direct_url.json supplies the URL and resolved commit:
 Other installations use `workorder==0.13.0` for this release.
 It runs `workorder check --base "origin/<base>" --run-tests --all-tests --require-task`,
 passing task ids and the special values `tests` and `no-task` from
-`workorder-allow:` labels added by someone other than the author to `--allow`. Pushes to the default branch run
+`workorder-allow:` labels added by someone other than the author, or current-head approving reviews, to `--allow`. Pushes to the default branch run
 `workorder check --run-tests --all-tests` without a base. See the runtime
 trade-off above. Install additional non-Python dependencies in the workflow as
 needed. The agent block says to work on a branch, open a pull request, and after

@@ -212,8 +212,10 @@ def test_skipped_only_rerun_does_not_also_say_passed(local_repo, all_tests):
     base = commit_all(root)
     supported(root, test=test)
     flags = ['--all-tests'] if all_tests else []
-    output = ok(root, 'check', '--base', base, '--run-tests', *flags)
-    assert output.count('its test ran, but reported only skipped tests') == 1
+    result = cli(root, 'check', '--base', base, '--run-tests', *flags)
+    assert result.returncode == 1
+    output = result.stdout
+    assert 'its test ran but no test passed (1 skipped)' in output
     assert 'its test passed when this check ran it' not in output
     strict = cli(root, 'check', '--base', base, '--run-tests', '--strict-tests', *flags)
     assert strict.returncode == 1 and 'no test passed (1 skipped)' in strict.stdout

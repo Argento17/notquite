@@ -77,7 +77,7 @@ def test_done_refuses_ref_test_failure_before_writing_done(local_repo):
     output = result.stdout
     assert result.returncode == 1
     assert 'TASK-1: its tests from origin/main fail on this code;' in output
-    assert 'workorder-allow:TASK-1 label' in output
+    assert 'the label workorder-allow:TASK-1 (or an approving review)' in output
     assert 'TASK-1 DONE:' not in output
     assert store.record(root, 'TASK-1')['status'] == 'IN_PROGRESS'
 

@@ -45,7 +45,7 @@ def fake_commands(tmp_path):
                         'import json, os, pathlib, sys\n'
                         'with open(os.environ["COMMAND_LOG"], "a") as stream:\n'
                         '    stream.write(json.dumps([pathlib.Path(sys.argv[0]).name, *sys.argv[1:]]) + "\\n")\n'
-                        'if sys.argv[1:3] == ["-m", "workorder.review_labels"]: print("TASK-8")\n')
+                        'if sys.argv[1:3] == ["-m", "workorder.review_labels"]: print("--allow TASK-8")\n')
         path.chmod(0o755)
     return {**os.environ, 'PATH': str(folder), 'COMMAND_LOG': str(log),
             'BASE': 'origin/review-branch', 'GITHUB_EVENT_PATH': '/tmp/event.json',

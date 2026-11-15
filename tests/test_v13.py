@@ -245,9 +245,11 @@ def test_generated_workflow_ignores_author_labels(local_repo, tmp_path):
     # All service traffic is replaced by the recorded pages. Unexpected API calls fail.
     gh = binary / 'gh'
     gh.write_text(f'#!{PYTHON}\nimport json, sys\n'
-                  'assert sys.argv[1:] == ["api", "--paginate", "--slurp", '
-                  '"repos/example/project/issues/7/events"], sys.argv\n'
-                  f'print(json.dumps(json.load(open({str(fixture)!r}))["pages"]))\n')
+                  'assert sys.argv[1:4] == ["api", "--paginate", "--slurp"], sys.argv\n'
+                  'assert sys.argv[4] in ["repos/example/project/issues/7/events", '
+                  '"repos/example/project/pulls/7/reviews"], sys.argv\n'
+                  f'print(json.dumps(json.load(open({str(fixture)!r}))["pages"] '
+                  'if sys.argv[4].endswith("events") else [[]]))\n')
     gh.chmod(0o755)
     runner = binary / 'workorder'
     runner.write_text(f'#!{PYTHON}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n')

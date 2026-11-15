@@ -1,6 +1,18 @@
 # Changelog
 
-## 0.13.0 (unreleased)
+## 0.13.0 (15 Nov 2026)
+
+- Refuse DONE when a run reports zero passed tests, without extra flags.
+- Accept review findings through a current-head approving review by someone
+  other than the pull request author; retain reviewer labels and list what
+  each approval accepted. Run generated checks on submitted reviews too.
+- Ignore harmless Python test-function edits: comments, docstrings, assertion
+  messages and reversed equality or inequality operands.
+- Accept parallel local squash commits with the hook enabled when staged
+  paths match their implemented receipts, including fresh clones afterward.
+- Give one sentence of reviewer advice and one notice per reused UTC time.
+- Add optional task `code_paths` to limit code coverage under `--require-task`
+  when every task adding receipts declares its files or folders.
 
 - Run a finished task's current test on merge-base code with its new or changed
   test files. Refuse tests that already pass there; reviewers can accept

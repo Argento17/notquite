@@ -202,7 +202,7 @@ def test_base_guards_test_files(local_repo, explicit, change):
         lost = 1 if change == 'edit' else 2
         assert f'TASK-1: its test files lost or changed {lost} lines since {base}' in result.stdout
         assert 'tests/test example.py' in result.stdout
-        assert 'a reviewer accepts it with --allow TASK-1' in result.stdout
+        assert 'a reviewer accepts it with the label workorder-allow:TASK-1' in result.stdout
         ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
     assert 'checked 1 task ' in result.stdout
 
@@ -229,7 +229,7 @@ def test_new_finished_definition_needs_allow(local_repo, status):
     refused = cli(root, 'check', '--base', base)
     assert refused.returncode == 1
     assert ('TASK-1 is new in this pull request: a reviewer accepts its definition with the label '
-            'workorder-allow:TASK-1 (or land the task on main first)') in refused.stdout
+            'workorder-allow:TASK-1 (or an approving review)') in refused.stdout
     ok(root, 'check', '--base', base, '--allow', 'TASK-1')
 
 

@@ -38,7 +38,7 @@ def parser():
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
     done.add_argument("--task", required=True)
     done.add_argument("--note", help="add a dated Progress line, including when done refuses")
-    done.add_argument("--needs-review", action="store_true", help="record evidence and keep IN_PROGRESS pending a reviewer label")
+    done.add_argument("--needs-review", action="store_true", help="record evidence and keep IN_PROGRESS pending a reviewer label or approval")
     done.add_argument("--no-code-change", action="store_true", help="allow verification tasks with no code change")
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
@@ -91,11 +91,12 @@ def parser():
     check.add_argument("--allow", metavar="TASKS", default="",
                        help="with --base: accept definition/test edits, REF-test failures, reduced pytest outcomes or complete removal"
                             " (comma-separated ids; tests for test-file edits, no-task for changes without task work)")
+    check.add_argument('--approving-review', action='store_true',
+                       help='with --allow: report allowances supplied by an approving pull-request review')
     check.add_argument("--run-tests", action="store_true",
                        help="run selected tasks' tests; with --base, include tasks with changed tests and REF comparisons")
     check.add_argument("--strict-tests", action="store_true",
-                       help="with --base: require --allow for all test and pytest configuration changes;"
-                            " with --run-tests, refuse pytest runs with no passed tests")
+                       help="with --base: require --allow for all test and pytest configuration changes")
     check.add_argument("--all-tests", action="store_true",
                        help="with --run-tests: also test every DONE/CLOSED task, once per code, command and timeout")
     check.add_argument("--require-task", action="store_true",
@@ -127,6 +128,8 @@ def task_argument(value):
 def invalid_reason(root, item):
     if item["kind"] != "test":
         return f"the output did not include the full commit id {item['commit']}"
+    if item.get('no_tests_passed'):
+        return f"its test ran but no test passed ({item['no_tests_passed']})"
     if s.head(root) != item["commit"]:
         return "HEAD moved while the command ran"
     paths = s.dirty_paths(root)
@@ -237,7 +240,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if pending:
             s.set_task_field(root, tid, "status", "IN_PROGRESS")
             labels = ', '.join('workorder-allow:' + owner for owner in sorted(review_labels or {tid}))
-            message = f'pending review: the pull request needs {labels}'
+            message = f'pending review: the pull request needs {labels} (or an approving review)'
             s.add_note(root, tid, message)
             print(f'{tid} IN_PROGRESS; {message}')
             print('Set status DONE in the reviewed pull request once its evidence and Acceptance are complete.')
@@ -415,7 +418,8 @@ def main(argv=None):
             allow = {item.strip() for item in options.allow.split(",") if item.strip()}
             problems = gate.check(root, options.staged, options.base, notes, allow, options.run_tests, counts,
                                   options.strict_tests, options.all_tests, options.require_task,
-                                  timeout=options.timeout, review=options.review or "refuse")
+                                  timeout=options.timeout, review=options.review or "refuse",
+                                  approving_review=options.approving_review)
             if (options.staged and not counts["tasks"] and not problems and not notes
                     and not counts.get("warnings") and not options.run_tests):
                 return 0

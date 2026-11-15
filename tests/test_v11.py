@@ -78,7 +78,7 @@ def test_import_extension_and_new_test_pass_without_label(local_repo, imports):
     MUL_TEST.replace('== 12', '== 11'),
     MUL_TEST.replace('    assert mul(3, 4) == 12', '    assert True'),
     MUL_TEST.replace('    assert mul(3, 4) == 12\n', '    pass\n'),
-    MUL_TEST.replace('    assert', '    assert '),
+    MUL_TEST.replace('    assert', '    assert not'),
 ])
 def test_import_extension_does_not_hide_test_body_edits(local_repo, body):
     root = local_repo
@@ -290,5 +290,5 @@ def test_spec_and_plural_test_names_are_reviewed(local_repo, path):
     target.write_text('weakened assertion\n')
     result = cli(local_repo, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert path in result.stdout and '--allow tests' in result.stdout
+    assert path in result.stdout and 'workorder-allow:tests' in result.stdout
     assert cli(local_repo, 'check', '--review', 'refuse', '--base', base, '--allow', 'tests').returncode == 0

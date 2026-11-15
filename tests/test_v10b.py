@@ -122,7 +122,7 @@ def test_test_and_requirement_changes_use_the_merge_base(local_repo):
     assert 'test_t1.py' not in output
     assert 'Acceptance lines removed' not in output
     probe = root / 'tests/test_keep.py'
-    probe.write_text('def test_keep():\n    assert  True\n', encoding='utf-8')
+    probe.write_text('def test_keep():\n    assert 1 == 1\n', encoding='utf-8')
     changed = cli(root, 'check', '--review', 'refuse', '--base', 'origin/main')
     changed_output = changed.stdout + changed.stderr
     assert changed.returncode == 1, changed_output
@@ -142,7 +142,7 @@ def test_needs_review_records_a_deliberate_test_change(local_repo, monkeypatch, 
     commit_all(root, 'Task')
     with_origin(root)
     git(root, 'checkout', '-q', '-b', 'feature')
-    probe.write_text('def test_keep():\n    assert  True\n', encoding='utf-8')
+    probe.write_text('def test_keep():\n    assert 1 == 1\n', encoding='utf-8')
     commit_all(root, 'Edit the test on purpose')
     refused = cli(root, 'done', '--task', 'TASK-6')
     assert refused.returncode == 1, refused.stdout + refused.stderr

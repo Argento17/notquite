@@ -5,9 +5,11 @@ from __future__ import annotations
 import ast
 from collections import Counter
 import configparser
+import copy
 import difflib
 import fnmatch
 import hashlib
+import io
 import json
 import os
 import ntpath
@@ -19,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tokenize
 import uuid
 
 from . import store as s
@@ -302,7 +305,9 @@ def verdict(root, record, staged=False):
         # The latest test run on the implemented code decides; a later failure revokes an earlier pass.
         # Code leaves out tasks/ and .workorder/, so committing the receipts does not hide later runs.
         runs = counting_runs(record, current, implemented)
-        if not runs or runs[-1]["exit_code"] != 0 or not runs[-1]["valid"]:
+        if runs and runs[-1].get('no_tests_passed'):
+            done.append(f"its test ran but no test passed ({runs[-1]['no_tests_passed']})")
+        elif not runs or runs[-1]["exit_code"] != 0 or not runs[-1]["valid"]:
             done.append(f"a passing test on {implemented['commit'][:7]}")
     done += contract_debt(root, record, current, implemented, staged)
     delivery = []
@@ -584,6 +589,15 @@ def stale_claim(root, record, staged=False, base=None):
 
 def claim_matches(root, record, implemented, claim, tree=None, staged=False, receipt_rev=None):
     tree = tree or claim
+    # Squashing parallel branches adds other tasks' code beside this task's files.
+    # Git leaves SQUASH_MSG for the pending commit; check its index, never the worktree.
+    squash = root / s.git(root, 'rev-parse', '--git-path', 'SQUASH_MSG').stdout.strip() if staged else None
+    if staged and squash.is_file() and implemented.get('implementation_paths'):
+        before = {entry['hash'] for entry in s.entries(root, record['id'], rev='HEAD')}
+        if implemented['hash'] not in before:
+            contents = s.code_tree(root, tree)
+            if all(contents.get(path) == entry for path, entry in implemented['implementation_paths'].items()):
+                return True
     # This concerns the claim's history, even when the task ships nothing.
     target = merge_target(root, record)
     merged = merge_match(root, implemented, target[1]) if target else None
@@ -1154,8 +1168,53 @@ def strict_test_files(root, record, base, staged=False):
     return paths
 
 
+class _TestSyntax(ast.NodeTransformer):
+    """Only the documented harmless differences in a Python test function."""
+    def visit_Assert(self, node):
+        node.msg = None
+        return self.generic_visit(node)
+
+    def visit_Compare(self, node):
+        self.generic_visit(node)
+        if len(node.ops) == 1 and isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
+            node.left, node.comparators[0] = sorted((node.left, node.comparators[0]), key=ast.dump)
+        return node
+
+    def generic_visit(self, node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and ast.get_docstring(node) is not None:
+            node.body = node.body[1:]
+        return super().generic_visit(node)
+
+
+def _test_functions(tree, prefix=()):
+    found = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test'):
+            key = (*prefix, node.name)
+            # Duplicate definitions cannot be matched unambiguously.
+            found[key] = None if key in found else node
+        elif isinstance(node, ast.ClassDef):
+            found.update(_test_functions(node, (*prefix, node.name)))
+    return found
+
+
+def _without_python_comments(lines):
+    data = b''.join(lines)
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+    text = data.decode(encoding)
+    lines = text.splitlines(keepends=True)
+    multiline = set()
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        if token.start[0] < token.end[0]:
+            multiline.update(range(token.start[0], token.end[0] + 1))
+        if token.type == tokenize.COMMENT:
+            lines[token.start[0] - 1] = lines[token.start[0] - 1][:token.start[1]].rstrip() + '\n'
+    # Blank lines inside string literals are content, even when they look like comments.
+    return [line for number, line in enumerate(lines, 1) if line.strip() or number in multiline]
+
+
 def _removed_lines_after_import_additions(old, new):
-    """Discount extended Python imports, keeping every other removed line under review."""
+    """Discount extended imports and test functions with the same normalized syntax."""
     old, new = old.replace(b'\r\n', b'\n'), new.replace(b'\r\n', b'\n')
     try:
         before, after = ast.parse(old), ast.parse(new)
@@ -1181,6 +1240,15 @@ def _removed_lines_after_import_additions(old, new):
             return False
 
     replacements, consumed = [], set()
+    previous_functions = _test_functions(before)
+    for name, current in _test_functions(after).items():
+        previous = previous_functions.get(name)
+        if previous is None or current is None:
+            continue
+        normalized = lambda node: ast.dump(_TestSyntax().visit(copy.deepcopy(node)))
+        if normalized(previous) == normalized(current):
+            start = lambda node: min([node.lineno] + [item.lineno for item in node.decorator_list]) - 1
+            replacements.append((start(current), current.end_lineno, old_lines[start(previous):previous.end_lineno]))
     for previous in before.body:
         if not isinstance(previous, imports) or getattr(previous, 'module', None) == '__future__':
             continue
@@ -1208,6 +1276,10 @@ def _removed_lines_after_import_additions(old, new):
         return None
     for start, end, lines in sorted(replacements, reverse=True):
         new_lines[start:end] = lines
+    try:
+        old_lines, new_lines = _without_python_comments(old_lines), _without_python_comments(new_lines)
+    except (SyntaxError, UnicodeError, ValueError, tokenize.TokenError):
+        return None
     return sum(end - start for tag, start, end, _, _ in
                difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False).get_opcodes()
                if tag in {'delete', 'replace'})
@@ -1385,6 +1457,8 @@ def pytest_no_pass(output):
         value = summary[1]
         if re.search(r"\b[1-9]\d* passed\b", value):
             return None
+        if re.search(r"\b0 passed\b", value):
+            return value
         if "no tests ran" in value:
             return "no tests ran"
         skipped = re.search(r"\b(\d+) skipped\b", value)
@@ -1440,7 +1514,7 @@ def _run_test(root, command, timeout, counts, *, quiet=False, cache_root=None, l
 
 def test_result(run, counts, *, quiet=False, failures_only=False):
     if run.cached:
-        print(f"(reused from {run.reused_at} UTC)")
+        s.print_once(f"(reused from {run.reused_at} UTC)")
     if not quiet and (not failures_only or run.returncode):
         s.print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0)
     if counts is not None:
@@ -1469,19 +1543,10 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
     if missing:
         advice = '' if missing.startswith('cannot import') else '; install the test dependencies and run the check again'
         return f'{tid}: {missing}{advice}'
-    empty = pytest_no_pass(output) if uses_pytest(record) else None
-    if empty and strict:
+    empty = pytest_no_pass(output)
+    if empty:
         reason = f"{tid}: its test ran but no test passed ({empty})"
         return f"regression: {tid}'s test fails on this code\n{reason}" if regression else reason
-    if empty and notes is not None:
-        if re.fullmatch(r'\d+ skipped', empty):
-            note = f"{tid}: its test ran, but reported only skipped tests"
-        elif empty == 'no tests ran':
-            note = f"{tid}: its test ran, but reported no tests ran"
-        else:
-            note = None
-        if note and note not in notes:
-            notes.append(note)
     if code == 0:
         if notes is not None and not empty:
             note = f"{tid}: its test passed when this check ran it"
@@ -1877,7 +1942,8 @@ def comparison_message(line, revision, ref, label):
 
 
 def reviewer_label(problem, tid):
-    return problem + f'; a reviewer can accept it in the pull request with the workorder-allow:{tid} label'
+    return problem.split('; a reviewer ', 1)[0] + (
+        f'; a reviewer accepts it with the label workorder-allow:{tid} (or an approving review)')
 
 
 def _accepts_allow_label(problem):
@@ -2087,10 +2153,11 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
     def review(line, what='it', lines=False):
         if allow or (allow_lines and lines):
             notes.append(line + ' (allowed)')
+            notes.append(f'accepted: {tid} ({what if what != "it" else "test review"})')
         else:
             path = next(iter(paths or sorted(protected)), f'tasks/{tid}.md')
             problems.append(review_problem(root, base,
-                line + f'; a reviewer accepts {what} with --allow {tid}', path, staged))
+                reviewer_label(line, tid), path, staged))
 
     def addition_rule():
         if paths and not changed:
@@ -2430,7 +2497,7 @@ def summarize_notes(notes, verbose=False):
     return result
 
 
-def repository_review_problems(root, base, all_records, staged=False, allow=(), strict_tests=False, errors=()):
+def repository_review_problems(root, base, all_records, staged=False, allow=(), strict_tests=False, errors=(), notes=None):
     """Review each changed test file once, including material without a task owner."""
     problems = []
     changed = changed_paths(root, base, staged)
@@ -2449,17 +2516,45 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
             root, base, tests_record, [path], staged)
         for line in lines:
             if 'tests' not in allow and not set(named) & set(allow):
-                accepts = (f'{named[0]} or --allow tests' if len(named) == 1 else
-                           'tests' + (f" or any owning task ({', '.join(named)})" if named else ''))
                 problems.append(review_problem(root, base,
-                    line + f'; a reviewer accepts it with --allow {accepts}', path, staged))
+                    reviewer_label(line, named[0] if named else 'tests'), path, staged))
+            elif notes is not None:
+                notes.append(f'accepted: {path} (changed lines)')
+    return problems
+
+
+def code_path_problems(root, base, changed, code, all_records, staged, allow, notes):
+    """Optional scopes apply only when every task adding receipts declares one."""
+    contributors = []
+    for tid in sorted({s.receipt_task(path) for path in changed} - {None}):
+        if tid not in all_records:
+            continue
+        try:
+            old = {entry['hash'] for entry in s.entries(root, tid, rev=base)}
+            if any(entry['hash'] not in old for entry in s.entries(root, tid, staged)):
+                contributors.append(tid)
+        except s.Refused:
+            continue  # ordinary receipt checks report invalid evidence
+    if not contributors or any('code_paths' not in all_records[tid] for tid in contributors):
+        return []
+    scopes = {posixpath.normpath(path) for tid in contributors for path in all_records[tid]['code_paths']}
+    outside = sorted(path for path in code
+                     if not any(scope == '.' or path == scope or path.startswith(scope + '/') for scope in scopes))
+    problems = []
+    for path in outside:
+        if 'no-task' in allow or set(contributors) & set(allow):
+            notes.append(f'accepted: {path} (outside code paths of {", ".join(contributors)})')
+        else:
+            problems.append(reviewer_label(f'{path} is outside the code paths of {", ".join(contributors)}',
+                                           contributors[0]))
     return problems
 
 
 @s.read_session()
 @s.test_output_session()
 def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, counts=None,
-          strict_tests=False, all_tests=False, require_task=False, timeout=None, review="refuse"):
+          strict_tests=False, all_tests=False, require_task=False, timeout=None, review="refuse",
+          approving_review=False):
     counts = {} if counts is None else counts
     notes = [] if notes is None else notes
     revision, label = comparison_base(root, base) if base else (None, None)
@@ -2475,6 +2570,10 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
     problems = [problem for problem in problems if problem not in warnings]
     refused = set(re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', '\n'.join(problems)))
     counts['tests_only'] = len(counts.pop('_supported', set()) - refused)
+    accepted = sorted({note.removeprefix('accepted: ') for note in notes if note.startswith('accepted: ')})
+    notes[:] = [note for note in notes if not note.startswith('accepted: ')]
+    if approving_review and accepted:
+        notes.append('accepted by an approving review: ' + ', '.join(accepted))
     return problems
 
 
@@ -2509,20 +2608,26 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
     problems = [f"{tid}: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())
                 if tid in selected]
     new_tasks = set()
-    if require_task and changed and 'no-task' not in allow:
+    if require_task and changed:
         test_material = repository_test_files(root, base, all_records, staged)
         for record in all_records.values():
             test_material |= strict_test_files(root, record, base, staged)
-        code = any(needs_task_receipt(path) for path in changed - test_material)
+        code = {path for path in changed - test_material if needs_task_receipt(path)}
         recorded = has_work_receipt(root, base, changed, staged, allow, new_tasks)
         if not code or recorded:
             new_tasks.clear()
-        if code and not recorded and not new_tasks:
+        if 'no-task' in allow:
+            if code and not recorded:
+                notes.append('accepted: no-task (code without task work)')
+            new_tasks.clear()
+        elif code and not recorded and not new_tasks:
             problems.append('this change edits code but no task records it with a new implemented or test receipt; '
                             'run workorder receipt implemented --task ID or workorder receipt test --task ID')
             advice = renewal_advice(root, base, changed, staged)
             if advice:
                 problems.append(advice)
+        if code:
+            problems += code_path_problems(root, base, changed, code, all_records, staged, allow, notes)
     stray = [path for path in s.files(root, "tasks", staged) if not path.endswith(".md")
              and (changed is None or path in changed)]
     problems += [f"{path}: only task files belong in tasks/; a file here is outside the code fingerprint,"
@@ -2532,6 +2637,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         retired, removed_problems = removals(root, base, names, allow, staged)
         problems += removed_problems + base_problems(root, base, staged, retired)
         notes += [f"{tid}: task and all receipts removed (allowed)" for tid in sorted(retired)]
+        notes += [f'accepted: {tid} (removed task and receipts)' for tid in sorted(retired)]
         problems += [message for tid, record in all_records.items()
                      if tid in selected and (message := wrapper_note(record))]
         for tid, record in all_records.items():
@@ -2547,7 +2653,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             if mapped or not any(_repository_test_file(path) for path in repository_files(root, base)):
                 continue
             problems.append(f'{tid}: no test files are known for its test; set test_paths')
-        problems += repository_review_problems(root, base, all_records, staged, allow, strict_tests, errors)
+        problems += repository_review_problems(root, base, all_records, staged, allow, strict_tests, errors, notes)
     views = Views(root, all_records, staged)
     # Include removed receipts and ledgers whose task file was also removed.
     paths = set(s.receipt_paths(root, rev="HEAD")) | set(s.receipt_paths(root, staged))
@@ -2623,9 +2729,10 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         if base:
             if fields_at(root, tid, base) is None and (record["status"] in FINISHED or tid in new_tasks):
                 line = (f'{tid} is new in this pull request: a reviewer accepts its definition with the label '
-                        f'workorder-allow:{tid} (or land the task on main first)')
+                        f'workorder-allow:{tid} (or an approving review)')
                 if tid in allow:
                     notes.append(line + " (definition allowed)")
+                    notes.append(f'accepted: {tid} (new task)')
                 else:
                     problems.append(line)
             if tid in worked or strict_test_files(root, record, base, staged) & changed:
@@ -2637,10 +2744,9 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 line = f"{tid}: {change} since {base}"
                 if tid in allow:
                     notes.append(line + " (allowed)")
+                    notes.append(f'accepted: {tid} ({change})')
                 else:
-                    reason = ('closing a task without finishing it' if change.startswith('status changed:')
-                              and record['status'] == 'CANCELLED' else 'it')
-                    problem = f"{line}; a reviewer accepts {reason} with --allow {tid}"
+                    problem = reviewer_label(line, tid)
                     if change.startswith(('test changed:', 'test_paths changed')):
                         problem = review_problem(root, base, problem, f'tasks/{tid}.md', staged)
                     problems.append(problem)

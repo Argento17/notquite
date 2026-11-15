@@ -1,6 +1,7 @@
 """Reviewer allowances from GitHub issue events, used by the generated workflow."""
 
 import json
+from pathlib import Path
 import re
 import sys
 
@@ -39,6 +40,26 @@ def accepted_labels(pull_request, pages):
     return allowed, notices
 
 
+def accepted_review(pull_request, pages):
+    """An undismissed approval of this head by someone other than its author."""
+    author = pull_request.get('user') or {}
+    head = (pull_request.get('head') or {}).get('sha')
+    if not head or not author.get('login'):
+        return False
+    latest = {}
+    for page in pages:
+        for review in page:
+            actor = review.get('user') or {}
+            if not actor.get('login') or actor['login'].casefold() == author['login'].casefold():
+                continue
+            if author.get('id') is not None and actor.get('id') == author['id']:
+                continue
+            if review.get('state') in {'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'}:
+                latest[actor.get('id') or actor['login'].casefold()] = review
+    return any(review.get('state') == 'APPROVED' and review.get('commit_id') == head
+               for review in latest.values())
+
+
 def main():
     with open(sys.argv[1], encoding='utf-8') as stream:
         pull_request = json.load(stream)['pull_request']
@@ -47,7 +68,25 @@ def main():
     allowed, notices = accepted_labels(pull_request, pages)
     for notice in notices:
         print(notice, file=sys.stderr)
-    print(','.join(allowed))
+    if len(sys.argv) == 3:
+        print(','.join(allowed))
+        return
+    with open(sys.argv[3], encoding='utf-8') as stream:
+        approved = accepted_review(pull_request, json.load(stream))
+    if approved:
+        from . import gate, store
+        root = store.repository(Path.cwd())
+        names = set(gate.task_names(root))
+        # Include removed tasks and orphaned receipts which the check can also name.
+        paths = store.metadata_texts(root, sys.argv[4])
+        names |= {Path(path).stem for path in paths if path.startswith('tasks/') and store.ID.fullmatch(Path(path).stem)}
+        names |= {store.receipt_task(path) for path in paths} - {None}
+        names |= {store.receipt_task(path) for path in store.receipt_paths(root)} - {None}
+        allowed = sorted(set(allowed) | names | {'tests', 'no-task'})
+    arguments = ['--allow', ','.join(allowed)] if allowed else []
+    if approved:
+        arguments.append('--approving-review')
+    print(' '.join(arguments))  # all words are fixed flags or validated allowance IDs
 
 
 if __name__ == '__main__':

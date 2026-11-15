@@ -33,7 +33,7 @@ def test_reviewed_intended_change_accepts_ref_failure_for_each_worked_task(local
     touch(root, 'TASK-2')
     flags = ['--strict-tests'] if strict else []
     denied = check(root, base, '--allow', 'TASK-1', *flags)
-    assert denied.returncode == 1 and '--allow TASK-2' in denied.stdout
+    assert denied.returncode == 1 and 'workorder-allow:TASK-2' in denied.stdout
     accepted = check(root, base, '--allow', 'TASK-1,TASK-2', *flags)
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert 'fail on this code' in accepted.stdout and '(allowed)' in accepted.stdout
@@ -41,7 +41,7 @@ def test_reviewed_intended_change_accepts_ref_failure_for_each_worked_task(local
     unfinished = check(root, base, '--allow', 'TASK-1,TASK-2', *flags)
     assert unfinished.returncode == 0
     assert 'Note:' in unfinished.stdout and 'not claimed finished' in unfinished.stdout
-    assert ('no test passed' if strict else 'its test failed') in unfinished.stdout
+    assert 'no test passed' in unfinished.stdout
 
 
 def test_changed_test_lines_need_review_even_when_both_runs_pass(local_repo):
@@ -51,7 +51,7 @@ def test_changed_test_lines_need_review_even_when_both_runs_pass(local_repo):
     touch(root)
     denied = check(root, base)
     assert denied.returncode == 1 and 'lost or changed 1 lines' in denied.stdout
-    assert '--allow TASK-1' in denied.stdout
+    assert 'workorder-allow:TASK-1' in denied.stdout
     assert check(root, base, '--allow', 'TASK-1').returncode == 0
 
 
@@ -71,7 +71,7 @@ def test_reviewer_accepts_reduced_pytest_outcomes(local_repo, change):
         path.write_text(path.read_text().replace('-q tests', '-q tests -k one'))
     touch(root)
     denied = check(root, base)
-    assert denied.returncode == 1 and '--allow TASK-1' in denied.stdout
+    assert denied.returncode == 1 and 'workorder-allow:TASK-1' in denied.stdout
     accepted = check(root, base, '--allow', 'TASK-1')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert 'fewer tests pass' in accepted.stdout and '(allowed)' in accepted.stdout
@@ -97,7 +97,7 @@ def test_untouched_tasks_review_shared_test_changes(local_repo, status):
         base = commit_all(root)
     probe.write_text('def test_one():\n    assert False\n')
     result = check(root, base, '--strict-tests')
-    assert result.returncode == 1 and '--allow TASK-1' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
     assert 'its test' in result.stdout
     if status == 'DONE':
         result = check(root, base, '--all-tests', '--allow', 'TASK-1')
@@ -139,7 +139,7 @@ def test_missing_named_test_never_falls_back_to_unrelated_discovery(local_repo, 
     touch(root)
     notes = []
     problems = gate.check(root, base=base, strict_tests=True, notes=notes, review='refuse')
-    assert problems and all('--allow tests' in p for p in problems), problems
+    assert problems and all('workorder-allow:tests' in p for p in problems), problems
     assert any('tests/test_tax.py' in note and 'no test files' in note for note in notes)
 
 
@@ -185,7 +185,7 @@ def test_finished_task_section_additions_need_acceptance(local_repo, status, sec
     path.write_text(path.read_text().replace(f'## {section}\n', f'## {section}\n\n- Another requirement.\n'))
     result = cli(root, 'check', '--base', base)
     assert result.returncode == 1 and f'{section} lines added' in result.stdout
-    assert '--allow TASK-1' in result.stdout
+    assert 'workorder-allow:TASK-1' in result.stdout
     assert cli(root, 'check', '--base', base, '--allow', 'TASK-1').returncode == 0
 
 
@@ -228,7 +228,7 @@ def test_additive_skip_and_config_need_review_without_running_tests(local_repo, 
     else:
         (root / 'conftest.py').write_text('# collection policy\n')
     result = cli(root, 'check', '--review', 'refuse', '--base', base)
-    assert result.returncode == 1 and '--allow TASK-1' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
     assert cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1').returncode == 0
 
 
@@ -251,7 +251,7 @@ def test_staged_finished_scope_addition_is_checked_from_index(local_repo):
     path.write_bytes(original)
     result = cli(root, 'check', '--base', base, '--staged')
     assert result.returncode == 1 and 'Scope lines added' in result.stdout
-    assert '--allow TASK-1' in result.stdout
+    assert 'workorder-allow:TASK-1' in result.stdout
     assert cli(root, 'check', '--base', base, '--staged', '--allow', 'TASK-1').returncode == 0
 
 
@@ -264,7 +264,7 @@ def test_pytest_option_directory_does_not_widen_missing_named_test(local_repo, o
     touch(root)
     notes = []
     problems = gate.check(root, base=base, strict_tests=True, notes=notes, review='refuse')
-    assert problems and all('--allow tests' in p for p in problems), problems
+    assert problems and all('workorder-allow:tests' in p for p in problems), problems
     assert any('test_missing.py' in note and 'no test files' in note for note in notes)
 
 

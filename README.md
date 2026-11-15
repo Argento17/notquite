@@ -50,7 +50,7 @@ Out: subtraction and other operations.
 ```
 
 Land the task on main first, as below, then do the work on a branch. If task and
-code share a pull request, a reviewer must add `workorder-allow:TASK-1` instead:
+code share a pull request, a reviewer accepts it with `workorder-allow:TASK-1` or an approving review:
 
 ```sh
 git add . && git commit -qm "Workorder setup and TASK-1"
@@ -74,8 +74,8 @@ work. It never commits or pushes for you. If it refuses, follow its Missing and
 Next lines; use IN_PROGRESS while fixing a task that was previously DONE.
 Ordinary tasks need a code change since the target merge base (or task creation).
 Use `--no-code-change` for verification tasks. For intentional test edits,
-`--needs-review` records evidence and leaves IN_PROGRESS pending the reviewer label.
-[Task format and command details](docs/reference.md#task-files).
+`--needs-review` records evidence and leaves IN_PROGRESS pending review.
+Optional `code_paths: ["src/calc.py"]` limits which code a task records under `--require-task`. [Task format](docs/reference.md#task-files).
 
 ## Working with coding agents
 
@@ -87,9 +87,9 @@ workflow when one is absent. Existing instructions stay in place.
 ## Tasks
 - Start every session from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed, then run `workorder renew --task <id>` if the tested code changed. Use the repository's default branch name if it is not main. Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
-- Land the task on main before starting its code, then work on a branch and open a pull request. If task and code must share a pull request, ask a reviewer to accept the new definition with `workorder-allow:<id>`.
+- Land the task on main before starting its code, then work on a branch and open a pull request. If task and code must share a pull request, ask a reviewer to accept the new definition with `workorder-allow:<id>` or an approving review.
 - After committing code and confirming every Acceptance item is met, fetch origin before `done` when there is an origin remote: `git fetch origin`. Then run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test on current and target code, checks affected finished tasks, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
-- If `done` refuses because you changed tests on purpose, rerun with `--needs-review`. It records evidence and leaves IN_PROGRESS with a pending review note. Set DONE in the reviewed pull request when Acceptance is met; test changes are refused unless a reviewer adds the label `workorder-allow:<id>`. Report the pending review to the user.
+- If `done` refuses because you changed tests on purpose, rerun with `--needs-review`. It records evidence and leaves IN_PROGRESS with a pending review note. Set DONE in the reviewed pull request when Acceptance is met; test changes are refused unless a reviewer adds `workorder-allow:<id>` or approves the pull request. Report the pending review to the user.
 - Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 ```
@@ -113,14 +113,14 @@ The default workflow checks pull requests with
 pushes with `--run-tests --all-tests`. Each distinct command runs once per code
 version and timeout. If merged code differs, run `workorder renew --task <id>`.
 
-Test changes are refused unless a reviewer adds the label; `--review warn` is optional.
+An APPROVED review on the current head by someone other than the author accepts review findings; labels still work.
 Review includes repository tests and every task whose tests changed. A task
 owns the files or folders its test names, plus pytest configuration on that path.
-New tests and added Python import names preserving existing bindings need no
+New tests, harmless Python assertion edits and added import names need no
 label when they check the new behaviour. `workorder-allow:<ID>` accepts that task's
 findings; `workorder-allow:tests` accepts changed test lines; `workorder-allow:no-task`
 accepts only the code-to-task requirement. Current failures for completed tasks
-still refuse. Labels added by the pull request's author are ignored; the workflow
+and runs reporting no passed tests still refuse. Labels added by the pull request's author are ignored; the workflow
 reads label events to identify who added them. [Review rules](docs/reference.md#checks-against-a-base).
 
 `init --check` reports missing setup without changing it. `init --update-workflow`

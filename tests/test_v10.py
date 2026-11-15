@@ -77,7 +77,7 @@ def test_task_first_added_lines_cannot_hide_a_failing_ref_test(local_repo, monke
             assert 'this change edits code but no task records it' not in output
     assert 'so any change needs review' in output
     assert 'its tests from' in output and 'fail on this code' in output
-    assert '--allow TASK-1' in output
+    assert 'workorder-allow:TASK-1' in output
     allowed = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--allow', 'tests')
     assert allowed.returncode == 1, allowed.stdout + allowed.stderr
     assert 'so any change needs review' in allowed.stdout
@@ -110,7 +110,7 @@ def test_named_file_does_not_own_the_rest_of_tests(local_repo):
         task(root, f'TASK-{number}', ships='none', test=f'{PYTHON} -m pytest -q')
     base = commit_all(root)
     probe = root / 'tests/test_one.py'
-    probe.write_text(probe.read_text().replace('assert True', 'assert  True'))
+    probe.write_text(probe.read_text().replace('assert True', 'assert 1 == 1'))
     refused = cli(root, 'check', '--review', 'refuse', '--base', base)
     output = refused.stdout + refused.stderr
     assert refused.returncode == 1, output
@@ -125,7 +125,7 @@ def test_named_file_does_not_own_the_rest_of_tests(local_repo):
     helper_change = cli(root, 'check', '--review', 'refuse', '--base', base)
     helper_output = helper_change.stdout + helper_change.stderr
     assert helper_change.returncode == 1, helper_output
-    assert 'tests/helper.py' in helper_output and '--allow tests' in helper_output
+    assert 'tests/helper.py' in helper_output and 'workorder-allow:tests' in helper_output
     assert 'TASK-1:' not in helper_output
     helper.write_text('value = 1\n')
     (root / 'tests/conftest.py').write_text('value = 2\n')
@@ -148,7 +148,7 @@ def test_allow_tests_accepts_lines_owned_by_every_named_folder(local_repo):
     for number in range(1, 4):
         task(root, f'TASK-{number}', ships='none', test=f'{PYTHON} -m pytest -q tests')
     base = commit_all(root)
-    probe.write_text('def test_one():\n    assert  True\n')
+    probe.write_text('def test_one():\n    assert 1 == 1\n')
     refused = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert refused.returncode == 1
     assert refused.stdout.count('lost or changed') == 1
