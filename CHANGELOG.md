@@ -2,6 +2,18 @@
 
 ## 0.15.0 (15 Nov 2026)
 
+- Limit each task's stub check to changed functions in its declared code paths.
+  Without a declaration, exclude other tasks' declared paths. If none belong
+  to the task, omit the check and its note in done, hooks and base checks.
+- Treat tests absent at the base as written in the change, including new helpers
+  and fixtures. A new conftest needs configuration review only for existing
+  tests below its folder; edits to an existing conftest keep their review rule.
+- Make done's Next line name a working review route for findings requiring a
+  task label. Unusual assertions and stub findings still need explicit receipts
+  and review; unavailable comparisons can use --needs-review. Mixed findings
+  retain the general next step.
+- Say that a test-first failure is required, and omit the skipped-base-test
+  comparison note when the selected tests were written in the change.
 - Apply stub and target-code proof checks only to completion claims new in the
   change, or renewed claims with changed code. Keep running affected finished
   tasks' tests; their failures still refuse. A second task in the same file or

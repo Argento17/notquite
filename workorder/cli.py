@@ -176,7 +176,7 @@ def other_findings(other):
               'workorder check --base <target> --run-tests shows them')
 
 
-def done_refusal(tid, status, lines, other=()):
+def done_refusal(tid, status, lines, other=(), *, needs_review=False):
     """Show this task's findings once and one next action; summarize other tasks."""
     reasons = list(dict.fromkeys(part.strip() for line in lines if line.startswith('  Missing:')
                                  for part in line.removeprefix('  Missing:').splitlines() if part.strip()))
@@ -200,6 +200,21 @@ def done_refusal(tid, status, lines, other=()):
     if any('test changed:' in reason for reason in own):
         steps = [f'  Next:     commit the test change, then run workorder renew --task {tid}; '
                  f'the pull request needs workorder-allow:{tid}']
+    elif own and not other and all('asserts nothing that can fail' in reason or
+                                  reason.endswith(f'; a reviewer accepts it with the label workorder-allow:{tid}')
+                                  for reason in own):
+        if any('its test must land on' in reason for reason in own):
+            steps = [f'  Next:     land the failing test before the work; to request an exception, '
+                     f'run workorder receipt implemented --task {tid} and workorder receipt test --task {tid}, '
+                     f'then set status: DONE in tasks/{tid}.md; the pull request needs workorder-allow:{tid}']
+        elif any('asserts nothing that can fail' in reason or 'still passes with the changed functions stubbed out' in reason
+               for reason in own):
+            steps = [f'  Next:     fix the test; for an unusual valid test, run workorder receipt implemented --task {tid} '
+                     f'and workorder receipt test --task {tid}, then set status: DONE in tasks/{tid}.md; '
+                     f'the pull request needs workorder-allow:{tid}']
+        elif not needs_review:
+            steps = [f'  Next:     fix the test or comparison, or run workorder done --task {tid} --needs-review; '
+                     f'the pull request needs workorder-allow:{tid}']
     print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
 
 
@@ -283,7 +298,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             if item["exit_code"]:
                 lines = [line for line in lines if not line.startswith('  Next:')]
                 lines.append('  Next:     fix the code or the test, then run workorder done again')
-            done_refusal(tid, status, lines)
+            done_refusal(tid, status, lines, needs_review=needs_review)
             return 1
         print("Acceptance:")
         print(filled["Acceptance"])
@@ -294,7 +309,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             if not base:
                 print(f'Note: {stub}')
         elif stub:
-            done_refusal(tid, status, [f'  Missing:  {stub}'])
+            done_refusal(tid, status, [f'  Missing:  {stub}'], needs_review=needs_review)
             return 1
         if base:
             notes = []
@@ -328,14 +343,16 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 elif review_note != wrapper:
                     print(f"Note: {review_note}")
             if problems:
-                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in problems], other_notes)
+                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in problems], other_notes,
+                             needs_review=needs_review)
                 return 1
             other_findings(other_notes)
         else:
             print('Note: could not compare with the target: fetch origin first')
             changed_command = gate.local_command_problems(root, 'HEAD', record)
             if changed_command:
-                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in changed_command])
+                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in changed_command],
+                             needs_review=needs_review)
                 return 1
         path = s.local_path(root, f"tasks/{tid}.md")
         before = path.read_bytes()
@@ -352,7 +369,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             if not supported:
                 path.write_bytes(before)
         if refused:
-            done_refusal(tid, status, lines)
+            done_refusal(tid, status, lines, needs_review=needs_review)
             return 1
         if note is not None:
             print(f"{tid}: {s.add_note(root, tid, note)}")
@@ -367,7 +384,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         print(f"commit tasks/ and .workorder/{push}")
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
-        done_refusal(tid, status, [f"  Missing:  {error}"])
+        done_refusal(tid, status, [f"  Missing:  {error}"], needs_review=needs_review)
         return 1
 
 
@@ -434,12 +451,15 @@ def main(argv=None):
                 for path in named:
                     if not s.local_path(root, path).exists():
                         raise s.Refused(f'{path} does not exist; write the failing test before opening the task')
-                code, output = gate._run_test(root, command, None, None)
+                code, output = gate._run_test(root, command, None, None, quiet=True)
                 if code == 0:
+                    s.print_test_output(output)
                     raise s.Refused('the declared test already passes; write a failing test before opening the task')
                 missing = s.missing_test_dependency(command, code, output, root=root)
                 if isinstance(code, str) or code in {5, 124, 127} or missing:
+                    s.print_test_output(output, failed=True)
                     raise s.Refused('could not run the declared test: ' + str(missing or code))
+                s.print_test_output(output, label='The declared test fails as required.')
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
                         options.template, options.test, options.local, test_paths=named, code_paths=options.code_paths)
             where = ("reserved on origin" if shared

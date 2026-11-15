@@ -1222,10 +1222,23 @@ def refactor_test_files(root, record, base, staged=False):
     return paths
 
 
-def test_origin(root, record, base, label, staged=False):
+def selected_test_files(root, record, base, staged=False):
+    """Select tests themselves, without mistaking configuration or helpers for old tests."""
     paths = refactor_test_files(root, record, base, staged)
+    before = fields_at(root, record['id'], base) or {}
+    configs = pytest_configs(root, record) | pytest_configs(root, before)
     paths = {path for path in paths if posixpath.basename(path) not in PYTEST_CONFIG_NAMES | {'conftest.py'}
-             and path not in pytest_configs(root, record)}
+             and path not in configs}
+    if uses_pytest(record) or uses_pytest(before):
+        named = _normalize_named_paths(root, [path.split('::', 1)[0] for definition in (before, record)
+                                             for path in pytest_collection_paths(definition)])
+        patterns = pytest_patterns(root, base, staged, tuple(sorted(configs)))
+        paths = {path for path in paths if path in named or _matches_test_name(path, patterns)}
+    return paths
+
+
+def test_origin(root, record, base, label, staged=False):
+    paths = selected_test_files(root, record, base, staged)
     existing = paths & repository_files(root, base)
     unchanged = bool(existing) and not paths & changed_paths(root, base, staged)
     command = declared_test(record)
@@ -1900,7 +1913,12 @@ def _pytest_disabling(text):
     return found
 
 
-def _pytest_policy_changes(root, base, record, paths, staged):
+def _conftest_existing_tests(path, tests):
+    folder = posixpath.dirname(path)
+    return {test for test in tests if not folder or test.startswith(folder + '/')}
+
+
+def _pytest_policy_changes(root, base, record, paths, staged, *, existing_tests=None):
     before = fields_at(root, record['id'], base) or {}
     pytest_command = uses_pytest(record) or uses_pytest(before)
     found = []
@@ -1910,11 +1928,16 @@ def _pytest_policy_changes(root, base, record, paths, staged):
         old = _test_bytes(root, path, base) or b''
         new = _test_bytes(root, path, staged=staged) or b''
         if pytest_command and (name in PYTEST_CONFIG_NAMES | {'conftest.py'} or path in configs):
+            new_conftest = name == 'conftest.py' and path not in repository_files(root, base)
+            if new_conftest:
+                selected = (selected_test_files(root, record, base, staged) & repository_files(root, base)
+                            if existing_tests is None else existing_tests)
             if (name.endswith('.toml') and name not in {'pytest.toml', '.pytest.toml'}
                     and pytest_sections(old.decode('utf-8', 'replace'), native=name != 'pyproject.toml')
                     == pytest_sections(new.decode('utf-8', 'replace'), native=name != 'pyproject.toml')):
                 continue
-            found.append(f'pytest configuration changed since {base} ({path})')
+            if not new_conftest or _conftest_existing_tests(path, selected):
+                found.append(f'pytest configuration changed since {base} ({path})')
         if path.endswith('.py'):
             added = _pytest_disabling(new) - _pytest_disabling(old)
             if added:
@@ -2531,7 +2554,7 @@ def completion_changed(root, base, record, staged=False):
 
 
 def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None, results=None):
-    """A passing test must fail when all changed Python functions are unavailable."""
+    """A passing test must fail when the task's changed Python functions are unavailable."""
     run = latest_test_run(root, record, staged)
     if run.get('refactor') or run.get('no_code_change'):
         return None
@@ -2539,10 +2562,18 @@ def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None,
     if not command:
         return None
     from .python_stubs import changed_functions
-    material = repository_test_files(root, base, records(root, staged, errors={}), staged)
+    all_records = records(root, staged, errors={})
+    material = repository_test_files(root, base, all_records, staged)
     material |= strict_test_files(root, record, base, staged)
+    if 'code_paths' in record:
+        candidates = task_code_paths(root, record, base, staged)
+    else:
+        candidates = changed_paths(root, base, staged)
+        for tid, other in all_records.items():
+            if tid != record['id'] and 'code_paths' in other:
+                candidates -= task_code_paths(root, other, base, staged)
     overlays, descriptions = {}, []
-    for path in sorted(changed_paths(root, base, staged) - material):
+    for path in sorted(candidates - material):
         if not path.endswith('.py') or not needs_task_receipt(path):
             continue
         current = _test_bytes(root, path, staged=staged)
@@ -2880,16 +2911,14 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                 elif not assertions and own_code != 5 and proven is not None:
                     proven.add(tid)
             # There is nothing to rerun when all selected test files are new.
-            existing = protected & repository_files(root, base)
-            if uses_pytest(record):
-                existing = {path for path in existing if posixpath.basename(path) not in
-                            PYTEST_CONFIG_NAMES | {'conftest.py'}
-                            and path not in pytest_configs(root, before or {})}
-            changed_configuration = [path for path in paths
-                                     if posixpath.basename(path) in PYTEST_CONFIG_NAMES | {'conftest.py'}]
-            if (not existing and not changed_configuration) or not base_command:
+            selected = selected_test_files(root, record, base, staged)
+            existing = selected & repository_files(root, base)
+            if not existing or not base_command:
                 reason = 'no selected test files at REF' if not existing else 'no concrete test command at REF'
-                notes.append(f'{tid}: REF comparison skipped against {base}: {reason}')
+                # New tests have no old version to compare. Their origin note
+                # already explains this; missing selections still need a reason.
+                if existing or not selected:
+                    notes.append(f'{tid}: REF comparison skipped against {base}: {reason}')
                 return problems
             base_key = ('base', base, tuple(paths), tuple(base_command), s.test_timeout(record, timeout), staged)
             if not paths and base_command == command:
@@ -3232,8 +3261,20 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
         named = sorted(owners.get(path, ()))
         label = ', '.join(named) if named else 'tests'
         tests_record = {'id': label, 'test': 'pytest', 'test_paths': [path]}
-        if config_only and not any('pytest configuration changed' in line for line in
-                                  _pytest_policy_changes(root, base, tests_record, [path], staged)):
+        config_named = named
+        existing_tests = None
+        if posixpath.basename(path) == 'conftest.py' and path not in repository_files(root, base):
+            selected = {tid: selected_test_files(root, record, base, staged) & repository_files(root, base)
+                        for tid, record in all_records.items() if tid not in errors}
+            config_named = [tid for tid in named if _conftest_existing_tests(path, selected[tid])]
+            patterns = pytest_patterns(root, base, staged)
+            existing_tests = {test for test in material & repository_files(root, base)
+                              if posixpath.basename(test) not in PYTEST_CONFIG_NAMES | {'conftest.py'}
+                              and _matches_test_name(test, patterns)}
+            existing_tests.update(test for tests in selected.values() for test in tests)
+        config_lines = _pytest_policy_changes(root, base, tests_record, [path], staged,
+                                              existing_tests=existing_tests)
+        if config_only and not any('pytest configuration changed' in line for line in config_lines):
             continue
         labels = set(allow if explicit_allow is None else explicit_allow)
         accepted_assertion = bool(set(named) & labels) if named else 'tests' in labels
@@ -3244,7 +3285,6 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
             else:
                 problems.append(AssertionProblem(reviewer_label(problem, named[0] if named else 'tests'),
                                                  path, problem.line, True))
-        config_lines = _pytest_policy_changes(root, base, tests_record, [path], staged)
         is_config = any('pytest configuration changed' in line for line in config_lines)
         edits = None if is_config else test_file_changes(root, base, tests_record, staged, strict_tests, protected={path})
         if run_tests and not named:
@@ -3263,9 +3303,12 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
                 edits = None
         lines = ([edits] if edits else []) + config_lines
         for line in lines:
-            if 'tests' not in allow and not set(named) & set(allow):
+            line_owners = config_named if line in config_lines and 'pytest configuration changed' in line else named
+            if line_owners != named:
+                line = (', '.join(line_owners) or 'tests') + line[len(label):]
+            if 'tests' not in allow and not set(line_owners) & set(allow):
                 problems.append(review_problem(root, base,
-                    reviewer_label(line, named[0] if named else 'tests'), path, staged))
+                    reviewer_label(line, line_owners[0] if line_owners else 'tests'), path, staged))
             elif notes is not None:
                 notes.append(f'accepted: {path} (changed lines)')
     return problems

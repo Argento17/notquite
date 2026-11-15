@@ -215,7 +215,7 @@ def test_skipped_ref_comparison_is_explained(local_repo, monkeypatch, reason):
     probe.write_text(probe.read_text() + '\n# new line\n')
     notes = []
     gate.test_change_problems(root, base, store.record(root, 'TASK-1'), notes=notes)
-    assert any('REF comparison skipped' in note for note in notes), notes
+    assert any('REF comparison skipped' in note for note in notes) == (reason != 'new'), notes
 
 
 @pytest.mark.parametrize('kind', ['skip', 'config'])

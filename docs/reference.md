@@ -580,11 +580,14 @@ check still reviews that test change.
 
 For changed or added Python functions, `done` and the finished-task base check
 with `--run-tests` make one further temporary copy. They compare function syntax
-trees with the base, replace every changed or added function body with
+trees with the base, replace the task's changed or added function bodies with
 `raise NotImplementedError('workorder stub')`, and run the task's command once
 with all replacements together. Methods, nested functions and async functions
 are included; whitespace and comments alone do not change a function. Test
 material is excluded, and source files in the checkout are never rewritten.
+Only functions inside the task's declared `code_paths` are replaced. Without
+that declaration, functions inside other tasks' declared code paths are excluded.
+If no changed function belongs to the task, there is no stub check or note.
 If the command still passes, it does not exercise the changed functions and
 completion is refused. The diagnostic names those functions and files.
 Only the task's explicit reviewer label accepts this finding in a base check;
@@ -592,6 +595,12 @@ an approving review, `--allow tests`, `--needs-review` and `--review warn` do no
 Declared refactors and valid no-code-change runs are exempt. This check only
 covers Python function changes; a failing run does not prove that every changed
 function was exercised or that the test checks the intended result.
+
+When none of the selected test files existed at the base, they count as tests
+written in this change. New helpers and fixtures do not make nonexistent old
+tests a failed comparison. A new `conftest.py` needs configuration review only
+for tasks with existing test files below its folder. An edited existing
+`conftest.py` keeps the configuration review rule.
 
 An added or changed Python test function without a recognised assertion is refused by `done` and the base check, even without `--run-tests`:
 

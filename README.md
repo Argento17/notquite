@@ -112,7 +112,7 @@ The pre-commit hook checks staged work; finished-task command repairs get review
 
 A completed task's test must fail on the target's merge-base code when its own code or tests changed. `--refactor` accepts unchanged tests passing on both versions; `--no-code-change` exempts work with no code edits. Each exemption remains a separate task note.
 
-New or changed Python test functions need an assertion or helper (including `pytest.warns`); literal-only assertions and `value == value` refuse. Tests must also fail when all changed Python functions are replaced with bodies that raise an error in a temporary copy. Refactor and no-code-change runs are exempt; unusual valid tests need the task's explicit reviewer label. [Test checks](docs/reference.md#checks-against-a-base).
+New or changed Python test functions need an assertion or helper (including `pytest.warns`); literal-only assertions and `value == value` refuse. Tests must also fail when the task's changed Python functions are replaced with bodies that raise an error in a temporary copy. Declared code paths set that boundary; without them, other tasks' declared paths are excluded. Refactor and no-code-change runs are exempt; unusual valid tests need the task's explicit reviewer label. [Test checks](docs/reference.md#checks-against-a-base).
 
 The default workflow checks pull requests with `--base origin/<base> --run-tests --all-tests --require-task`, and default-branch pushes with `--run-tests --all-tests`.
 `check/done --jobs N` runs distinct current commands concurrently, defaulting to the CPU count; output stays in task order. Identical commands and timeouts share one run. If merged code differs, run `workorder renew --task <id>`. Renewal preserves a refactor declaration.
