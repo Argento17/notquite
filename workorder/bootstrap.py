@@ -16,11 +16,16 @@ AGENT_BLOCK = r"""## Tasks
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - Work on a branch and open a pull request for review.
 - After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
+- If `done` refuses because you changed tests on purpose, rerun with `--needs-review` and tell the user the pull request needs the label `workorder-allow:<id>`.
 - Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 """
 
 HOOK = r"""#!/bin/sh
+previous="${0%/*}/pre-commit.workorder-previous"
+if [ -f "$previous" ]; then
+    "$previous" "$@" || exit $?
+fi
 if command -v workorder >/dev/null 2>&1; then
     exec workorder check --staged
 fi
@@ -164,8 +169,11 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
     hook_name = '.git/hooks/pre-commit'
     hook_exists = hook.exists()
     different = hook_exists and hook.read_text(encoding='utf-8') != HOOK
+    previous = hook.with_name('pre-commit.workorder-previous')
     if different and not check and not force:
         raise s.Refused(f'{hook_name} is different; refusing to overwrite it without --force')
+    if different and not check and previous.exists():
+        raise s.Refused(f'{previous.name} already exists; keep both existing hooks before installing another')
     if not hook_exists and any(
             AGENT_BLOCK.strip() in s.git(root, 'show', f'HEAD:{name}', required=False).stdout
             for name in ('AGENTS.md', 'CLAUDE.md')):
@@ -189,13 +197,16 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         print(f'{hook_name}: already installed')
     elif check:
         missing = True
-        detail = 'different hook (use --force to replace)' if different else 'missing or not executable'
+        detail = 'different hook (use --force to chain)' if different else 'missing or not executable'
         print(f'{hook_name}: {detail}')
     else:
         hook.parent.mkdir(parents=True, exist_ok=True)
+        if different:
+            hook.rename(previous)
+            print(f'{hook_name}: kept as {previous.name}; the new hook calls it first')
         hook.write_text(HOOK, encoding='utf-8', newline='\n')
         hook.chmod(hook.stat().st_mode | 0o111)
-        print(f'{hook_name}: installed' + (' (replaced with --force)' if different else ''))
+        print(f'{hook_name}: installed')
     path = s.local_path(root, '.github/workflows/workorder.yml')
     if path.exists() and not update_workflow:
         print('.github/workflows/workorder.yml: already present; skipped')
@@ -209,8 +220,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
                                '      # Replace this step with your test dependency installation.\n'
                                '      - name: Add your test dependencies here\n'
                                '        run: |\n'
-                               '          echo "add your test dependencies here" >&2\n'
-                               '          exit 1\n')
+                               '          echo "::warning::No project test dependencies detected; add your test dependencies here" >&2\n')
         workflow = WORKFLOW.replace('@DEPENDENCIES@', dependency_step).replace(
             '@WORKORDER@', shlex.quote(workorder_install())).replace(
             '@DEFAULT_BRANCH@', json.dumps([default_branch(root)]))

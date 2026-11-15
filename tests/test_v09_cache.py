@@ -194,7 +194,7 @@ def test_done_hook_stop_and_check_share_one_run_across_processes(local_repo):
     base = commit_all(root)
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
     git(root, 'checkout', '-qb', 'feature')
-    done = cli(root, 'done', '--task', 'TASK-1')
+    done = cli(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert done.returncode == 0, done.stdout + done.stderr
     assert len(executions(counter)) == 1
     git(root, 'add', 'tasks', '.workorder')

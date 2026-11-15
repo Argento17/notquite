@@ -86,12 +86,10 @@ def test_workflow_installs_detected_dependencies_before_exact_workorder(
     for command in workflow_commands(local_repo):
         completed = subprocess.run(['/bin/sh', '-eu', '-c', command], cwd=local_repo,
                                    env=environment, capture_output=True, text=True)
-        if expected is None:
-            assert completed.returncode == 1
+        if expected is None and 'add your test dependencies here' in command:
+            assert 'warning' in completed.stderr
             assert 'add your test dependencies here' in completed.stderr
-            assert not log.exists()  # fail before installing Workorder or attempting the check
-            assert 'no project test dependencies detected' in output.lower()
-            return
+            assert not log.exists()  # the warning itself installs nothing
         assert completed.returncode == 0, completed.stderr
     actual = [json.loads(line) for line in log.read_text().splitlines()]
     installs = [args for args in actual if args[:4] == ['python', '-m', 'pip', 'install']]
@@ -371,7 +369,6 @@ def test_git_install_pin_follows_metadata_not_the_readme_text(local_repo, publis
     placeholder = ("      # Replace this step with your test dependency installation.\n"
                    "      - name: Add your test dependencies here\n"
                    "        run: |\n"
-                   '          echo "add your test dependencies here" >&2\n'
-                   "          exit 1\n")
+                   '          echo "::warning::No project test dependencies detected; add your test dependencies here" >&2\n')
     assert text.strip().replace(shlex.quote(pin), 'workorder==0.10.0') in reference.replace(
         example_dependencies, placeholder)

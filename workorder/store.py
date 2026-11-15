@@ -97,10 +97,19 @@ def _git_read(root, *args, data=None, required=True):
     return _git_run(root, *args, data=data, required=required)
 
 
-def _git_run(root, *args, data=None, required=True):
+def copy_environment():
+    """A temporary repository must not inherit Git's pointers into the caller's repository."""
+    local = {'GIT_INDEX_FILE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_PREFIX', 'GIT_COMMON_DIR',
+             'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_IMPLICIT_WORK_TREE',
+             'GIT_GRAFT_FILE', 'GIT_SHALLOW_FILE', 'GIT_REPLACE_REF_BASE', 'GIT_NAMESPACE'}
+    return {key: value for key, value in os.environ.items() if key not in local}
+
+
+def _git_run(root, *args, data=None, required=True, isolated=False):
     result = subprocess.run(
         ["git", *args], cwd=root, input=data, capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=30,
+        env=copy_environment() if isolated else None,
     )
     if required and result.returncode:
         raise Refused(result.stderr.strip() or "Git command failed")
@@ -1269,16 +1278,18 @@ def test_timeout(record, override=None):
     return positive_seconds(value) if value is not None else None
 
 
-def run_test(command, root, timeout=None, capture_output=True):
+def run_test(command, root, timeout=None, capture_output=True, *, isolated=False):
     """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
     # Keep the ordinary subprocess path when there is no deadline. With a deadline,
     # use a process group so child test runners cannot keep captured pipes open.
     if timeout is None:
         return subprocess.run(list(command), cwd=root, capture_output=capture_output,
-                              encoding="utf-8", errors="replace")
+                              encoding="utf-8", errors="replace",
+                              env=copy_environment() if isolated else None)
     with subprocess.Popen(list(command), cwd=root, stdout=subprocess.PIPE if capture_output else None,
                           stderr=subprocess.PIPE if capture_output else None,
-                          encoding="utf-8", errors="replace", start_new_session=os.name != 'nt') as process:
+                          encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
+                          env=copy_environment() if isolated else None) as process:
         try:
             output, errors = process.communicate(timeout=timeout)
             return subprocess.CompletedProcess(command, process.returncode, output, errors)
@@ -1299,16 +1310,16 @@ def run_test(command, root, timeout=None, capture_output=True):
             return subprocess.CompletedProcess(command, 124, output, errors)
 
 
-def _test_state(root):
+def _test_state(root, isolated=False):
     """Fingerprint the files actually executed, including dirty snapshot overlays.
 
     HEAD alone cannot identify a staged copy or current code with REF tests overlaid.
     Ignore only Git-ignored files and Workorder metadata, as with ordinary code checks.
     Read Git afresh because a declared command can change files or refs in this process.
     """
-    commit = _git_run(root, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
+    commit = _git_run(root, 'rev-parse', '--verify', 'HEAD^{commit}', isolated=isolated).stdout.strip()
     listing = _git_run(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard',
-                       '--', *CODE_PATHS).stdout
+                       '--', *CODE_PATHS, isolated=isolated).stdout
     fingerprint = hashlib.sha256()
     for relative in sorted(set(listing.split('\0')) - {''}):
         path = root / relative
@@ -1336,6 +1347,7 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
     never in receipts or cloned files. A fresh run replaces any earlier result.
     """
     owner = cache_root if cache_root is not None else root
+    isolated = owner != root
     logical = list(command if logical_command is None else logical_command)
     timeout = positive_seconds(timeout) if timeout is not None else None
     ci = any(os.environ.get(name, '').lower() not in {'', '0', 'false', 'no'}
@@ -1344,7 +1356,7 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
     before = owner_head = None
     if not ci:
         try:
-            before = _test_state(root)
+            before = _test_state(root, isolated)
             owner_head = (_git_run(owner, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
                           if owner != root else before[0] if before else None)
             if before:
@@ -1366,14 +1378,14 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
         except OSError:
             pass
     try:
-        run = run_test(command, root, timeout, capture_output=True)
+        run = run_test(command, root, timeout, capture_output=True, isolated=isolated)
     finally:
         invalidate_reads()
     run.cached = False
     if cached_path is not None:
         temporary = cached_path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
         try:
-            if (_test_state(root) == before
+            if (_test_state(root, isolated) == before
                     and _git_run(owner, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip() == owner_head):
                 cached_path.parent.mkdir(parents=True, exist_ok=True)
                 temporary.write_text(packed(dict(returncode=run.returncode, stdout=run.stdout or '',

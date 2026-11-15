@@ -60,12 +60,13 @@ def test_task_first_added_lines_cannot_hide_a_failing_ref_test(local_repo, monke
             result = subprocess.run([str(root / '.git/hooks/pre-commit')], cwd=root, env=env,
                                     capture_output=True, text=True)
             output = result.stdout + result.stderr
-            assert result.returncode == 1, output
+            assert result.returncode == 0, output
+            assert "Note:" in output and "NOT QUITE" not in output
         elif action == 'stop':
             local_claim(root, 'TASK-1')
             refuse_network(monkeypatch)
             monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
-            assert hooks.run(root, 'stop') == 2
+            assert hooks.run(root, 'stop') == 0
             captured = capsys.readouterr()
             output = captured.out + captured.err
         else:
@@ -205,7 +206,7 @@ def test_finished_node_suite_needs_test_paths(local_repo):
     path = task(root, ships='none', test='node --test')
     path.write_text(path.read_text() + '\n## Scope\n\nAdd.\n\n## Acceptance\n\n- add(2, 2) is 4.\n')
     commit_all(root)
-    done = cli(root, 'done', '--task', 'TASK-1')
+    done = cli(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert done.returncode == 0, done.stdout + done.stderr
     base = commit_all(root)
     (root / 'src/calc.js').write_text('exports.add = (a, b) => a + b + 1;\n')

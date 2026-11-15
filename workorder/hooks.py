@@ -95,7 +95,7 @@ def relevant_tasks(root):
         if not isinstance(override, str) or not override.startswith(('refs/heads/', 'refs/remotes/')):
             record.pop('merge_ref', None)
         target = gate.merge_target(root, record)
-        revision = target[1] if target else 'HEAD'
+        revision = gate.comparison_base(root, target[0])[0] if target else 'HEAD'
         before = s.metadata_texts(root, revision).get(path)
         if before != current:
             selected.add(tid)
@@ -145,13 +145,16 @@ def run(root, event):
         base = gate.local_test_base(root, record)
         if record['status'] == 'CANCELLED' and tid in owned:
             target = gate.merge_target(root, record)
-            previous = gate.committed_status(root, tid, base or (target[1] if target else 'HEAD'))
+            reference = base or (target[0] if target else None)
+            revision = gate.comparison_base(root, reference)[0] if reference else 'HEAD'
+            previous = gate.committed_status(root, tid, revision)
             if previous != 'CANCELLED':
                 problems.append(gate.reviewer_label(
                     f'{tid}: status changed: {previous or "new task"} -> CANCELLED; '
                     f'a reviewer accepts closing a task without finishing it with --allow {tid}', tid))
         if tid in claimed and base:
-            problems += gate.local_test_problems(root, base, record, notes=notes, results=results)
+            problems += gate.local_test_problems(root, base, record, notes=notes, results=results,
+                                                 pending_review=True)
     for note in gate.summarize_notes(notes):
         print(f'Note: {note}')
     if problems:

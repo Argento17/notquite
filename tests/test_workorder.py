@@ -1650,7 +1650,7 @@ def test_check_base_refuses_a_changed_test_unless_allowed_and_skips_untouched_ta
     git(local_repo, "commit", "-qam", "Change TASK-2's test")
     refused = cli(local_repo, "check", "--base", base)
     assert refused.returncode == 1
-    assert (f"TASK-2: test changed: 'true' -> 'git --version' since {base}; a reviewer accepts it with"
+    assert (f"TASK-2: test changed: 'true' -> 'git --version' since {base} (merge base {base[:7]}); a reviewer accepts it with"
             " --allow TASK-2") in refused.stdout
     assert "TASK-1" not in refused.stdout  # the change does not touch TASK-1
     allowed = ok(local_repo, "check", "--base", base, "--allow", "TASK-2")

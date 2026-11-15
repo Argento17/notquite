@@ -234,7 +234,7 @@ def test_additive_skip_and_config_need_review_without_running_tests(local_repo, 
 def test_done_reports_missing_ref_instead_of_silently_skipping(local_repo):
     from test_v07b_commands import filled_task
     filled_task(local_repo)
-    result = cli(local_repo, 'done', '--task', 'TASK-1')
+    result = cli(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'REF comparison skipped' in result.stdout and 'not available locally' in result.stdout
 

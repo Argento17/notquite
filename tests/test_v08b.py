@@ -43,7 +43,7 @@ def local_change(root, kind):
 @pytest.mark.parametrize('kind,reason', [('ref', 'fail on this code'), ('fewer', 'fewer tests pass'),
                                        ('skip', 'new skip or xfail'), ('config', 'configuration changed'),
                                        ('lines', 'lost or changed')])
-def test_local_commands_refuse_test_changes(local_repo, monkeypatch, capsys, action, kind, reason):
+def test_local_commands_review_test_changes(local_repo, monkeypatch, capsys, action, kind, reason):
     root = local_repo
     if action == 'pre-commit':
         bootstrap.initialize(root)
@@ -71,7 +71,9 @@ def test_local_commands_refuse_test_changes(local_repo, monkeypatch, capsys, act
             captured = capsys.readouterr()
             output = captured.out + captured.err
         assert store.record(root, 'TASK-1')['status'] == 'DONE'
-    assert code == (2 if action == 'stop' else 1), output
+    assert code == (1 if action == 'done' else 0), output
+    if action != 'done':
+        assert 'Note:' in output and 'NOT QUITE' not in output
     assert reason in output
     assert 'a reviewer can accept it in the pull request with the workorder-allow:TASK-1 label' in output
 
@@ -85,7 +87,7 @@ def test_precommit_compares_index_not_working_tests(local_repo):
     git(root, 'add', '-A')
     probe.write_text('def test_one():\n    assert False\n')
     result = cli(root, 'check', '--staged')
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert 'lost or changed' in result.stdout and 'workorder-allow:TASK-1' in result.stdout
     assert 'its test failed' not in result.stdout
 
@@ -209,14 +211,15 @@ def test_stop_refuses_new_cancellation_of_held_task(local_repo, monkeypatch, cap
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='executes the Linux workflow shell step')
-def test_no_dependencies_workflow_fails_with_actionable_placeholder(local_repo):
+def test_no_dependencies_workflow_warns_with_actionable_placeholder(local_repo):
     task(local_repo, test=f'{PYTHON} runner.py')
     bootstrap.initialize(local_repo)
     commands = workflow_commands(local_repo)
     placeholder = next((command for command in commands if 'add your test dependencies here' in command), '')
     assert placeholder
     result = subprocess.run(['/bin/sh', '-c', placeholder], capture_output=True, text=True)
-    assert result.returncode == 1 and 'add your test dependencies here' in result.stdout + result.stderr
+    assert result.returncode == 0 and 'warning' in result.stdout + result.stderr
+    assert 'add your test dependencies here' in result.stdout + result.stderr
     assert not any('install pytest' in command for command in commands)
 
 
@@ -243,7 +246,7 @@ def test_missing_test_dependencies_are_named(local_repo, action, command, missin
     path.write_text(path.read_text() + '\n## Scope\n\nCalculate.\n\n## Acceptance\n\n- Correct.\n')
     base = commit_all(root)
     store.add_note(root, 'TASK-1', 'Working')
-    args = ['done', '--task', 'TASK-1'] if action == 'done' else ['check', '--base', base, '--run-tests']
+    args = ['done', '--no-code-change', '--task', 'TASK-1'] if action == 'done' else ['check', '--base', base, '--run-tests']
     result = cli(root, *args)
     assert result.returncode == (1 if action == 'done' else 0)
     if action == 'check':
@@ -277,7 +280,7 @@ def test_done_explains_passing_but_void_run(local_repo):
     path = task(root, ships='none', test=f'{PYTHON} runner.py')
     path.write_text(path.read_text() + '\n## Scope\n\nCalculate.\n\n## Acceptance\n\n- Correct.\n')
     commit_all(root)
-    result = cli(root, 'done', '--task', 'TASK-1')
+    result = cli(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert result.returncode == 1
     assert 'files changed while the command ran' in result.stdout
     assert '__pycache__' in result.stdout and '.gitignore' in result.stdout
@@ -320,7 +323,7 @@ def test_wrapper_advice_without_local_base(local_repo, action):
     path = task(root, ships='none', test=f'{PYTHON} runner.py')
     path.write_text(path.read_text() + '\n## Scope\n\nCalculate.\n\n## Acceptance\n\n- Correct.\n')
     commit_all(root)
-    result = cli(root, *(['done', '--task', 'TASK-1'] if action == 'done' else ['check']))
+    result = cli(root, *(['done', '--no-code-change', '--task', 'TASK-1'] if action == 'done' else ['check']))
     assert result.returncode == 0
     assert 'TASK-1 runs a wrapper script; set test_paths so changes to its tests are reviewed' in result.stdout
 

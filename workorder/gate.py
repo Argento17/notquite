@@ -787,10 +787,15 @@ LANGUAGE_TEST_PATTERNS = ('test_*.py', '*_test.py', '*_test.go', '*.test.*', '*.
 TEST_DIR_NAMES = {'test', 'tests', '__tests__'}
 
 
+def test_directory(name):
+    return 'test' in name.lower() or 'fixture' in name.lower()
+
+
 def looks_like_test(path):
     path = path.replace('\\', '/').split('::', 1)[0]
     name = posixpath.basename(path)
-    return (any(part in TEST_DIR_NAMES for part in path.split('/'))
+    return (any(test_directory(part) for part in path.split('/')[:-1])
+            or name in TEST_DIR_NAMES
             or name == 'conftest.py'
             or any(fnmatch.fnmatchcase(name, pattern) for pattern in LANGUAGE_TEST_PATTERNS))
 
@@ -806,7 +811,7 @@ def _repository_test_file(path):
         return False
     if posixpath.basename(path) == 'conftest.py':
         return False
-    if any(part in TEST_DIR_NAMES for part in path.split('/')[:-1]):
+    if any(test_directory(part) for part in path.split('/')[:-1]):
         return True
     return _language_test_name(path)
 
@@ -980,12 +985,12 @@ def _named_test_folder(path, candidates):
 
 
 def _natural_test_roots(candidates):
-    """Folders whose own name is test or tests. A test file's other parents are not roots."""
+    """Folders whose names contain test or fixture, including their data and helpers."""
     roots = set()
     for path in candidates:
         parts = path.split('/')
         for index, part in enumerate(parts[:-1]):
-            if part in TEST_DIR_NAMES:
+            if test_directory(part):
                 roots.add('/'.join(parts[:index + 1]))
     return roots
 
@@ -1322,11 +1327,12 @@ def pytest_counts(output):
     return None
 
 
-def _run_test(root, command, timeout, counts, *, quiet=False, cache_root=None, logical_command=None):
+def _run_test(root, command, timeout, counts, *, quiet=False, cache_root=None, logical_command=None,
+              failures_only=False):
     try:
         run = s.cached_test(command, root, timeout=timeout, cache_root=cache_root,
                             logical_command=logical_command)
-        if not quiet:
+        if not quiet and (not failures_only or run.returncode):
             print(run.stdout or '', end='')
             print(run.stderr or '', end='', file=sys.stderr)
         if counts is not None:
@@ -1334,6 +1340,8 @@ def _run_test(root, command, timeout, counts, *, quiet=False, cache_root=None, l
             if run.cached:
                 counts['cached'] = counts.get('cached', 0) + 1
         return run.returncode, (run.stdout or '') + (run.stderr or '')
+    except FileNotFoundError as error:
+        return 127, str(error)  # Windows and POSIX use different error text for the same missing tool.
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         return f'not started: {getattr(error, "strerror", None) or str(error)}', ''
     finally:
@@ -1480,7 +1488,8 @@ def _snapshot_write(destination, path, content, mode=None, source_root=None):
 def _test_snapshot(root, destination, staged=False):
     """Copy current files, with an independent Git directory and no checkout of the user's tree."""
     cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
-                            capture_output=True, encoding='utf-8', errors='replace', timeout=30)
+                            capture_output=True, encoding='utf-8', errors='replace', timeout=30,
+                            env=s.copy_environment())
     if cloned.returncode:
         raise s.Refused('could not create a temporary test copy: ' + cloned.stderr.strip())
 
@@ -1500,7 +1509,7 @@ def _test_snapshot(root, destination, staged=False):
                 copied.unlink()
                 copied.symlink_to(os.path.relpath(destination / target.relative_to(root), copied.parent),
                                   target_is_directory=source.is_dir())
-    s.git(destination, 'read-tree', 'HEAD')
+    s._git_run(destination, 'read-tree', 'HEAD', isolated=True)
     if staged:
         indexed = repository_files(root)
         untracked = set(s.git(root, 'ls-files', '--others', '--exclude-standard', '-z').stdout.split('\0')) - {''}
@@ -1548,33 +1557,73 @@ def local_test_base(root, record=None):
     return None
 
 
+def comparison_base(root, ref):
+    """Resolve a target once, retaining its name for explanations."""
+    if s.git(root, 'rev-parse', '--verify', '--quiet', f'{ref}^{{commit}}', required=False).returncode:
+        raise s.Refused(f'base {ref} is not in this clone; fetch it'
+                        ' (in GitHub Actions: actions/checkout with fetch-depth: 0)')
+    base = s.git(root, 'merge-base', 'HEAD', ref, required=False).stdout.strip()
+    if not base:
+        raise s.Refused(f'HEAD and {ref} have no merge base; fetch the full history')
+    short = s.git(root, 'rev-parse', '--short', base).stdout.strip()
+    return base, f'{ref} (merge base {short})'
+
+
+def implementation_base(root, record):
+    ref = local_test_base(root, record)
+    if not ref:
+        target = merge_target(root, record)
+        branch = s.git(root, 'symbolic-ref', '--quiet', 'HEAD', required=False).stdout.strip()
+        if target and target[0] != branch:
+            ref = target[0].removeprefix('refs/heads/').removeprefix('refs/remotes/')
+    if ref:
+        return comparison_base(root, ref)[0], ref
+    created = s.git(root, 'log', '--diff-filter=A', '--format=%H', 'HEAD', '--',
+                    f"tasks/{record['id']}.md").stdout.split()
+    commit = created[0] if created else s.head(root)
+    return commit, s.git(root, 'rev-parse', '--short', commit).stdout.strip()
+
+
+def comparison_message(line, revision, ref, label):
+    return re.sub(r'(since )?' + re.escape(revision),
+                  lambda match: 'since ' + label if match[1] else ref, line)
+
+
 def reviewer_label(problem, tid):
     return problem + f'; a reviewer can accept it in the pull request with the workorder-allow:{tid} label'
 
 
 def _accepts_allow_label(problem):
     """A failing current test is refused outright; no label accepts it."""
-    markers = ('its test failed when this check ran it', 'its test ran but no test passed',
-               'declares no test for this check to run')
-    return not any(marker in problem for marker in markers)
+    return '; a reviewer accepts ' in problem
 
 
-def local_test_problems(root, base, record, **kwargs):
+def local_test_problems(root, base, record, *, pending_review=False, **kwargs):
+    ref = base
+    base, label = comparison_base(root, base)
+    notes = kwargs.setdefault('notes', [])
+    start = len(notes)
     labeled = []
     for problem in test_change_problems(root, base, record, **kwargs):
         if _accepts_allow_label(problem):
-            labeled.append(reviewer_label(problem, record['id']))
+            line = reviewer_label(problem, record['id'])
+            if pending_review:
+                notes.append(line)
+            else:
+                labeled.append(line)
         else:
             labeled.append(problem)
-    return labeled
+    notes[start:] = [comparison_message(line, base, ref, label) for line in notes[start:]]
+    return [comparison_message(line, base, ref, label) for line in labeled]
 
 
 def _ref_test_snapshot(root, destination, commit):
     cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
-                            capture_output=True, encoding='utf-8', errors='replace', timeout=30)
+                            capture_output=True, encoding='utf-8', errors='replace', timeout=30,
+                            env=s.copy_environment())
     if cloned.returncode:
         raise s.Refused('could not create a temporary REF copy: ' + cloned.stderr.strip())
-    s.git(destination, 'checkout', '--quiet', '--detach', commit)
+    s._git_run(destination, 'checkout', '--quiet', '--detach', commit, isolated=True)
     # Reuse ignored local dependencies, but never overlay REF's tracked code with current code.
     tracked = repository_files(root, commit)
     ignored = s.git(root, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z').stdout.split('\0')
@@ -1644,7 +1693,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
     problems = [wrapper] if wrapper else []
 
     def test_failure(line):
-        if record['status'] in FINISHED:
+        if completed or record['status'] in FINISHED:
             problems.append(line)
         else:
             notes.append(line.removeprefix('NOT QUITE  ') + '; task is not claimed finished')
@@ -1684,7 +1733,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             key = _test_key(record, timeout)
             if key not in results:
                 results[key] = _run_test(current_root, current_command, s.test_timeout(record, timeout), counts,
-                                         cache_root=root, logical_command=command)
+                                         cache_root=root, logical_command=command, failures_only=staged)
             failed = run_declared_test(current_root, record, counts, notes, strict, results, timeout=timeout)
             if failed:
                 test_failure(failed)
@@ -1859,9 +1908,11 @@ def needs_task_receipt(path):
             and not posixpath.basename(path).startswith('LICENSE'))
 
 
-def has_work_receipt(root, base, changed, staged=False):
+def has_work_receipt(root, base, changed, staged=False, allow=()):
     for tid in sorted({s.receipt_task(path) for path in changed} - {None}):
         try:
+            if fields_at(root, tid, base) is None and tid not in allow:
+                continue
             record = s.record(root, tid, staged)
             command = declared_test(record)
             if not command:
@@ -1925,6 +1976,19 @@ def summarize_notes(notes, verbose=False):
 @s.read_session()
 def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, counts=None,
           strict_tests=False, all_tests=False, require_task=False, timeout=None):
+    notes = [] if notes is None else notes
+    revision, label = comparison_base(root, base) if base else (None, None)
+    start = len(notes)
+    problems = _check(root, staged, revision, notes, allow, run_tests, counts,
+                      strict_tests, all_tests, require_task, timeout)
+    if base:
+        notes[start:] = [comparison_message(line, revision, base, label) for line in notes[start:]]
+        problems = [comparison_message(line, revision, base, label) for line in problems]
+    return problems
+
+
+def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, counts=None,
+           strict_tests=False, all_tests=False, require_task=False, timeout=None):
     """Problems that refuse the check.
 
     Plain check reads every task. With --staged (the pre-commit hook) or --base REF (CI) it judges the
@@ -1955,7 +2019,7 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
                 if tid in selected]
     if require_task and changed and 'no-task' not in allow:
         code = any(needs_task_receipt(path) for path in changed)
-        recorded = has_work_receipt(root, base, changed, staged)
+        recorded = has_work_receipt(root, base, changed, staged, allow)
         if code and not recorded:
             problems.append('this change edits code but no task records it with a new implemented or test receipt; '
                             'run workorder receipt implemented --task ID or workorder receipt test --task ID')
@@ -2087,19 +2151,20 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
                               and record['status'] == 'CANCELLED' else 'it')
                     problems.append(f"{line}; a reviewer accepts {reason} with --allow {tid}")
         elif staged:
-            for change in requirement_changes(root, "HEAD", record, staged):
-                notes.append(f"{tid}: {change} in this commit")
             local_base = local_test_base(root, record)
+            revision, label = comparison_base(root, local_base) if local_base else ('HEAD', None)
+            for change in requirement_changes(root, revision, record, staged):
+                notes.append(f"{tid}: {change} " + (f'since {label}' if label else 'in this commit'))
             owns_change = False
             if local_base and changed:
                 try:
-                    owns_change = bool(strict_test_files(root, record, local_base, True) & changed)
+                    owns_change = bool(strict_test_files(root, record, revision, True) & changed)
                 except (OSError, s.Refused, ValueError, TypeError, KeyError, AttributeError,
                         subprocess.SubprocessError):
                     owns_change = False
             if local_base and (tid in worked or owns_change):
                 problems += local_test_problems(root, local_base, record, timeout=timeout, staged=True,
-                                                counts=counts, notes=notes, results=results)
+                                                counts=counts, notes=notes, results=results, pending_review=True)
         if (run_tests and tid in worked and not all_tests and not found and record["status"] in FINISHED
                 and _test_key(record, timeout) not in results):
             failed = run_declared_test(root, record, counts, notes, strict_tests, results, timeout=timeout)

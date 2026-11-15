@@ -34,11 +34,7 @@ git init -q -b main
 git config user.name "Your Name"
 git config user.email you@example.com
 workorder init
-
-printf 'def add(a, b):\n    return a + b\n' > calc.py
-printf 'from calc import add\n\nassert add(2, 2) == 4\n' > test_calc.py
 printf '__pycache__/\n' > .gitignore
-git add . && git commit -qm "Add calc and Workorder setup"
 
 workorder new --title "Add calc" --owner you --test "python3 test_calc.py"
 ```
@@ -56,6 +52,16 @@ Out: subtraction and other operations.
 - `add(2, 2)` returns `4`.
 ```
 
+Commit the task, then do the work and commit it:
+
+```sh
+git add . && git commit -qm "Workorder setup and TASK-1"
+
+printf 'def add(a, b):\n    return a + b\n' > calc.py
+printf 'from calc import add\n\nassert add(2, 2) == 4\n' > test_calc.py
+git add . && git commit -qm "Add calc"
+```
+
 Confirm every Acceptance item is met, then:
 
 ```sh
@@ -67,6 +73,9 @@ workorder show --task TASK-1
 only when the evidence supports it. Commit `tasks/` and `.workorder/` with your
 work. It never commits or pushes for you. If it refuses, follow its Missing and
 Next lines; use IN_PROGRESS while fixing a task that was previously DONE.
+Ordinary tasks need a code change since the target merge base (or task creation).
+Use `--no-code-change` for verification tasks. Intentional test edits can finish
+with `--needs-review`; tell the reviewer the `workorder-allow:<ID>` label is needed.
 [Task format and command details](docs/reference.md#task-files).
 
 ## Working with coding agents
@@ -81,6 +90,7 @@ workflow when one is absent. Existing instructions stay in place.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - Work on a branch and open a pull request for review.
 - After committing code and confirming every Acceptance item is met, run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
+- If `done` refuses because you changed tests on purpose, rerun with `--needs-review` and tell the user the pull request needs the label `workorder-allow:<id>`.
 - Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 ```
@@ -93,7 +103,7 @@ refusals to stderr with exit 2. The stop-loop guard exits 0.
 ## Hooks and workflows
 
 The pre-commit hook checks staged work. When a remote target is available
-locally, local checks also compare test changes. The generated workflow checks
+locally, local checks compare tests with its merge base and report review notes. The generated workflow checks
 pull requests with `--base origin/<base> --run-tests --all-tests --require-task`
 and default-branch pushes with `--run-tests --all-tests`. A conflicted squash
 can leave main with code that differs from the tested code, so the check on
@@ -107,9 +117,11 @@ code-to-task requirement. Current failures for completed tasks still refuse.
 [Review rules and the full workflow](docs/reference.md#checks-against-a-base).
 
 `init --check` reports missing setup without changing it. `init --update-workflow`
-shows a diff and refreshes the workflow; `--force` replaces a different hook.
+shows a diff and refreshes the workflow. `--force` keeps a different hook as
+`pre-commit.workorder-previous` and calls it first.
 Generated workflows install detected test dependencies and pin the running
-Workorder version or installed Git commit. [Team setup](docs/reference.md#team-setup).
+Workorder version or installed Git commit. With no detected test dependencies,
+they install no extra test tools and print a warning. [Team setup](docs/reference.md#team-setup).
 
 [Full reference](docs/reference.md) · [Examples](examples/) ·
 [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)

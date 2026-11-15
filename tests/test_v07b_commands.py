@@ -45,7 +45,7 @@ def test_done_preserves_existing_status_quotes(local_repo, quote):
     path = filled_task(local_repo)
     path.write_bytes(path.read_bytes().replace(b'status: "IN_PROGRESS"', f'status: {quote}IN_PROGRESS{quote}'.encode()))
     before = path.read_bytes()
-    output = ok(local_repo, 'done', '--task', 'TASK-1')
+    output = ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     assert path.read_bytes() == before.replace(f'status: {quote}IN_PROGRESS{quote}'.encode(), f'status: {quote}DONE{quote}'.encode())
     assert 'its declared test passed on this code' in output
     assert 'claim supported' not in output
@@ -84,7 +84,7 @@ def test_done_refuses_ref_test_failure_before_writing_done(local_repo):
 
 def test_check_and_show_use_claimed_and_evidence(local_repo):
     filled_task(local_repo)
-    ok(local_repo, 'done', '--task', 'TASK-1')
+    ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     for args in [('check', 'TASK-1'), ('show', '--task', 'TASK-1')]:
         output = ok(local_repo, *args)
         assert 'Claimed:  DONE' in output and 'Evidence: supports the claim (nothing to ship)' in output
@@ -140,6 +140,8 @@ def test_timeout_is_a_failed_run_with_exit_124(local_repo, action, source):
         args = ['check', '--base', base, '--run-tests']
     else:
         args = ['receipt', 'test'] if action == 'receipt' else [action]
+        if action == 'done':
+            args.append('--no-code-change')
         args += ['--task', 'TASK-1']
     if source == 'option':
         args += ['--timeout', '0.03']
@@ -169,6 +171,8 @@ def test_timeout_option_overrides_task_field(local_repo, action):
         args = ['check', '--base', base, '--run-tests']
     else:
         args = ['receipt', 'test'] if action == 'receipt' else [action]
+        if action == 'done':
+            args.append('--no-code-change')
         args += ['--task', 'TASK-1']
         if action == 'receipt':
             store.receipt(root, 'TASK-1', 'implemented')

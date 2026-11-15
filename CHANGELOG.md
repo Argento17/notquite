@@ -2,6 +2,20 @@
 
 ## 0.10.0 (unreleased)
 
+- Isolate temporary Git copies and their test commands from the hook's Git
+  environment, preserving commit indexes for -a, paths, amend and linked worktrees.
+- Compare tests and requirements with the target merge base; keep its name in
+  diagnostics. New work only on the target no longer looks like removed work.
+- Add done --needs-review for intentional test changes pending a reviewer label.
+  Local hooks report these as notes and still refuse unsupported DONE claims.
+- Require a code change for done; --no-code-change permits verification tasks.
+  --require-task counts tasks from the merge base, or new tasks accepted by --allow ID.
+- Infer helpers and data under folders containing test or fixture in their names.
+- Preserve and chain an existing hook with init --force. Keep successful hook
+  test output quiet, count cached results, and warn when no test dependencies
+  were detected instead of stopping the generated workflow.
+- Isolate test environments from ambient CI and GITHUB_ACTIONS settings.
+
 - When a task's test files changed and its tests already fail at the base, any
   change to those files needs --allow ID. A finished task whose base tests
   failed must have those tests pass on the new code unless --allow ID.

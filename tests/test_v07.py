@@ -18,7 +18,7 @@ def test_done_refusal_reports_the_status_it_kept(local_repo, reason):
                 waits=['person:alex'] if reason == 'wait' else [])
     fill_sections(path)
     before = path.read_bytes()
-    result = cli(root, 'done', '--task', 'TASK-1')
+    result = cli(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert result.returncode == 1 and path.read_bytes() == before
     notice = 'TASK-1: DONE was not written; the status stays IN_PROGRESS'
     assert notice in result.stdout
@@ -55,7 +55,7 @@ def test_done_final_refusal_restores_status_and_keeps_note(local_repo, monkeypat
 
     monkeypatch.setattr(gate, 'explain', refuse)
     monkeypatch.chdir(local_repo)
-    assert command.main(['done', '--task', 'TASK-1', '--note', 'Keep final handover']) == 1
+    assert command.main(['done', '--no-code-change', '--task', 'TASK-1', '--note', 'Keep final handover']) == 1
     output = capsys.readouterr().out
     assert store.record(local_repo, 'TASK-1')['status'] == 'BLOCKED'
     assert ': Keep final handover' in path.read_text()
@@ -69,7 +69,7 @@ def test_done_success_only_suggests_push_with_origin(local_repo, tmp_path, remot
     fill_sections(task(local_repo, ships='none', test=PASS))
     if remote:
         git(local_repo, 'remote', 'add', remote, str(tmp_path / 'unused-remote'))
-    output = ok(local_repo, 'done', '--task', 'TASK-1')
+    output = ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     success = next(line for line in output.splitlines() if line.startswith('TASK-1 DONE:'))
     assert success == 'TASK-1 DONE: its declared test passed on this code'
     assert output.splitlines()[-1] == ('commit tasks/ and .workorder/'

@@ -63,8 +63,7 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
     placeholder = ("      # Replace this step with your test dependency installation.\n"
                    "      - name: Add your test dependencies here\n"
                    "        run: |\n"
-                   '          echo "add your test dependencies here" >&2\n'
-                   "          exit 1\n")
+                   '          echo "::warning::No project test dependencies detected; add your test dependencies here" >&2\n')
     # Compare the workflow shape with the documented example. A Git install
     # writes its commit pin; the example shows the release pin.
     pin = shlex.quote(bootstrap.workorder_install())
@@ -106,7 +105,7 @@ def test_done_records_only_changed_implementation_and_note(local_repo):
     path = task(root, ships='none', test=PASS)
     path.write_text(path.read_text() + '\n## Scope\n\nAdd calculation.\n\n## Acceptance\n\n- Adds correctly.\n')
     original_head = store.head(root)
-    output = ok(root, 'done', '--task', 'TASK-1', '--note', 'Ready for review')
+    output = ok(root, 'done', '--no-code-change', '--task', 'TASK-1', '--note', 'Ready for review')
     assert 'Acceptance is not checked by Workorder: confirm each item is met.' in output
     assert '- Adds correctly.' in output
     success = 'TASK-1 DONE: its declared test passed on this code'
@@ -116,7 +115,7 @@ def test_done_records_only_changed_implementation_and_note(local_repo):
     assert [r['kind'] for r in store.entries(root, 'TASK-1')] == ['implemented', 'test']
     assert store.head(root) == original_head
     commit_all(root)
-    ok(root, 'done', '--task', 'TASK-1')
+    ok(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert [r['kind'] for r in store.entries(root, 'TASK-1')] == ['implemented', 'test', 'test']
     (root / 'app.py').write_text('x = 2\n')
     commit_all(root)
@@ -140,7 +139,7 @@ def test_done_refusal_keeps_status(local_repo, reason):
     if reason == 'dirty':
         (root / 'uncommitted.py').write_text('pass\n')
     before = path.read_bytes()
-    result = cli(root, 'done', '--task', 'TASK-1')
+    result = cli(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert result.returncode == 1
     assert path.read_bytes() == before
     assert 'Missing:' in result.stdout + result.stderr
@@ -459,7 +458,7 @@ def test_done_preserves_bom_crlf_and_body_status(local_repo, block):
     original = ('\ufeff' + path.read_text().replace('Add a list filter', 'A --- separator')
                 + '\n## Scope\nAdd calculation.\n\n## Acceptance\n- All good.\n\nstatus: leave body alone\n').replace('\n', '\r\n').encode()
     path.write_bytes(original)
-    ok(root, 'done', '--task', 'TASK-1')
+    ok(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert path.read_bytes() == original.replace(b'status: "IN_PROGRESS"', b'status: "DONE"', 1)
 
 
@@ -478,7 +477,7 @@ def test_done_restores_status_if_final_check_errors(local_repo, monkeypatch, cap
 
     monkeypatch.setattr(gate, 'explain', final_error)
     monkeypatch.chdir(root)
-    assert command.main(['done', '--task', 'TASK-1']) == 1
+    assert command.main(['done', '--no-code-change', '--task', 'TASK-1']) == 1
     assert path.read_bytes() == before
     assert 'Missing:  final check refused' in capsys.readouterr().out
 

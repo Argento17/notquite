@@ -227,7 +227,8 @@ def test_staged_comparison_uses_index_not_unstaged_test_content(local_repo):
     probe.write_text('def test_one():\n    assert False\n')
     result = checked(root, base, '--staged', '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '1 passed' in result.stdout
+    assert 'its test passed when this check ran it' in result.stdout
+    assert '1 passed' not in result.stdout
     assert 'assert False' in probe.read_text()
 
 

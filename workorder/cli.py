@@ -36,6 +36,8 @@ def parser():
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
     done.add_argument("--task", required=True)
     done.add_argument("--note", help="add a dated Progress line, including when done refuses")
+    done.add_argument("--needs-review", action="store_true", help="finish with test changes pending pull request review")
+    done.add_argument("--no-code-change", action="store_true", help="allow verification tasks with no code change")
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
     new.add_argument("--owner", required=True)
@@ -134,7 +136,7 @@ def done_refusal(tid, status, lines):
     print("\n".join(line for line in lines if line.startswith(("  Missing:", "  Next:"))))
 
 
-def finish_task(root, tid, note=None, timeout=None):
+def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_change=False):
     """Use the same evidence and claim checks as the individual commands, restoring status on refusal."""
     status = None
     try:
@@ -156,6 +158,9 @@ def finish_task(root, tid, note=None, timeout=None):
                   for heading, body in sections}
         if not all(filled.get(name) for name in ("Scope", "Acceptance")):
             raise s.Refused("fill in Scope and Acceptance first")
+        revision, reference = gate.implementation_base(root, record)
+        if not no_code_change and s.code_digest(root, revision) == s.code_digest(root, s.head(root)):
+            raise s.Refused(f'{tid}: no code changed since {reference}; nothing was implemented')
         hook = root / s.git(root, 'rev-parse', '--git-path', 'hooks/pre-commit').stdout.strip()
         if not hook.is_file():
             print("Warning: pre-commit hook is missing in this clone; run workorder init")
@@ -177,10 +182,12 @@ def finish_task(root, tid, note=None, timeout=None):
         print(filled["Acceptance"])
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         base = gate.local_test_base(root, record)
+        pending = False
         if base:
             notes = []
             problems = gate.local_test_problems(root, base, record, timeout=timeout, notes=notes,
-                                                completed=True)
+                                                completed=True, pending_review=needs_review)
+            pending = any(gate._accepts_allow_label(note) for note in notes)
             for note in notes:
                 if note != wrapper:
                     print(f"Note: {note}")
@@ -207,7 +214,11 @@ def finish_task(root, tid, note=None, timeout=None):
         print("\n".join(lines))
         _, owed, delivery = gate.verdict(root, s.record(root, tid))
         debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""
-        print(f"{tid} DONE: its declared test passed on this code{debt}")
+        if pending:
+            print(f'{tid} DONE, pending review: the pull request needs the label '
+                  f'workorder-allow:{tid} (its test files changed)')
+        else:
+            print(f"{tid} DONE: its declared test passed on this code{debt}")
         push = " and push" if s.has_origin(root) else ""
         print(f"commit tasks/ and .workorder/{push}")
         return 0
@@ -251,7 +262,8 @@ def main(argv=None):
             from .hooks import run
             return run(root, options.event)
         elif options.action == "done":
-            return finish_task(root, s.task_id(options.task), options.note, options.timeout)
+            return finish_task(root, s.task_id(options.task), options.note, options.timeout,
+                               options.needs_review, options.no_code_change)
         elif options.action == "new":
             shared = s.has_origin(root) and not options.local
             named = gate.paths_named_by_command(options.test) if options.test else None
@@ -358,7 +370,7 @@ def main(argv=None):
                 print("\n".join(f"Note: {note}" for note in gate.summarize_notes(notes, options.verbose)))
             if options.run_tests and counts["tests"] == 0:
                 print("no declared test ran in this check")
-            print(gate.check_summary(counts, options.run_tests))
+            print(gate.check_summary(counts, options.run_tests or bool(counts.get('tests'))))
             return int(bool(problems))
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:

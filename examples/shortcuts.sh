@@ -121,7 +121,8 @@ def base(number, honest=False, split_tests=False, complete=True, code=None):
          "mul(a, b) returns a * b, also for negative numbers.", "TASK-1", command=command)
     commit(repo, log, "Define multiplication task")
     if complete:
-        run(wo + ["done", "--task", "TASK-1"], repo, log)
+        # This setup verifies multiplication already present before the task.
+        run(wo + ["done", "--task", "TASK-1", "--no-code-change"], repo, log)
         commit(repo, log, "Record TASK-1 completion")
     if honest:
         # Define the ask at the base: this example tests additions, not acceptance
