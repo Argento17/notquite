@@ -32,12 +32,13 @@ def parser():
     init.add_argument("--force", action="store_true", help="replace a different pre-commit hook")
     init.add_argument("--claude", action="store_true", help="also install Claude Code project hooks")
     init.add_argument("--update-workflow", action="store_true", help="rewrite the workflow and show its diff; --check previews only")
+    init.add_argument("--light", action="store_true", help="write a trial workflow with review warnings and no task requirement")
     hook = commands.add_parser("hook", help="run a local agent session or stop check")
     hook.add_argument("event", choices=["session-start", "stop"])
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
     done.add_argument("--task", required=True)
     done.add_argument("--note", help="add a dated Progress line, including when done refuses")
-    done.add_argument("--needs-review", action="store_true", help="record evidence and keep IN_PROGRESS pending a reviewer label")
+    done.add_argument("--needs-review", action="store_true", help="record evidence and keep IN_PROGRESS pending a reviewer label or approval")
     done.add_argument("--no-code-change", action="store_true", help="allow verification tasks with no code change")
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
@@ -90,11 +91,12 @@ def parser():
     check.add_argument("--allow", metavar="TASKS", default="",
                        help="with --base: accept definition/test edits, REF-test failures, reduced pytest outcomes or complete removal"
                             " (comma-separated ids; tests for test-file edits, no-task for changes without task work)")
+    check.add_argument('--approving-review', action='store_true',
+                       help='with --allow: report allowances supplied by an approving pull-request review')
     check.add_argument("--run-tests", action="store_true",
                        help="run selected tasks' tests; with --base, include tasks with changed tests and REF comparisons")
     check.add_argument("--strict-tests", action="store_true",
-                       help="with --base: require --allow for all test and pytest configuration changes;"
-                            " with --run-tests, refuse pytest runs with no passed tests")
+                       help="with --base: require --allow for all test and pytest configuration changes")
     check.add_argument("--all-tests", action="store_true",
                        help="with --run-tests: also test every DONE/CLOSED task, once per code, command and timeout")
     check.add_argument("--require-task", action="store_true",
@@ -126,6 +128,8 @@ def task_argument(value):
 def invalid_reason(root, item):
     if item["kind"] != "test":
         return f"the output did not include the full commit id {item['commit']}"
+    if item.get('no_tests_passed'):
+        return f"its test ran but no test passed ({item['no_tests_passed']})"
     if s.head(root) != item["commit"]:
         return "HEAD moved while the command ran"
     paths = s.dirty_paths(root)
@@ -179,7 +183,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if implemented is None or implemented["code"] != s.code_digest(root, s.head(root)):
             item = s.receipt(root, tid, "implemented")
             print(f"{tid} implemented {item['commit'][:7]} - recorded")
-        item = s.receipt(root, tid, "test", command, timeout=timeout)
+        item = s.receipt(root, tid, "test", command, timeout=timeout, no_code_change=no_code_change)
         print(f"{tid} test {item['commit'][:7]} exit {item['exit_code']} - recorded")
         if item['exit_code'] == 0 and not item['valid']:
             print('recorded, but does not count: ' + invalid_reason(root, item))
@@ -197,10 +201,29 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         base = gate.local_test_base(root, record)
         pending = needs_review
+        review_labels = set()
         if base:
             notes = []
+            results = {}
+            revision, label = gate.comparison_base(root, base)
+            for problem in gate.repository_review_problems(root, revision, gate.records(root, errors={})):
+                problem = gate.comparison_message(problem, revision, base, label)
+                owner = problem.split(':', 1)[0]
+                owner = owner.split(', ', 1)[0]
+                line = gate.reviewer_label(problem, owner)
+                if needs_review:
+                    notes.append(line)
+                else:
+                    # File findings for this task are supplied by its comparison below.
+                    if owner != tid:
+                        notes.append(line)
             problems = gate.local_test_problems(root, base, record, timeout=timeout, notes=notes,
-                                                completed=True, pending_review=needs_review)
+                                                completed=True, pending_review=needs_review, results=results)
+            problems += gate.local_regression_problems(root, base, exclude={tid}, timeout=timeout,
+                                                       notes=notes, results=results, pending_review=needs_review)
+            if not needs_review:
+                problems += [note for note in notes if gate._accepts_allow_label(note)]
+            review_labels = set(re.findall(r'workorder-allow:([A-Z][A-Z0-9]*-[1-9][0-9]*|tests)', '\n'.join(notes)))
             pending |= any(gate._accepts_allow_label(note) for note in notes)
             for note in notes:
                 if note != wrapper:
@@ -209,14 +232,15 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 done_refusal(tid, status, [f'  Missing:  {problem}' for problem in problems])
                 return 1
         else:
-            print('Note: REF comparison skipped: origin/main and origin/master are not available locally')
+            print('Note: could not compare with the target: fetch origin first')
             changed_command = gate.local_command_problems(root, 'HEAD', record)
             if changed_command:
                 done_refusal(tid, status, [f'  Missing:  {problem}' for problem in changed_command])
                 return 1
         if pending:
             s.set_task_field(root, tid, "status", "IN_PROGRESS")
-            message = f'pending review: the pull request needs workorder-allow:{tid}'
+            labels = ', '.join('workorder-allow:' + owner for owner in sorted(review_labels or {tid}))
+            message = f'pending review: the pull request needs {labels} (or an approving review)'
             s.add_note(root, tid, message)
             print(f'{tid} IN_PROGRESS; {message}')
             print('Set status DONE in the reviewed pull request once its evidence and Acceptance are complete.')
@@ -283,7 +307,7 @@ def main(argv=None):
         if options.action == "init":
             from .bootstrap import initialize
             return initialize(root, options.check, options.force, claude=options.claude,
-                              update_workflow=options.update_workflow)
+                              update_workflow=options.update_workflow, light=options.light)
         elif options.action == "hook":
             from .hooks import run
             return run(root, options.event)
@@ -394,7 +418,8 @@ def main(argv=None):
             allow = {item.strip() for item in options.allow.split(",") if item.strip()}
             problems = gate.check(root, options.staged, options.base, notes, allow, options.run_tests, counts,
                                   options.strict_tests, options.all_tests, options.require_task,
-                                  timeout=options.timeout, review=options.review or "refuse")
+                                  timeout=options.timeout, review=options.review or "refuse",
+                                  approving_review=options.approving_review)
             if (options.staged and not counts["tasks"] and not problems and not notes
                     and not counts.get("warnings") and not options.run_tests):
                 return 0

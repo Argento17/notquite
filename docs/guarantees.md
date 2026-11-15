@@ -20,10 +20,15 @@ whether the intended behavior is right.
 | A branch receipt survives target-only changes when the current code exactly matches a clean merge of the receipt's code and the target. | Later branch edits and conflict resolutions still need fresh receipts. |
 | Only implicit hook runs may reuse local results, marked `(reused from HH:MM UTC)`. | Reuse does not detect changed environment variables, services or ignored dependencies. Explicit commands run fresh; CI bypasses the persistent cache. |
 | `--allow ID` accepts reviewed definition/test changes or complete retirement. | It never supplies missing evidence or excuses current failures for finished tasks, invalid dependencies or changed retained receipts. |
+| A finished task's current test must fail on the merge-base code with its new or changed tests. Refactors need `--allow ID`; `done --no-code-change` exempts verification runs. | A failure does not establish that every assertion checks the requirement. Missing external dependencies do not count as proof. |
+| `done` and task-related staged checks run affected finished tasks when a target is available locally. | They do not fetch; a missing target is reported by `done`. Old receipts without paths require a broader code scope. |
+| Generated workflows accept allowance labels only when the latest add event names someone other than the pull request author. | Label access still needs repository review rules. A label never excuses a finished task's current failure. |
 
-Recognised test material includes every file under folders whose names contain
-`test` or `fixture`, and folders named `spec`, `__snapshots__` or `golden`, wherever
-they are. Filenames include `test_*.py`, `*_test.py`, `*_test.go`, `*.test.*`,
+Recognised test folders have whole names `test`, `tests`, `testing`, `__tests__`,
+`spec`, `specs`, `fixtures`, `testdata`, `test_data`, `testsupport`, `test_support`,
+`golden` or `__snapshots__`, or start with `test_` or end with `_test`/`_tests`,
+case-insensitively. All files below them count. `latest` and `contest` do not.
+Filenames include `test_*.py`, `*_test.py`, `*_test.go`, `*.test.*`,
 `*.spec.*`, `*_spec.*`, `*_tests.*`, `testing.py`, `*_testing.py`, and any filename
 starting with `expected`, `golden` or `snapshot`. This includes data files such
 as `data/expected.json`. Pytest configuration and `conftest.py` are also reviewed.

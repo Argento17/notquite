@@ -1,0 +1,14 @@
+{
+  "pull_request": {"user": {"id": 1, "login": "author"}, "head": {"sha": "current-head"}, "labels": []},
+  "cases": [
+    {"name": "current approval", "accepted": true, "pages": [[{"id": 1, "user": {"id": 2, "login": "reviewer"}, "state": "APPROVED", "commit_id": "current-head"}]]},
+    {"name": "author approval", "accepted": false, "pages": [[{"id": 2, "user": {"id": 1, "login": "renamed-author"}, "state": "APPROVED", "commit_id": "current-head"}]]},
+    {"name": "author login", "accepted": false, "pages": [[{"id": 3, "user": {"login": "AUTHOR"}, "state": "APPROVED", "commit_id": "current-head"}]]},
+    {"name": "old head", "accepted": false, "pages": [[{"id": 4, "user": {"id": 2, "login": "reviewer"}, "state": "APPROVED", "commit_id": "old-head"}]]},
+    {"name": "dismissed", "accepted": false, "pages": [[{"id": 5, "user": {"id": 2, "login": "reviewer"}, "state": "DISMISSED", "commit_id": "current-head"}]]},
+    {"name": "changes requested later", "accepted": false, "pages": [[{"id": 6, "user": {"id": 2, "login": "reviewer"}, "state": "APPROVED", "commit_id": "current-head"}], [{"id": 7, "user": {"id": 2, "login": "reviewer"}, "state": "CHANGES_REQUESTED", "commit_id": "current-head"}]]},
+    {"name": "comment keeps approval", "accepted": true, "pages": [[{"id": 8, "user": {"id": 2, "login": "reviewer"}, "state": "APPROVED", "commit_id": "current-head"}], [{"id": 9, "user": {"id": 2, "login": "reviewer"}, "state": "COMMENTED", "commit_id": "current-head"}]]},
+    {"name": "missing actor", "accepted": false, "pages": [[{"id": 10, "state": "APPROVED", "commit_id": "current-head"}]]},
+    {"name": "another reviewer approves", "accepted": true, "pages": [[{"id": 11, "user": {"id": 2, "login": "reviewer"}, "state": "CHANGES_REQUESTED", "commit_id": "current-head"}], [{"id": 12, "user": {"id": 3, "login": "second"}, "state": "APPROVED", "commit_id": "current-head"}]]}
+  ]
+}

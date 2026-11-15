@@ -18,7 +18,7 @@ def test_hook_stop_blocks_with_exit_2_and_reason_on_stderr_exits_0_when_stop_hoo
     monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
     assert hooks.run(local_repo, 'stop') == 2
     output = capsys.readouterr()
-    assert 'NOT QUITE' in output.err and 'owes' in output.err
+    assert 'NOT DONE' in output.err and 'owes' in output.err
     monkeypatch.setattr(sys, 'stdin', io.StringIO('{"stop_hook_active": true}'))
     assert hooks.run(local_repo, 'stop') == 0
     assert not capsys.readouterr().err
@@ -36,7 +36,7 @@ def test_changed_tests_select_their_owner_without_task_edits(local_repo, status)
     probe.write_text(probe.read_text().replace('== 1', '== 200'))
     result = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests')
     assert result.returncode == 1, result.stdout + result.stderr
-    assert 'lost or changed' in result.stdout and '--allow TASK-1' in result.stdout
+    assert 'lost or changed' in result.stdout and 'workorder-allow:TASK-1' in result.stdout
     assert f'its tests from {base} fail on this code' in result.stdout
 
 
@@ -53,7 +53,7 @@ def test_unowned_test_changes_need_tests_acceptance(local_repo, path):
     target.write_text(target.read_text().replace('1', '2').replace('-q', '-qq'))
     refused = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert refused.returncode == 1, refused.stdout
-    assert path in refused.stdout and '--allow tests' in refused.stdout
+    assert path in refused.stdout and 'workorder-allow:tests' in refused.stdout
     assert cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'tests').returncode == 0
 
 
@@ -88,7 +88,7 @@ def test_work_on_division_cannot_hide_changed_multiplication_tests(local_repo):
     commit_all(root)
     result = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--all-tests', '--require-task')
     assert result.returncode == 1, result.stdout + result.stderr
-    assert '--allow TASK-1' in result.stdout and 'fail on this code' in result.stdout
+    assert 'workorder-allow:TASK-1' in result.stdout and 'fail on this code' in result.stdout
 
 
 def test_any_task_uncounted_receipt_cannot_hide_changed_tests(local_repo):
@@ -106,7 +106,7 @@ def test_any_task_uncounted_receipt_cannot_hide_changed_tests(local_repo):
     commit_all(root)
     result = cli(root, 'check', '--base', base, '--run-tests', '--all-tests', '--require-task')
     assert result.returncode == 1, result.stdout + result.stderr
-    assert '--allow TASK-1' in result.stdout and 'no task records' in result.stdout
+    assert 'workorder-allow:TASK-1' in result.stdout and 'no task records' in result.stdout
 
 
 @pytest.mark.parametrize('status', ['IN_PROGRESS', 'BLOCKED'])

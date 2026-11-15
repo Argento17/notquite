@@ -60,7 +60,7 @@ def test_passing_additions_are_free_but_edits_require_acceptance(local_repo, cha
     result = checked(root, base)
     assert result.returncode == (1 if change == 'rewrite' else 0), result.stdout + result.stderr
     if change == 'rewrite':
-        assert '--allow TASK-1' in result.stdout
+        assert 'workorder-allow:TASK-1' in result.stdout
         assert checked(root, base, '--allow', 'TASK-1').returncode == 0
     assert 'no declared test ran' not in result.stdout
     assert ('1 passed' if change == 'rewrite' else '2 passed') in result.stdout
@@ -110,7 +110,7 @@ def test_added_skip_xfail_or_skip_call_requires_acceptance(local_repo, addition)
     probe, base = setup_tests(root, 'def test_one():\n    assert True\n')
     probe.write_text(probe.read_text() + addition)
     result = checked(root, base)
-    assert result.returncode == 1 and '--allow TASK-1' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
     assert 'skip' in result.stdout or 'xfail' in result.stdout
     accepted = checked(root, base, '--allow', 'TASK-1')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
@@ -126,7 +126,7 @@ def test_pytest_configuration_needs_acceptance_without_strict(local_repo, config
     _, base = setup_tests(root, 'def test_one():\n    assert True\n')
     (root / config).write_text(body)
     result = checked(root, base)
-    assert result.returncode == 1 and '--allow TASK-1' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
     accepted = checked(root, base, '--allow', 'TASK-1')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
 
@@ -162,7 +162,7 @@ def test_finished_shared_test_users_run_when_their_tests_change(local_repo):
     assert result.returncode == 1
     assert 'fail on this code' in result.stdout
     assert checked(root, base, '--all-tests', '--allow', 'TASK-1').returncode == 0
-    assert '--allow TASK-1' in result.stdout
+    assert 'workorder-allow:TASK-1' in result.stdout
 
 
 def test_touching_finished_task_restores_strict_acceptance_requirement(local_repo):
@@ -173,7 +173,7 @@ def test_touching_finished_task_restores_strict_acceptance_requirement(local_rep
     probe.write_text(probe.read_text() + '\ndef test_two():\n    assert True\n')
     path.write_text(path.read_text() + '\nA progress note.\n')
     result = checked(root, base, '--strict-tests')
-    assert result.returncode == 1 and '--allow TASK-1' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
 
 
 def test_pytest_default_discovery_compares_changed_tests(local_repo):
@@ -295,7 +295,7 @@ def test_pytest_markers_in_custom_test_commands_still_need_acceptance(local_repo
     probe, base = setup_tests(root, 'assert True\n', f'{PYTHON} tests/test_app.py')
     probe.write_text('import pytest as pt\n@pt.mark.skipif(True, reason="later")\ndef helper():\n    pass\nassert True\n')
     result = checked(root, base)
-    assert result.returncode == 1 and '--allow TASK-1' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
 
 
 @pytest.mark.parametrize('staged', [False, True])
@@ -380,7 +380,7 @@ def test_alternate_standard_pytest_configs_cannot_hide_selection(local_repo, con
     body = '[pytest]\naddopts = ["-k", "two"]\n' if config.endswith('.toml') else '[pytest]\naddopts = -k two\n'
     (root / config).write_text(body)
     result = checked(root, base)
-    assert result.returncode == 1 and '--allow TASK-1' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
     assert f'fewer tests pass than at {base} (2 -> 1)' in result.stdout
 
 

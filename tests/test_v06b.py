@@ -21,16 +21,16 @@ def fill_sections(path):
     return path
 
 
-def evidence(root, tid='TASK-1'):
+def evidence(root, tid='TASK-1', verification=False):
     store.receipt(root, tid, 'implemented')
-    store.receipt(root, tid, 'test', gate.declared_test(store.record(root, tid)))
+    store.receipt(root, tid, 'test', gate.declared_test(store.record(root, tid)), no_code_change=verification)
 
 
 def supported(root, status='DONE', tid='TASK-1', test=PASS):
     path = task(root, tid, ships='none', test=test)
     if git(root, 'status', '--porcelain'):
         commit_all(root)
-    evidence(root, tid)
+    evidence(root, tid, verification=True)  # fixture verifies code already present at the base
     path.write_text(path.read_text().replace('"IN_PROGRESS"', f'"{status}"'))
     return path
 
@@ -69,7 +69,7 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
     pin = shlex.quote(bootstrap.workorder_install())
     generated = snapshot[3].decode()
     assert pin in generated
-    assert generated.strip().replace(pin, 'workorder==0.12.0') in reference.replace(
+    assert generated.strip().replace(pin, 'workorder==0.13.0') in reference.replace(
         example_dependencies, placeholder)
 
 
@@ -168,7 +168,7 @@ def test_strict_tests_requires_allow_for_additions(local_repo, change):
     extra = ['--staged'] if change == 'staged' else []
     ok(root, 'check', '--review', 'refuse', '--base', base, *extra)
     result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', *extra)
-    assert result.returncode == 1 and '--allow TASK-1' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
     assert 'test files' in result.stdout
     ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'TASK-1', *extra)
 
@@ -402,7 +402,7 @@ def test_agent_identity_overrides_git_for_claims_and_receipts(clones, monkeypatc
 
 
 @pytest.mark.parametrize('summary', ['2 skipped', 'no tests ran'])
-def test_pytest_no_pass_note_and_strict_refusal(local_repo, summary, monkeypatch):
+def test_pytest_no_pass_refuses_with_or_without_strict(local_repo, summary, monkeypatch):
     root = local_repo
     (root / '.git/info/exclude').write_text('__pycache__/\n.pytest_cache/\n')
     probe = root / 'tests/test_probe.py'
@@ -421,11 +421,8 @@ def test_pytest_no_pass_note_and_strict_refusal(local_repo, summary, monkeypatch
         monkeypatch.setenv('WO_EMPTY', '1')
     before = {p: p.read_bytes() for p in (root / '.workorder').rglob('*.json')}
     result = cli(root, 'check', '--base', base, '--run-tests')
-    if summary == '2 skipped':
-        assert result.returncode == 0
-        assert 'TASK-1: its test ran, but reported only skipped tests' in result.stdout
-    else:
-        assert result.returncode == 1 and 'no tests ran' in result.stdout
+    assert result.returncode == 1
+    assert f'its test ran but no test passed ({summary})' in result.stdout
     strict = cli(root, 'check', '--base', base, '--run-tests', '--strict-tests', '--allow', 'TASK-1')
     assert strict.returncode == 1
     assert f'TASK-1: its test ran but no test passed ({summary})' in strict.stdout
@@ -491,7 +488,7 @@ def test_strict_pytest_default_discovery_protects_added_tests(local_repo):
     commit_all(root)
     result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
     # A pathless pytest command does not own a newly added test file.
-    assert result.returncode == 1 and '--allow tests' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:tests' in result.stdout
     ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'tests')
 
 
@@ -518,7 +515,7 @@ def test_acceptance_summary_counts_only_supported_contractless_claims(local_repo
 def test_docs_state_review_rights_and_opt_in_policies():
     text = (PACKAGE / 'docs/reference.md').read_text()
     for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
-                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.12.0'):
+                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.13.0'):
         assert phrase in text
     readme = (PACKAGE / 'README.md').read_text()
     for target in ('docs/reference.md', 'docs/guarantees.md', 'docs/shortcuts.md'):
@@ -565,7 +562,7 @@ def test_strict_pytest_configuration_keeps_default_discovery(local_repo, config,
     commit_all(root)
     result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
     # python_files still marks the file as a test. A pathless command does not own it.
-    assert result.returncode == 1 and '--allow tests' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:tests' in result.stdout
     ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'tests')
 
 
@@ -593,5 +590,5 @@ def test_strict_pytest_custom_config_and_globs(local_repo, config, option):
     commit_all(root)
     result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
     # A custom discovery pattern still marks the file. The pathless command does not own it.
-    assert result.returncode == 1 and '--allow tests' in result.stdout
+    assert result.returncode == 1 and 'workorder-allow:tests' in result.stdout
     ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'tests')

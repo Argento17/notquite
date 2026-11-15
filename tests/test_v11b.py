@@ -60,6 +60,8 @@ def parallel_pull_requests(root, tmp_path):
         git(clone, 'config', 'user.email', f'author{n}@example.invalid')
         git(clone, 'checkout', '-qb', f'pr{n}')
         (clone / f'part{n}.py').write_text(f'value = {n + 10}\n')
+        with (clone / f'test_part{n}.py').open('a') as stream:
+            stream.write(f'\ndef test_new_value():\n    assert value == {n + 10}\n')
         commit_all(clone)
         ok(clone, 'done', '--task', f'TASK-{n}')
         commit_all(clone)
@@ -493,7 +495,7 @@ def test_workflow_documents_default_refusal_and_optional_warnings(local_repo):
     bootstrap.initialize(local_repo)
     path = local_repo / '.github/workflows/workorder.yml'
     text = path.read_text()
-    assert 'refused unless a reviewer adds the label' in text and '--review warn' in text
+    assert 'refused unless a reviewer other than the author adds the label' in text and '--review warn' in text
     command = next(line for line in text.splitlines() if line.strip().startswith('workorder check --base'))
     assert '--review refuse' not in command
     path.write_text('old workflow\n')
@@ -539,7 +541,9 @@ def test_generated_pr_command_flags_hidden_test_material_bug(local_repo, materia
     (root / 'app/calc.py').write_text('def mul(a, b):\n    return a + b\n')
     target.write_text('def check(value):\n    pass\n' if material == 'helper' else '7\n')
     commit_all(root)
-    ok(root, 'done', '--task', 'TASK-1')
+    result = cli(root, 'done', '--task', 'TASK-1')
+    assert result.returncode == 1, result.stdout
+    store.set_task_field(root, 'TASK-1', 'status', 'DONE')
     commit_all(root)
     # These are the check flags written by init for the pull request.
     args = ['check', '--base', 'origin/main', '--run-tests', '--all-tests', '--require-task']

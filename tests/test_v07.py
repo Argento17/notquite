@@ -116,9 +116,7 @@ def test_agent_block_updates_origin_explicitly():
     assert bootstrap.AGENT_BLOCK.strip() in (PACKAGE / 'README.md').read_text()
     readme = ' '.join((PACKAGE / 'README.md').read_text().split())
     assert len((PACKAGE / 'README.md').read_text().splitlines()) <= 250
-    assert ('A conflicted squash can leave main with code that differs from the tested code, '
-            'so the check on main can fail.') in readme
-    assert 'Run `workorder renew --task <id>` on main and test again.' in readme
+    assert 'If merged code differs, run `workorder renew --task <id>`.' in readme
 
 
 @pytest.mark.parametrize('check', [False, True])
@@ -214,8 +212,10 @@ def test_skipped_only_rerun_does_not_also_say_passed(local_repo, all_tests):
     base = commit_all(root)
     supported(root, test=test)
     flags = ['--all-tests'] if all_tests else []
-    output = ok(root, 'check', '--base', base, '--run-tests', *flags)
-    assert output.count('its test ran, but reported only skipped tests') == 1
+    result = cli(root, 'check', '--base', base, '--run-tests', *flags)
+    assert result.returncode == 1
+    output = result.stdout
+    assert 'its test ran but no test passed (1 skipped)' in output
     assert 'its test passed when this check ran it' not in output
     strict = cli(root, 'check', '--base', base, '--run-tests', '--strict-tests', *flags)
     assert strict.returncode == 1 and 'no test passed (1 skipped)' in strict.stdout
@@ -223,9 +223,9 @@ def test_skipped_only_rerun_does_not_also_say_passed(local_repo, all_tests):
 
 def test_release_versions_and_reference_pin():
     from workorder import __version__
-    assert __version__ == '0.12.0'
-    assert 'version = "0.12.0"' in (PACKAGE / 'pyproject.toml').read_text()
-    assert 'workorder==0.12.0' in (PACKAGE / 'docs/reference.md').read_text()
+    assert __version__ == '0.13.0'
+    assert 'version = "0.13.0"' in (PACKAGE / 'pyproject.toml').read_text()
+    assert 'workorder==0.13.0' in (PACKAGE / 'docs/reference.md').read_text()
 
 
 def test_init_workflow_uses_running_version(local_repo, monkeypatch):

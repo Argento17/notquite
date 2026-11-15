@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.13.0 (15 Nov 2026)
+
+- Refuse DONE when a run reports zero passed tests, without extra flags.
+- Accept review findings through a current-head approving review by someone
+  other than the pull request author; retain reviewer labels and list what
+  each approval accepted. Run generated checks on submitted reviews too.
+- Ignore harmless Python test-function edits: comments, docstrings, assertion
+  messages and reversed equality or inequality operands.
+- Accept parallel local squash commits with the hook enabled when staged
+  paths match their implemented receipts, including fresh clones afterward.
+- Give one sentence of reviewer advice and one notice per reused UTC time.
+- Add optional task `code_paths` to limit code coverage under `--require-task`
+  when every task adding receipts declares its files or folders.
+
+- Run a finished task's current test on merge-base code with its new or changed
+  test files. Refuse tests that already pass there; reviewers can accept
+  refactors with `--allow ID`. Preserve `--no-code-change` verification exemptions
+  in an optional test receipt member accepted by 0.12.0 readers.
+- Have `done` and task-related staged checks run affected finished tasks. Report
+  a missing local target, and ask agents to fetch origin before `done`.
+- Match whole test-folder names and the documented prefixes and suffixes, so
+  `latest` and `contest` remain production folders. Include `specs`.
+- Read staged checkout contents in one batch for fingerprints and test copies,
+  preserving staged attributes and line endings without a Git process per file.
+- Read paginated label events in generated workflows. Ignore allowances added
+  by the pull request author, including labels they remove and re-add.
+- Print `NOT DONE` for unsupported claims, keeping the existing exit codes.
+- Add opt-in `init --light`: review warnings and no task requirement. Keep the
+  default workflow unchanged in those options; document how to switch back.
+- Keep existing task and receipt formats readable without migration. Update
+  documentation and installation pins to 0.13.0.
+
 ## 0.12.0 (15 Nov 2026)
 
 - Refuse test review findings by default; `--review warn` remains optional.
@@ -293,7 +325,7 @@
 
 NotQuite is now **Workorder: the task record for coding agents**. Every task is
 recorded in the repository with a clear history, agents go back to it at the
-start of every session, and DONE is checked against that history. The check still says NOT QUITE when it refuses a claim.
+start of every session, and DONE is checked against that history. At that release the check retained the old refusal wording.
 
 Name and format
 - New name everywhere: PyPI project `workorder`, the `workorder` command and

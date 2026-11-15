@@ -69,12 +69,12 @@ def test_new_task_receipts_get_one_precise_definition_request(local_repo, status
     (root / 'app.py').write_text('items = [1]\n')
     fill_sections(task(root, 'TASK-4', ships='none', test=store.join_command([PYTHON, '-c', 'pass'])))
     commit_all(root)
-    ok(root, 'done', '--task', 'TASK-4')
+    ok(root, 'done', '--no-code-change', '--task', 'TASK-4')
     store.set_task_field(root, 'TASK-4', 'status', status)
     result = cli(root, 'check', '--base', base, '--require-task')
     assert result.returncode == 1, result.stdout
     expected = ('TASK-4 is new in this pull request: a reviewer accepts its definition with the label '
-                'workorder-allow:TASK-4 (or land the task on main first)')
+                'workorder-allow:TASK-4 (or an approving review)')
     assert result.stdout.count(expected) == 1, result.stdout
     assert 'no task records it' not in result.stdout
     ok(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-4')
@@ -152,7 +152,7 @@ def test_done_prints_success_output_once(local_repo):
     reviewed_task(root)
     (root / 'test_app.py').write_text('assert 1 == 1\nprint("unique test output")\n')
     commit_all(root)
-    output = ok(root, 'done', '--task', 'TASK-1')
+    output = ok(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert output.count('unique test output') == 1, output
 
 
@@ -232,7 +232,7 @@ def test_all_tests_does_not_rerun_identical_current_and_ref_commands(local_repo)
     (root / 'app.py').write_text('items = [1]\n')
     commit_all(root)
     for n in (1, 2):
-        ok(root, 'done', '--task', f'TASK-{n}')
+        ok(root, 'done', '--no-code-change', '--task', f'TASK-{n}')
     counter.unlink()
     result = cli(root, 'check', '--base', base, '--run-tests', '--all-tests')
     assert result.returncode == 0, result.stdout + result.stderr
@@ -266,7 +266,7 @@ def test_cached_changed_tests_do_not_copy_current_or_ref_code(local_repo, monkey
     reviewed_task(root)
     (root / 'test_app.py').write_text('assert 1 == 1\nassert 2 == 2\n')
     commit_all(root)
-    ok(root, 'done', '--task', 'TASK-1')
+    ok(root, 'done', '--no-code-change', '--task', 'TASK-1')
     git(root, 'add', 'tasks', '.workorder')
     assert gate.check(root, staged=True) == []
     def no_copy(*args, **kwargs):
@@ -311,7 +311,7 @@ def test_recorded_squash_paths_keep_deletions_modes_and_content(local_repo, tmp_
     if sys.platform != 'win32':
         (root / 'run.sh').chmod(0o755)
     commit_all(root)
-    ok(root, 'done', '--task', 'TASK-1')
+    ok(root, 'done', '--no-code-change', '--task', 'TASK-1')
     implementation = store.entries(root, 'TASK-1')[0]
     commit_all(root)
     git(root, 'checkout', '-q', 'main')

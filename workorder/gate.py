@@ -5,9 +5,11 @@ from __future__ import annotations
 import ast
 from collections import Counter
 import configparser
+import copy
 import difflib
 import fnmatch
 import hashlib
+import io
 import json
 import os
 import ntpath
@@ -19,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tokenize
 import uuid
 
 from . import store as s
@@ -302,7 +305,9 @@ def verdict(root, record, staged=False):
         # The latest test run on the implemented code decides; a later failure revokes an earlier pass.
         # Code leaves out tasks/ and .workorder/, so committing the receipts does not hide later runs.
         runs = counting_runs(record, current, implemented)
-        if not runs or runs[-1]["exit_code"] != 0 or not runs[-1]["valid"]:
+        if runs and runs[-1].get('no_tests_passed'):
+            done.append(f"its test ran but no test passed ({runs[-1]['no_tests_passed']})")
+        elif not runs or runs[-1]["exit_code"] != 0 or not runs[-1]["valid"]:
             done.append(f"a passing test on {implemented['commit'][:7]}")
     done += contract_debt(root, record, current, implemented, staged)
     delivery = []
@@ -545,14 +550,14 @@ def stale_claim(root, record, staged=False, base=None):
             return None
         dirty = [] if staged else s.dirty_paths(root)
         if dirty:
-            return (f"NOT QUITE  {tid} is being marked {status} with uncommitted code changes; "
+            return (f"NOT DONE  {tid} is being marked {status} with uncommitted code changes; "
                     + s.describe_dirty(dirty) + f". Commit, record workorder receipt implemented --task {tid}"
                     " and test again.")
         tree = s.git(root, "write-tree").stdout.strip() if staged else s.head(root)
         if claim_matches(root, record, current, s.head(root), tree, staged):
             return None
         where = "in this commit" if staged else "now"
-        return (f"NOT QUITE  {tid} is being marked {status}, but the code {where} differs from the"
+        return (f"NOT DONE  {tid} is being marked {status}, but the code {where} differs from the"
                 f" implemented commit {short}. Run workorder renew --task {tid} on the branch before pushing.")
     histories = task_history(root, base)
     if histories is None:
@@ -578,12 +583,21 @@ def stale_claim(root, record, staged=False, base=None):
         return None
     if inherited_claim(root, record, rev=claim):
         return None
-    return (f"NOT QUITE  {tid} was marked {status} in {claim[:7]} on code other than the implemented"
+    return (f"NOT DONE  {tid} was marked {status} in {claim[:7]} on code other than the implemented"
             f" commit {short}. Run workorder renew --task {tid} on the branch before pushing.")
 
 
 def claim_matches(root, record, implemented, claim, tree=None, staged=False, receipt_rev=None):
     tree = tree or claim
+    # Squashing parallel branches adds other tasks' code beside this task's files.
+    # Git leaves SQUASH_MSG for the pending commit; check its index, never the worktree.
+    squash = root / s.git(root, 'rev-parse', '--git-path', 'SQUASH_MSG').stdout.strip() if staged else None
+    if staged and squash.is_file() and implemented.get('implementation_paths'):
+        before = {entry['hash'] for entry in s.entries(root, record['id'], rev='HEAD')}
+        if implemented['hash'] not in before:
+            contents = s.code_tree(root, tree)
+            if all(contents.get(path) == entry for path, entry in implemented['implementation_paths'].items()):
+                return True
     # This concerns the claim's history, even when the task ships nothing.
     target = merge_target(root, record)
     merged = merge_match(root, implemented, target[1]) if target else None
@@ -811,8 +825,10 @@ TEST_DIR_NAMES = {'test', 'tests', '__tests__', 'spec'}
 
 
 def test_directory(name):
-    return (name.lower() in {'spec', '__snapshots__', 'golden'}
-            or 'test' in name.lower() or 'fixture' in name.lower())
+    name = name.lower()
+    return (name in {'test', 'tests', 'testing', '__tests__', 'spec', 'specs', 'fixtures',
+                    'testdata', 'test_data', 'testsupport', 'test_support', 'golden', '__snapshots__'}
+            or name.startswith('test_') or name.endswith(('_test', '_tests')))
 
 
 def looks_like_test(path):
@@ -1016,7 +1032,7 @@ def _named_test_folder(path, candidates):
 
 
 def _natural_test_roots(candidates):
-    """Folders whose names contain test or fixture, including their data and helpers."""
+    """Recognised test folders, including their data and helpers."""
     roots = set()
     for path in candidates:
         parts = path.split('/')
@@ -1152,8 +1168,53 @@ def strict_test_files(root, record, base, staged=False):
     return paths
 
 
+class _TestSyntax(ast.NodeTransformer):
+    """Only the documented harmless differences in a Python test function."""
+    def visit_Assert(self, node):
+        node.msg = None
+        return self.generic_visit(node)
+
+    def visit_Compare(self, node):
+        self.generic_visit(node)
+        if len(node.ops) == 1 and isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
+            node.left, node.comparators[0] = sorted((node.left, node.comparators[0]), key=ast.dump)
+        return node
+
+    def generic_visit(self, node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and ast.get_docstring(node) is not None:
+            node.body = node.body[1:]
+        return super().generic_visit(node)
+
+
+def _test_functions(tree, prefix=()):
+    found = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith('test'):
+            key = (*prefix, node.name)
+            # Duplicate definitions cannot be matched unambiguously.
+            found[key] = None if key in found else node
+        elif isinstance(node, ast.ClassDef):
+            found.update(_test_functions(node, (*prefix, node.name)))
+    return found
+
+
+def _without_python_comments(lines):
+    data = b''.join(lines)
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+    text = data.decode(encoding)
+    lines = text.splitlines(keepends=True)
+    multiline = set()
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        if token.start[0] < token.end[0]:
+            multiline.update(range(token.start[0], token.end[0] + 1))
+        if token.type == tokenize.COMMENT:
+            lines[token.start[0] - 1] = lines[token.start[0] - 1][:token.start[1]].rstrip() + '\n'
+    # Blank lines inside string literals are content, even when they look like comments.
+    return [line for number, line in enumerate(lines, 1) if line.strip() or number in multiline]
+
+
 def _removed_lines_after_import_additions(old, new):
-    """Discount extended Python imports, keeping every other removed line under review."""
+    """Discount extended imports and test functions with the same normalized syntax."""
     old, new = old.replace(b'\r\n', b'\n'), new.replace(b'\r\n', b'\n')
     try:
         before, after = ast.parse(old), ast.parse(new)
@@ -1179,6 +1240,15 @@ def _removed_lines_after_import_additions(old, new):
             return False
 
     replacements, consumed = [], set()
+    previous_functions = _test_functions(before)
+    for name, current in _test_functions(after).items():
+        previous = previous_functions.get(name)
+        if previous is None or current is None:
+            continue
+        normalized = lambda node: ast.dump(_TestSyntax().visit(copy.deepcopy(node)))
+        if normalized(previous) == normalized(current):
+            start = lambda node: min([node.lineno] + [item.lineno for item in node.decorator_list]) - 1
+            replacements.append((start(current), current.end_lineno, old_lines[start(previous):previous.end_lineno]))
     for previous in before.body:
         if not isinstance(previous, imports) or getattr(previous, 'module', None) == '__future__':
             continue
@@ -1206,6 +1276,10 @@ def _removed_lines_after_import_additions(old, new):
         return None
     for start, end, lines in sorted(replacements, reverse=True):
         new_lines[start:end] = lines
+    try:
+        old_lines, new_lines = _without_python_comments(old_lines), _without_python_comments(new_lines)
+    except (SyntaxError, UnicodeError, ValueError, tokenize.TokenError):
+        return None
     return sum(end - start for tag, start, end, _, _ in
                difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False).get_opcodes()
                if tag in {'delete', 'replace'})
@@ -1383,6 +1457,8 @@ def pytest_no_pass(output):
         value = summary[1]
         if re.search(r"\b[1-9]\d* passed\b", value):
             return None
+        if re.search(r"\b0 passed\b", value):
+            return value
         if "no tests ran" in value:
             return "no tests ran"
         skipped = re.search(r"\b(\d+) skipped\b", value)
@@ -1438,7 +1514,7 @@ def _run_test(root, command, timeout, counts, *, quiet=False, cache_root=None, l
 
 def test_result(run, counts, *, quiet=False, failures_only=False):
     if run.cached:
-        print(f"(reused from {run.reused_at} UTC)")
+        s.print_once(f"(reused from {run.reused_at} UTC)")
     if not quiet and (not failures_only or run.returncode):
         s.print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0)
     if counts is not None:
@@ -1457,7 +1533,7 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
     """Run a task's declared test here (CI), without a shell; return a problem line, or None if it passed."""
     tid, declared = record["id"], declared_test(record)
     if declared is None:
-        return f"NOT QUITE  {tid} says {record['status']} but declares no test for this check to run"
+        return f"NOT DONE  {tid} says {record['status']} but declares no test for this check to run"
     results = {} if results is None else results
     key = _test_key(record, timeout)
     if key not in results:
@@ -1467,19 +1543,10 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
     if missing:
         advice = '' if missing.startswith('cannot import') else '; install the test dependencies and run the check again'
         return f'{tid}: {missing}{advice}'
-    empty = pytest_no_pass(output) if uses_pytest(record) else None
-    if empty and strict:
+    empty = pytest_no_pass(output)
+    if empty:
         reason = f"{tid}: its test ran but no test passed ({empty})"
         return f"regression: {tid}'s test fails on this code\n{reason}" if regression else reason
-    if empty and notes is not None:
-        if re.fullmatch(r'\d+ skipped', empty):
-            note = f"{tid}: its test ran, but reported only skipped tests"
-        elif empty == 'no tests ran':
-            note = f"{tid}: its test ran, but reported no tests ran"
-        else:
-            note = None
-        if note and note not in notes:
-            notes.append(note)
     if code == 0:
         if notes is not None and not empty:
             note = f"{tid}: its test passed when this check ran it"
@@ -1488,7 +1555,7 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
         return None
     if regression:
         return f"regression: {tid}'s test fails on this code"
-    return f"NOT QUITE  {tid} says {record['status']}, but its test failed when this check ran it (exit {code})"
+    return f"NOT DONE  {tid} says {record['status']}, but its test failed when this check ran it (exit {code})"
 
 
 def _test_bytes(root, path, base=None, staged=False):
@@ -1632,19 +1699,22 @@ def _copy_selected_files(root, destination, staged=False, *, isolated=False, git
     git_root = destination if git_root is None else git_root
     if staged:
         listing = s.git(root, 'ls-files', '--stage', '-z').stdout
+        regular = []
         for entry in listing.split('\0'):
             if not entry:
                 continue
             info, path = entry.split('\t', 1)
-            mode, _, stage = info.split()
+            mode, oid, stage = info.split()
             if stage != '0':
                 raise s.Refused(f'unmerged staged test copy: {path}')
             if mode == '160000':
                 _copy_submodule_files(root / path, destination / path, git_root)
+            elif mode == '120000':
+                _snapshot_write(destination, path, s.read_bytes(root, path, True), int(mode, 8), root)
             else:
-                content = (s.read_bytes(root, path, True) if mode == '120000'
-                           else s.checkout_bytes(root, path))
-                _snapshot_write(destination, path, content, int(mode, 8), root)
+                regular.append((path, oid, mode))
+        for path, mode, content in s.checkout_contents(root, regular):
+            _snapshot_write(destination, path, content, int(mode, 8), root)
         return
     args = ('ls-files', '-z', '--cached', '--others', '--exclude-standard')
     paths = (s._git_run(root, *args, isolated=True) if isolated else s.git(root, *args)).stdout
@@ -1732,15 +1802,18 @@ def snapshot_fingerprint(root, staged=False, overlays=None):
     entries = {}
     if staged:
         listing = s.git(root, 'ls-files', '--stage', '-z', '--', *s.CODE_PATHS).stdout
+        regular = []
         for entry in listing.split('\0'):
             if not entry:
                 continue
             info, path = entry.split('\t', 1)
-            mode, _, stage = info.split()
+            mode, oid, stage = info.split()
             if stage != '0' or mode not in {'100644', '100755'}:
                 return None
+            regular.append((path, oid, mode))
+        for path, mode, content in s.checkout_contents(root, regular):
             entries[path] = ('executable' if mode == '100755' and os.name != 'nt' else 'file',
-                             s.digest(s.checkout_bytes(root, path)))
+                             s.digest(content))
     else:
         listing = s.git(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard',
                         '--', *s.CODE_PATHS).stdout
@@ -1807,6 +1880,10 @@ def local_test_base(root, record=None):
     for ref in refs:
         if not s.git(root, 'rev-parse', '--verify', '--quiet', f'{ref}^{{commit}}', required=False).returncode:
             return ref.removeprefix('refs/remotes/')
+    target = merge_target(root, record or {})
+    branch = s.git(root, 'symbolic-ref', '--quiet', 'HEAD', required=False).stdout.strip()
+    if target and target[0] != branch:
+        return target[0].removeprefix('refs/heads/').removeprefix('refs/remotes/')
     return None
 
 
@@ -1865,7 +1942,8 @@ def comparison_message(line, revision, ref, label):
 
 
 def reviewer_label(problem, tid):
-    return problem + f'; a reviewer can accept it in the pull request with the workorder-allow:{tid} label'
+    return problem.split('; a reviewer ', 1)[0] + (
+        f'; a reviewer accepts it with the label workorder-allow:{tid} (or an approving review)')
 
 
 def _accepts_allow_label(problem):
@@ -1901,6 +1979,59 @@ def local_test_problems(root, base, record, *, pending_review=False, **kwargs):
     return [comparison_message(line, base, ref, label) for line in labeled]
 
 
+def verification_task(root, record, staged=False):
+    """Only the latest counting run can carry done's explicit verification exemption."""
+    history = s.entries(root, record['id'], staged)
+    implemented = newest_implementation(history)
+    if implemented is None:
+        return False
+    runs = counting_runs(record, history[history.index(implemented) + 1:], implemented)
+    return bool(runs and runs[-1].get('no_code_change') is True)
+
+
+def local_regression_problems(root, base, *, exclude=(), staged=False, timeout=None,
+                              notes=None, results=None, counts=None, pending_review=False):
+    """Run finished tasks whose recorded code or selected tests the branch touches."""
+    revision, _ = comparison_base(root, base)
+    changed = changed_paths(root, revision, staged)
+    results = {} if results is None else results
+    problems = []
+    for tid, record in sorted(records(root, staged, errors={}).items()):
+        if tid in exclude or record['status'] not in FINISHED:
+            continue
+        try:
+            implemented = newest_implementation(s.entries(root, tid, staged))
+            protected = strict_test_files(root, record, revision, staged)
+            if protected & changed:
+                problems += local_test_problems(root, base, record, staged=staged, timeout=timeout,
+                    notes=notes if notes is not None else [], results=results, counts=counts,
+                    pending_review=staged or pending_review)
+            if implemented:
+                paths = implemented.get('implementation_paths')
+                if paths:
+                    protected |= set(paths)
+                else:
+                    # Old receipts and empty implementation ranges have no narrower
+                    # ownership information. Include their available code tree.
+                    commit = implemented['commit'] if not implemented['missing'] else revision
+                    protected |= set(s.code_tree(root, commit))
+            if not protected & changed:
+                continue
+            command = declared_test(record)
+            key = _test_key(record, timeout)
+            if command and key not in results and staged:
+                with tempfile.TemporaryDirectory(prefix='workorder-regression-') as temporary:
+                    results[key] = run_snapshot_test(root, Path(temporary) / 'code', command,
+                        s.test_timeout(record, timeout), counts, staged=True)
+            failed = run_declared_test(root, record, counts, notes, results=results,
+                                       regression=True, timeout=timeout)
+            if failed:
+                problems.append(failed)
+        except (s.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
+            problems.append(f'{tid}: could not check its current test: {error}')
+    return problems
+
+
 def _ref_test_snapshot(root, destination, commit):
     cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
                             capture_output=True, encoding='utf-8', errors='replace', timeout=30,
@@ -1925,14 +2056,16 @@ def _ref_test_snapshot(root, destination, commit):
     _link_ignored_dependencies(root, destination, tracked)
 
 
-def run_ref_test(root, destination, revision, command, timeout, counts):
+def run_ref_test(root, destination, revision, command, timeout, counts, overlays=None):
     # A REF checkout is immutable. Remember the stable result under its revision
     # and checkout settings as well as its byte fingerprint, avoiding a copy just
     # to look up that fingerprint next time. Never save a run that changed files.
     alias = None
     if not s.ci_environment():
         settings = s.git(root, 'config', '--list').stdout
-        key = s.digest(s.packed(['ref-v1', revision, command, timeout, settings]).encode('ascii'))
+        contents = [(path, s.digest(content) if content is not None else None, mode)
+                    for path, (content, mode) in sorted((overlays or {}).items())]
+        key = s.digest(s.packed(['ref-v2', revision, command, timeout, settings, contents]).encode('ascii'))
         folder = root / s.git(root, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
         alias = folder / ('ref-' + key + '.json')
         if s._REUSE_TESTS.get():
@@ -1944,6 +2077,8 @@ def run_ref_test(root, destination, revision, command, timeout, counts):
         except OSError:
             pass
     _ref_test_snapshot(root, destination, revision)
+    for path, (content, mode) in (overlays or {}).items():
+        _snapshot_write(destination, path, content, mode, root)
     before = s._test_state(destination, isolated=True) if alias else None
     result = _run_test(destination, _snapshot_command(command, root, destination), timeout, counts,
                        quiet=True, cache_root=root, logical_command=command)
@@ -2011,17 +2146,18 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
         if completed or record['status'] in FINISHED:
             problems.append(line)
         else:
-            notes.append(line.removeprefix('NOT QUITE  ') + '; task is not claimed finished')
+            notes.append(line.removeprefix('NOT DONE  ') + '; task is not claimed finished')
 
     finishing = completed or record['status'] in FINISHED
 
     def review(line, what='it', lines=False):
         if allow or (allow_lines and lines):
             notes.append(line + ' (allowed)')
+            notes.append(f'accepted: {tid} ({what if what != "it" else "test review"})')
         else:
             path = next(iter(paths or sorted(protected)), f'tasks/{tid}.md')
             problems.append(review_problem(root, base,
-                line + f'; a reviewer accepts {what} with --allow {tid}', path, staged))
+                reviewer_label(line, tid), path, staged))
 
     def addition_rule():
         if paths and not changed:
@@ -2052,6 +2188,53 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             if failed:
                 test_failure(failed)
             base_command = declared_test(before) if before else None
+
+            def ref_code_result(ref_command, overlays=None):
+                revision = s.git(root, 'rev-parse', f'{base}^{{commit}}').stdout.strip()
+                contents = tuple((path, s.digest(content) if content is not None else None, mode)
+                                 for path, (content, mode) in sorted((overlays or {}).items()))
+                own_key = ('ref-code', revision, tuple(ref_command), s.test_timeout(record, timeout), contents)
+                if own_key not in results:
+                    own_root = Path(temporary) / ('ref-' + str(len(results)))
+                    results[own_key] = run_ref_test(root, own_root, revision, ref_command,
+                                                   s.test_timeout(record, timeout), counts, overlays)
+                return results[own_key]
+
+            if finishing and not failed and not verification_task(root, record, staged):
+                overlays = {}
+                # Shared helpers and fixtures must be current too: an import of
+                # a new helper from an old file is not evidence about base code.
+                material = protected | repository_test_files(root, base, records(root, staged, errors={}), staged)
+                for path in sorted(material & changed_paths(root, base, staged)):
+                    content = _test_bytes(root, path, staged=staged)
+                    mode = None
+                    if content is not None:
+                        if staged:
+                            info = s.git(root, 'ls-files', '--stage', '--', f':(literal){path}').stdout.split()
+                            mode = int(info[0], 8) if info else None
+                            if mode and stat.S_ISREG(mode):
+                                content = s.checkout_bytes(root, path)
+                        else:
+                            mode = (root / path).lstat().st_mode
+                            if stat.S_ISLNK(mode):
+                                content = os.fsencode(os.readlink(root / path))
+                    overlays[path] = content, mode
+                own_code, own_output = ref_code_result(command, overlays)
+                missing = s.missing_test_dependency(command, own_code, own_output, root=root)
+                # A new repository module is expected to be absent before implementation.
+                module = re.search(r"No module named\s+['\"]?([\w.]+)", own_output)
+                new_module = False
+                if module:
+                    for prefix in ('', 'src/'):
+                        stem = prefix + module[1].replace('.', '/')
+                        matches = {path for path in candidates if path == stem + '.py'
+                                   or path.startswith(stem + '/') and path.endswith('.py')}
+                        new_module |= bool(matches) and not bool(matches & repository_files(root, base))
+                if isinstance(own_code, str) or own_code == 124 or (missing and not new_module):
+                    test_failure(f'{tid}: could not run its current test on {base}: {missing or own_code}')
+                elif own_code == 0:
+                    review(f"{tid}: its test passes on {base}'s code too, so it does not show the change works; "
+                           'make the test check the new behaviour', 'this refactor or verification task')
             # There is nothing to rerun when all selected test files are new.
             existing = protected & repository_files(root, base)
             if uses_pytest(record):
@@ -2085,19 +2268,10 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                 missing = s.missing_test_dependency(base_command, base_code, base_output, root=root)
                 test_failure(f'{tid}: could not run its tests from {base}: {missing or base_code}')
                 return problems
-            def ref_code_result():
-                revision = s.git(root, 'rev-parse', f'{base}^{{commit}}').stdout.strip()
-                own_key = ('ref-code', revision, tuple(base_command), s.test_timeout(record, timeout))
-                if own_key not in results:
-                    own_root = Path(temporary) / 'ref'
-                    results[own_key] = run_ref_test(root, own_root, revision, base_command,
-                                                   s.test_timeout(record, timeout), counts)
-                return results[own_key]
-
             if base_code != 0:
                 # An unfinished task may have acceptance tests before the implementation.
                 # Attribute a failure only after proving those tests pass on their own code.
-                own_code, own_output = ref_code_result()
+                own_code, own_output = ref_code_result(base_command)
                 missing = s.missing_test_dependency(base_command, own_code, own_output, root=root)
                 if missing or isinstance(own_code, str):
                     if own_output:
@@ -2121,7 +2295,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                     test_failure(f'{tid}: its tests from {base} fail on this code')
                 return problems
             if paths and not changed:
-                own_code, own_output = ref_code_result()
+                own_code, own_output = ref_code_result(base_command)
                 if not isinstance(own_code, str) and own_code != 0:
                     addition_rule()
             if failed and record['status'] not in FINISHED:
@@ -2323,10 +2497,64 @@ def summarize_notes(notes, verbose=False):
     return result
 
 
+def repository_review_problems(root, base, all_records, staged=False, allow=(), strict_tests=False, errors=(), notes=None):
+    """Review each changed test file once, including material without a task owner."""
+    problems = []
+    changed = changed_paths(root, base, staged)
+    owners = {}
+    for tid, record in all_records.items():
+        if tid not in errors:
+            for path in strict_test_files(root, record, base, staged):
+                owners.setdefault(path, set()).add(tid)
+    material = repository_test_files(root, base, all_records, staged) | set(owners)
+    for path in sorted(material & changed):
+        named = sorted(owners.get(path, ()))
+        label = ', '.join(named) if named else 'tests'
+        tests_record = {'id': label, 'test': 'pytest', 'test_paths': [path]}
+        edits = test_file_changes(root, base, tests_record, staged, strict_tests, protected={path})
+        lines = ([edits] if edits else []) + _pytest_policy_changes(
+            root, base, tests_record, [path], staged)
+        for line in lines:
+            if 'tests' not in allow and not set(named) & set(allow):
+                problems.append(review_problem(root, base,
+                    reviewer_label(line, named[0] if named else 'tests'), path, staged))
+            elif notes is not None:
+                notes.append(f'accepted: {path} (changed lines)')
+    return problems
+
+
+def code_path_problems(root, base, changed, code, all_records, staged, allow, notes):
+    """Optional scopes apply only when every task adding receipts declares one."""
+    contributors = []
+    for tid in sorted({s.receipt_task(path) for path in changed} - {None}):
+        if tid not in all_records:
+            continue
+        try:
+            old = {entry['hash'] for entry in s.entries(root, tid, rev=base)}
+            if any(entry['hash'] not in old for entry in s.entries(root, tid, staged)):
+                contributors.append(tid)
+        except s.Refused:
+            continue  # ordinary receipt checks report invalid evidence
+    if not contributors or any('code_paths' not in all_records[tid] for tid in contributors):
+        return []
+    scopes = {posixpath.normpath(path) for tid in contributors for path in all_records[tid]['code_paths']}
+    outside = sorted(path for path in code
+                     if not any(scope == '.' or path == scope or path.startswith(scope + '/') for scope in scopes))
+    problems = []
+    for path in outside:
+        if 'no-task' in allow or set(contributors) & set(allow):
+            notes.append(f'accepted: {path} (outside code paths of {", ".join(contributors)})')
+        else:
+            problems.append(reviewer_label(f'{path} is outside the code paths of {", ".join(contributors)}',
+                                           contributors[0]))
+    return problems
+
+
 @s.read_session()
 @s.test_output_session()
 def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, counts=None,
-          strict_tests=False, all_tests=False, require_task=False, timeout=None, review="refuse"):
+          strict_tests=False, all_tests=False, require_task=False, timeout=None, review="refuse",
+          approving_review=False):
     counts = {} if counts is None else counts
     notes = [] if notes is None else notes
     revision, label = comparison_base(root, base) if base else (None, None)
@@ -2342,6 +2570,10 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
     problems = [problem for problem in problems if problem not in warnings]
     refused = set(re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', '\n'.join(problems)))
     counts['tests_only'] = len(counts.pop('_supported', set()) - refused)
+    accepted = sorted({note.removeprefix('accepted: ') for note in notes if note.startswith('accepted: ')})
+    notes[:] = [note for note in notes if not note.startswith('accepted: ')]
+    if approving_review and accepted:
+        notes.append('accepted by an approving review: ' + ', '.join(accepted))
     return problems
 
 
@@ -2376,20 +2608,26 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
     problems = [f"{tid}: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())
                 if tid in selected]
     new_tasks = set()
-    if require_task and changed and 'no-task' not in allow:
+    if require_task and changed:
         test_material = repository_test_files(root, base, all_records, staged)
         for record in all_records.values():
             test_material |= strict_test_files(root, record, base, staged)
-        code = any(needs_task_receipt(path) for path in changed - test_material)
+        code = {path for path in changed - test_material if needs_task_receipt(path)}
         recorded = has_work_receipt(root, base, changed, staged, allow, new_tasks)
         if not code or recorded:
             new_tasks.clear()
-        if code and not recorded and not new_tasks:
+        if 'no-task' in allow:
+            if code and not recorded:
+                notes.append('accepted: no-task (code without task work)')
+            new_tasks.clear()
+        elif code and not recorded and not new_tasks:
             problems.append('this change edits code but no task records it with a new implemented or test receipt; '
                             'run workorder receipt implemented --task ID or workorder receipt test --task ID')
             advice = renewal_advice(root, base, changed, staged)
             if advice:
                 problems.append(advice)
+        if code:
+            problems += code_path_problems(root, base, changed, code, all_records, staged, allow, notes)
     stray = [path for path in s.files(root, "tasks", staged) if not path.endswith(".md")
              and (changed is None or path in changed)]
     problems += [f"{path}: only task files belong in tasks/; a file here is outside the code fingerprint,"
@@ -2399,6 +2637,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         retired, removed_problems = removals(root, base, names, allow, staged)
         problems += removed_problems + base_problems(root, base, staged, retired)
         notes += [f"{tid}: task and all receipts removed (allowed)" for tid in sorted(retired)]
+        notes += [f'accepted: {tid} (removed task and receipts)' for tid in sorted(retired)]
         problems += [message for tid, record in all_records.items()
                      if tid in selected and (message := wrapper_note(record))]
         for tid, record in all_records.items():
@@ -2414,25 +2653,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             if mapped or not any(_repository_test_file(path) for path in repository_files(root, base)):
                 continue
             problems.append(f'{tid}: no test files are known for its test; set test_paths')
-        owners = {}
-        for tid, record in all_records.items():
-            if tid not in errors:
-                for path in strict_test_files(root, record, base, staged):
-                    owners.setdefault(path, set()).add(tid)
-        material = repository_test_files(root, base, all_records, staged) | set(owners)
-        for path in sorted(material & changed):
-            named = sorted(owners.get(path, ()))
-            label = ', '.join(named) if named else 'tests'
-            tests_record = {'id': label, 'test': 'pytest', 'test_paths': [path]}
-            edits = test_file_changes(root, base, tests_record, staged, strict_tests, protected={path})
-            lines = ([edits] if edits else []) + _pytest_policy_changes(
-                root, base, tests_record, [path], staged)
-            for line in lines:
-                if 'tests' not in allow and not set(named) & set(allow):
-                    accepts = (f'{named[0]} or --allow tests' if len(named) == 1 else
-                               'tests' + (f" or any owning task ({', '.join(named)})" if named else ''))
-                    problems.append(review_problem(root, base,
-                        line + f'; a reviewer accepts it with --allow {accepts}', path, staged))
+        problems += repository_review_problems(root, base, all_records, staged, allow, strict_tests, errors, notes)
     views = Views(root, all_records, staged)
     # Include removed receipts and ledgers whose task file was also removed.
     paths = set(s.receipt_paths(root, rev="HEAD")) | set(s.receipt_paths(root, staged))
@@ -2493,7 +2714,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 problems.append(f"{tid} and {other} each say they block the other")
         try:
             debt = claim_debt(record, all_records, views)
-            found = (f"NOT QUITE  {tid} says {record['status']} but owes: {', '.join(debt)}."
+            found = (f"NOT DONE  {tid} says {record['status']} but owes: {', '.join(debt)}."
                      f" Details: workorder check {tid}. If work is unfinished, set status back to"
                      " IN_PROGRESS in the same commit as the failing test receipt.") if debt else stale_claim(root, record, staged, base)
         except s.Refused as error:  # a dependency that cannot be read
@@ -2508,9 +2729,10 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         if base:
             if fields_at(root, tid, base) is None and (record["status"] in FINISHED or tid in new_tasks):
                 line = (f'{tid} is new in this pull request: a reviewer accepts its definition with the label '
-                        f'workorder-allow:{tid} (or land the task on main first)')
+                        f'workorder-allow:{tid} (or an approving review)')
                 if tid in allow:
                     notes.append(line + " (definition allowed)")
+                    notes.append(f'accepted: {tid} (new task)')
                 else:
                     problems.append(line)
             if tid in worked or strict_test_files(root, record, base, staged) & changed:
@@ -2522,10 +2744,9 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 line = f"{tid}: {change} since {base}"
                 if tid in allow:
                     notes.append(line + " (allowed)")
+                    notes.append(f'accepted: {tid} ({change})')
                 else:
-                    reason = ('closing a task without finishing it' if change.startswith('status changed:')
-                              and record['status'] == 'CANCELLED' else 'it')
-                    problem = f"{line}; a reviewer accepts {reason} with --allow {tid}"
+                    problem = reviewer_label(line, tid)
                     if change.startswith(('test changed:', 'test_paths changed')):
                         problem = review_problem(root, base, problem, f'tasks/{tid}.md', staged)
                     problems.append(problem)
@@ -2560,6 +2781,11 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                                            regression=True, timeout=timeout)
                 if failed:
                     problems.append(failed)
+    elif staged and not base and selected:
+        targets = {local_test_base(root, record) for tid, record in all_records.items() if tid in selected}
+        for target in sorted(targets - {None}):
+            problems += local_regression_problems(root, target, staged=True, timeout=timeout,
+                                                  notes=notes, results=results, counts=counts)
     refused = set(re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', '\n'.join(problems)))
     counts['_supported'] = supported
     counts['tests_only'] = len(supported - refused)
@@ -2904,7 +3130,7 @@ def explain(root, tid, claim=None):
     else:
         code_note = None
     if claimed in FINISHED:
-        lines = [f"NOT QUITE  {tid}" if debt else f"{claimed}  {tid}", "",
+        lines = [f"NOT DONE  {tid}" if debt else f"{claimed}  {tid}", "",
                  f"  Claimed:  {claimed}", f"  Evidence: {evidence_status(record, computed, debt)}"]
     else:
         lines = [unfinished_headline(record, done, delivery, open_waits), ""]
@@ -2946,8 +3172,8 @@ def ready(root, local_claims=None):
     issues = check(root)
     unreadable = {}
     records(root, errors=unreadable)
-    refused = {issue.split()[2] for issue in issues if issue.startswith("NOT QUITE  ")}
-    structural = [issue for issue in issues if not issue.startswith("NOT QUITE  ")
+    refused = {issue.split()[2] for issue in issues if issue.startswith("NOT DONE  ")}
+    structural = [issue for issue in issues if not issue.startswith("NOT DONE  ")
                   and issue.split(":")[0] not in unreadable and not issue.startswith("tasks/")
                   and ": dependency cycle:" not in issue]
     if structural:

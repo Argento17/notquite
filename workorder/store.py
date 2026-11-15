@@ -241,17 +241,17 @@ CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract"
 # Optional fields. Dependencies and the test add requirements; merge_ref selects delivery's target,
 # and test_paths selects files guarded by a base check. Planning fields never stand in for evidence.
 EXTENDED_FIELDS = ("business_owner", "priority", "created_at", "mission", "depends_on", "blocks",
-                   "next", "summary", "test", "test_paths", "test_timeout", "merge_ref")
+                   "next", "summary", "test", "test_paths", "code_paths", "test_timeout", "merge_ref")
 EXTENDED_ORDER = ("id", "title", "owner", "business_owner", "priority", "created_at", "mission",
                   "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "test",
                   "contract")
 TASK_REF = r"[A-Z][A-Z0-9]*-[1-9][0-9]*"
 FRONT_MATTER_HELP = ("front matter takes `key: value` lines: plain single-line text, a JSON string, or a"
                      ' list such as ["TASK-1"]; mission, next and summary may use > or | blocks, and'
-                     " depends_on, blocks, waits_on and test_paths may use indented - item lines")
+                     " depends_on, blocks, waits_on, test_paths and code_paths may use indented - item lines")
 # The small YAML subset Workorder reads. Anything else is refused rather than guessed.
 BLOCK_TEXT_FIELDS = ("mission", "next", "summary")
-LIST_FIELDS = ("depends_on", "blocks", "waits_on", "test_paths")
+LIST_FIELDS = ("depends_on", "blocks", "waits_on", "test_paths", "code_paths")
 BLOCK_INDICATORS = (">", "|", ">-", "|-", ">+", "|+")
 PLAIN_ITEM = r"[A-Za-z0-9_./@:-]+"
 
@@ -326,7 +326,7 @@ def block_list(tid, key, block):
                 item = json.loads(item)
             except ValueError:
                 item = None
-        if not isinstance(item, str) or not item or (key != "test_paths" and not re.fullmatch(PLAIN_ITEM, item)):
+        if not isinstance(item, str) or not item or (key not in {"test_paths", "code_paths"} and not re.fullmatch(PLAIN_ITEM, item)):
             raise Refused(f"{tid}: {key}: list lines look like \"  - TASK-1\"")
         items.append(item)
     return items
@@ -429,10 +429,12 @@ def record(root, tid, staged=False):
         split_command(fields["test"], f"{tid}: test")
     if "test_timeout" in fields:
         fields["test_timeout"] = positive_seconds(fields["test_timeout"], f"{tid}: test_timeout")
-    if "test_paths" in fields:
-        paths = fields["test_paths"]
+    for key in ("test_paths", "code_paths"):
+        if key not in fields:
+            continue
+        paths = fields[key]
         if not isinstance(paths, list) or any(not isinstance(p, str) or not p.strip() for p in paths):
-            raise Refused(f"{tid}: test_paths must be a list of repository paths")
+            raise Refused(f"{tid}: {key} must be a list of repository paths")
         for path in paths:
             local_path(root, path)
     if fields.get("created_at"):
@@ -1450,6 +1452,28 @@ def checkout_bytes(root, path):
     return result.stdout
 
 
+def checkout_contents(root, entries):
+    """Materialize index files in one Git call with the index's checkout rules.
+
+    cat-file --batch --filters reports the unfiltered size even when conversion
+    changes the byte count. checkout-index provides unambiguous file boundaries,
+    including binary data and newline paths, without keeping every blob in memory.
+    """
+    if not entries:
+        return
+    requests = b''.join(os.fsencode(path) + b'\0' for path, _, _ in entries)
+    with tempfile.TemporaryDirectory(prefix='workorder-checkout-') as temporary:
+        destination = Path(temporary)
+        result = subprocess.run(['git', 'checkout-index', '--stdin', '-z', '--ignore-skip-worktree-bits',
+                                 '--prefix=' + destination.as_posix() + '/'], cwd=root,
+                                input=requests, capture_output=True, timeout=30,
+                                env={**os.environ, 'GIT_ATTR_SOURCE': index_tree(root)})
+        if result.returncode:
+            raise Refused('could not read staged checkout content: ' + result.stderr.decode('utf-8', 'replace').strip())
+        for path, _, mode in entries:
+            yield path, mode, (destination / path).read_bytes()
+
+
 @cached_read
 def index_tree(root):
     # write-tree updates the index's tree cache. Preserve the caller's index,
@@ -1553,7 +1577,8 @@ def missing_test_dependency(command, code, output, root=None):
     return None
 
 
-def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None):
+def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None,
+            no_code_change=False):
     repository(root)
     definition = record(root, tid)
     commit = head(root)
@@ -1563,6 +1588,8 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         raise Refused("commit the code before recording implementation or tests; "
                       + describe_dirty(dirty_paths(root)))
     data = {"kind": kind, "commit": commit, "code": code_digest(root, commit)}
+    if kind == 'test' and no_code_change:
+        data['no_code_change'] = True
     if kind == 'implemented':
         from . import gate
         base, _ = gate.implementation_base(root, definition)
@@ -1603,6 +1630,13 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         valid = exit_code == 0
         if kind == "test":
             valid = valid and clean_code(root) and head(root) == commit
+            from .gate import pytest_no_pass
+            empty = pytest_no_pass(output + (run.stderr or '')) if exit_code != 127 else None
+            if empty:
+                valid = False
+                # Optional detail; 0.12 readers already refuse valid: false.
+                data['no_tests_passed'] = empty
+                print(f'{tid}: its test ran but no test passed ({empty})')
         else:
             valid = valid and bool(re.search(rf"(?<![0-9a-f]){commit}(?![0-9a-f])", output))
         data.update(command=list(command), exit_code=exit_code, valid=valid)

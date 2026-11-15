@@ -56,7 +56,7 @@ def test_done_reports_merge_debt_and_missing_clone_hook(local_repo):
     path.write_text(path.read_text().replace('ships: "none"', 'ships: "repo"'))
     commit_all(local_repo)
     unmerged_feature(local_repo)
-    output = ok(local_repo, 'done', '--task', 'TASK-1')
+    output = ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     assert ('TASK-1 DONE: its declared test passed on this code; still owes: merge of the tested code') in output
     assert 'Warning: pre-commit hook is missing in this clone; run workorder init' in output
 
@@ -77,7 +77,7 @@ def test_done_refuses_ref_test_failure_before_writing_done(local_repo):
     output = result.stdout
     assert result.returncode == 1
     assert 'TASK-1: its tests from origin/main fail on this code;' in output
-    assert 'workorder-allow:TASK-1 label' in output
+    assert 'the label workorder-allow:TASK-1 (or an approving review)' in output
     assert 'TASK-1 DONE:' not in output
     assert store.record(root, 'TASK-1')['status'] == 'IN_PROGRESS'
 
@@ -166,7 +166,7 @@ def test_timeout_option_overrides_task_field(local_repo, action):
     base = commit_all(root)
     if action == 'check':
         store.receipt(root, 'TASK-1', 'implemented')
-        store.receipt(root, 'TASK-1', 'test', store.split_command(store.record(root, 'TASK-1')['test']), timeout=2)
+        store.receipt(root, 'TASK-1', 'test', store.split_command(store.record(root, 'TASK-1')['test']), timeout=2, no_code_change=True)
         path.write_text(path.read_text().replace('"IN_PROGRESS"', '"DONE"'))
         args = ['check', '--base', base, '--run-tests']
     else:

@@ -667,7 +667,7 @@ def test_explain_refuses_false_done_and_says_what_to_do(clones):
     task(one, status="DONE")
     result = cli(one, "check", "TASK-1")
     assert result.returncode == 1
-    assert result.stdout.startswith("NOT QUITE  TASK-1")
+    assert result.stdout.startswith("NOT DONE  TASK-1")
     assert "Claimed:  DONE" in result.stdout and "Missing:  implementation" in result.stdout
     assert "Next:     commit the code, then: workorder receipt implemented --task TASK-1" in result.stdout
     assert "Result: NOT DONE" in result.stdout
@@ -1651,7 +1651,7 @@ def test_check_base_refuses_a_changed_test_unless_allowed_and_skips_untouched_ta
     refused = cli(local_repo, "check", '--review', 'refuse', "--base", base)
     assert refused.returncode == 1
     assert (f"TASK-2: test changed: 'true' -> 'git --version' since {base} (merge base {base[:7]}); a reviewer accepts it with"
-            " --allow TASK-2") in refused.stdout
+            " the label workorder-allow:TASK-2 (or an approving review)") in refused.stdout
     assert "TASK-1" not in refused.stdout  # the change does not touch TASK-1
     allowed = ok(local_repo, "check", '--review', 'refuse', "--base", base, "--allow", "TASK-2")
     assert "check: OK" in allowed and "(allowed)" in allowed
