@@ -291,7 +291,7 @@ def test_vacuous_test_cannot_use_an_old_shared_helper_as_its_red_result(local_re
     commit_all(root)
     result = cli(root, 'done', '--task', 'TASK-2')
     assert result.returncode == 1, result.stdout + result.stderr
-    assert 'test_sub in tests/test_sub.py asserts nothing that can fail' in result.stdout
+    assert "its test passes on origin/main's code too" in result.stdout
 
 
 def test_new_namespace_package_is_a_code_failure_on_base(local_repo):

@@ -968,6 +968,10 @@ def verify_receipt(root, tid, value):
                 or not isinstance(item.get("command"), list) or not item["command"]
                 or any(not isinstance(a, str) for a in item["command"])):
             raise Refused(f"{tid}: command receipt needs its arguments, exit code and validity")
+    if 'no_code_change_base' in item:
+        if (item['kind'] != 'test' or item.get('no_code_change') is not True
+                or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', str(item['no_code_change_base']))):
+            raise Refused(f'{tid}: invalid no-code-change base')
     return {**item, "hash": checksum, "missing": not present}
 
 
@@ -1644,7 +1648,13 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
                       + describe_dirty(dirty_paths(root)))
     data = {"kind": kind, "commit": commit, "code": code_digest(root, commit)}
     if kind == 'test' and no_code_change:
+        from . import gate
+        base, _ = gate.implementation_base(root, definition)
+        problem = gate.no_code_change_problem(root, definition, base)
+        if problem:
+            raise Refused(problem)
         data['no_code_change'] = True
+        data['no_code_change_base'] = base
     if kind == 'test' and refactor:
         data['refactor'] = True
     if kind == 'test' and pending_review:

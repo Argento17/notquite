@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.15.0 (unreleased)
+
+- Count assertion helpers in the test file, path conftest files and imported
+  test material, following up to four calls. Recognise assert, verify, check,
+  expect and ensure names. A task label can accept unusual assertion syntax;
+  an approving review alone or warning mode cannot.
+- Treat literal-only comparisons and other constant expressions like assert
+  True, so a missing module at the base cannot supply their only failure.
+- Refuse --no-code-change when code changed since the merge base or task
+  creation. Validate receipt exemptions too, and retain the comparison base
+  in an optional test receipt member. Existing files need no migration.
+- Let pre-commit and Stop note a repaired command for an already finished task
+  when the new command passes. Pre-commit runs the staged code. The note names
+  the review label; done still refuses changed commands.
+- Give the test CLI helper 120 seconds for slower Windows runs. Update the
+  documentation and version to 0.15.0.
+
 ## 0.14.0 (15 Nov 2026)
 
 - Show whether a finished task's tests landed before the change. Add

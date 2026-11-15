@@ -73,7 +73,7 @@ only when the evidence supports it. Commit `tasks/` and `.workorder/` with your
 work. It never commits or pushes for you. If it refuses, follow its Missing and
 Next lines; use IN_PROGRESS while fixing a task that was previously DONE.
 Ordinary tasks need a code change since the target merge base (or task creation).
-Use `--no-code-change` for verification tasks. For intentional test edits,
+Use `--no-code-change` only when no code files changed. For intentional test edits,
 `--needs-review` writes DONE pending a reviewer label or approval. Use `--refactor`
 for unchanged tests passing before and after. `new --code-paths src/calc.py` sets code scope. [Task format](docs/reference.md#task-files).
 
@@ -103,18 +103,18 @@ Stop checks relevant completion claims and writes refusals to stderr with exit 2
 For test-first work, write a failing test, run `new --test-first --test "..."`, and land the task and test on main before implementation.
 Use `init --test-first` to add `check --require-test-first`; tests added or changed with the work need the task's explicit reviewer label.
 
-The pre-commit hook checks staged work. With a target available locally, `done`
+The pre-commit hook checks staged work; finished-task command repairs get review notes if they pass. With a local target, `done`
 also tests affected finished tasks. Fetch origin before `done`. A completed task's
 test must fail on the target's merge-base code with the current test files.
 `--refactor` accepts unchanged tests passing on both versions; `--no-code-change`
-exempts verification work. In new or changed Python test files, test functions need an assertion
-that can fail; literal true assertions and functions without assertions refuse.
+exempts verification work with no code edits. Python test functions need an assertion or an assertion helper;
+literal-only expressions refuse. An unusual valid test needs its task label; see the reference for helper rules.
 The default workflow checks pull requests with
 `--base origin/<base> --run-tests --all-tests --require-task`, and default-branch
 pushes with `--run-tests --all-tests`. Each distinct command runs once per code
 version and timeout. If merged code differs, run `workorder renew --task <id>`.
 
-An APPROVED review on the current head by someone other than the author accepts review findings, except old-test failures and test-first exceptions, which need explicit labels.
+An APPROVED review on the current head by someone other than the author accepts review findings, except old-test failures, assertion findings and test-first exceptions, which need explicit labels.
 Review includes repository tests and every task whose tests changed. A task
 owns the files or folders its test names, plus pytest configuration on that path.
 New tests, harmless Python assertion edits and added import names need no

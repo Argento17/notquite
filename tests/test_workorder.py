@@ -30,7 +30,7 @@ def git(root, *args):
 def cli(root, *args):
     env = dict(os.environ, PYTHONPATH=str(PACKAGE), GIT_TERMINAL_PROMPT="0")
     return subprocess.run([PYTHON, "-m", "workorder", *args], cwd=root, env=env,
-                          capture_output=True, encoding="utf-8", timeout=30)
+                          capture_output=True, encoding="utf-8", timeout=120)
 
 
 def ok(root, *args):

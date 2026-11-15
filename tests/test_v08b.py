@@ -16,7 +16,7 @@ from test_v07b_setup import local_claim, refuse_network, workflow_commands
 
 def local_change(root, kind):
     (root / 'app.py').write_text('value = 1\n')
-    body = 'from app import value\ndef test_one():\n    assert value == 1\n\ndef test_two():\n    assert 2 == 2\n'
+    body = 'from app import value\ndef test_one():\n    assert value == 1\n\ndef test_two():\n    assert int(2) == 2\n'
     probe, _ = setup_tests(root, body)
     path = root / 'tasks/TASK-1.md'
     path.write_text(path.read_text() + '\n## Scope\n\nCalculate.\n\n## Acceptance\n\n- Correct result.\n')
@@ -33,7 +33,7 @@ def local_change(root, kind):
     elif kind == 'config':
         (root / 'pytest.ini').write_text('[pytest]\naddopts = -q\n')
     else:
-        probe.write_text(body.replace('assert 2 == 2', 'assert 1 == 1'))
+        probe.write_text(body.replace('assert int(2) == 2', 'assert int(1) == 1'))
     commit_all(root)
     return path, base
 

@@ -153,7 +153,7 @@ def test_new_module_import_cannot_make_assertion_free_test_count(local_repo, bod
         result = cli(root, 'done', '--task', 'TASK-2', '--needs-review')
     else:
         claim(root)
-        result = check(root, '--allow', 'TASK-2,tests')
+        result = check(root)
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'TASK-2: test_div in tests/test_div.py asserts nothing that can fail' in result.stdout
 
@@ -162,7 +162,7 @@ def test_changed_python_test_is_checked_without_running_tests(local_repo):
     root = local_repo
     branch(root, test_text=TEST)
     (root / 'tests/test_div.py').write_text(TEST.replace('assert div(6, 3) == 2', 'assert True'))
-    result = cli(root, 'check', '--base', 'origin/main', '--allow', 'TASK-2,tests')
+    result = cli(root, 'check', '--base', 'origin/main')
     assert result.returncode == 1, result.stdout
     assert 'test_div in tests/test_div.py asserts nothing that can fail' in result.stdout
 
@@ -324,7 +324,7 @@ def test_assertion_free_test_cannot_hide_behind_pathless_command(local_repo, act
         result = cli(root, 'done', '--task', 'TASK-2', '--needs-review')
     else:
         claim(root)
-        result = check(root, '--allow', 'TASK-2,tests')
+        result = check(root)
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'test_div in tests/test_div.py asserts nothing that can fail' in result.stdout
 
@@ -333,7 +333,7 @@ def test_unowned_assertion_free_test_is_refused(local_repo):
     root = local_repo
     base = store.head(root)
     (root / 'test_new.py').write_text('def test_new():\n    assert True\n')
-    result = cli(root, 'check', '--base', base, '--allow', 'tests')
+    result = cli(root, 'check', '--base', base)
     assert result.returncode == 1
     assert 'test_new in test_new.py asserts nothing that can fail' in result.stdout
 

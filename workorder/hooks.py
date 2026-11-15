@@ -158,10 +158,11 @@ def run(root, event):
                     f'a reviewer accepts closing a task without finishing it with --allow {tid}', tid))
         if tid in claimed and base:
             problems += gate.local_test_problems(root, base, record, notes=notes, results=results,
-                                                 pending_review=True)
+                                                 pending_review=True, command_notes=True)
         else:
             revision = gate.comparison_base(root, base)[0] if base else 'HEAD'
-            problems += gate.local_command_problems(root, revision, record)
+            problems += gate.local_command_problems(root, revision, record, allow_finished=True,
+                                                    notes=notes, results=results)
     for note in gate.summarize_notes(notes):
         print(f'Note: {note}')
     if problems:

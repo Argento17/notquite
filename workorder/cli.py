@@ -184,6 +184,10 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if not all(filled.get(name) for name in ("Scope", "Acceptance")):
             raise s.Refused("fill in Scope and Acceptance first")
         revision, reference = gate.implementation_base(root, record)
+        if no_code_change:
+            problem = gate.no_code_change_problem(root, record, revision)
+            if problem:
+                raise s.Refused(problem)
         base = gate.local_test_base(root, record)
         if base:
             unchanged, origin = gate.test_origin(root, record, revision, base)
