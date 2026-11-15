@@ -127,7 +127,11 @@ def test_unfinished_failing_or_missing_tests_are_notes_in_base_and_hook(local_re
     for flags in [('--base', base, '--run-tests', '--allow', 'TASK-1'), ('--staged',)]:
         result = cli(root, 'check', *flags)
         assert result.returncode == 0, result.stdout + result.stderr
-        assert 'Note:' in result.stdout and ('failed' in result.stdout or 'no tests ran' in result.stdout)
+        if missing and flags == ('--staged',):
+            assert 'Note: TASK-1: its test file is not there yet; an unfinished task may land' in result.stdout
+            assert 'Failure:' not in result.stdout
+        else:
+            assert 'Note:' in result.stdout and ('failed' in result.stdout or 'no tests ran' in result.stdout)
 
 
 def test_failed_finished_receipt_can_be_committed_with_reopening(local_repo):

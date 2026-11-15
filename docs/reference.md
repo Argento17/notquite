@@ -570,6 +570,14 @@ Task scope comes from `code_paths` when supplied, otherwise recorded implementat
 paths, together with the task's selected test files. Shared configuration edits
 still receive file review, with one finding naming all owning tasks.
 
+The stub and target-code proof checks apply to completion claims made in this
+change: a new DONE/CLOSED claim since the merge base, or renewed evidence whose
+tested code changed. An unchanged finished claim does not owe proof of another
+task's new function, even in the same file or within its code paths. Its affected
+test still runs and must pass. Passing test runs do not count as Other findings
+in `done`. Local hooks show a passing test rename's repair note; the pull-request
+check still reviews that test change.
+
 For changed or added Python functions, `done` and the finished-task base check
 with `--run-tests` make one further temporary copy. They compare function syntax
 trees with the base, replace every changed or added function body with

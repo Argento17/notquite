@@ -165,7 +165,7 @@ def test_other_findings_grammar(local_repo, count):
     (root / 'new.py').write_text('def value():\n    return 3\n')
     (root / 'test_new.py').write_text('from new import value\nassert value() == 3\n')
     for n in range(1, count + 1):
-        (root / f'tests/test_{n}.py').write_text(TEST + '# edited\n')
+        (root / f'tests/test_{n}.py').write_text(TEST.replace('== 2', '== 2.0'))
     commit_with_hook(root)
     result = cli(root, 'done', '--task', 'TASK-3')
     other = [line for line in result.stdout.splitlines() if 'Other:' in line]

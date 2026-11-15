@@ -2,6 +2,17 @@
 
 ## 0.15.0 (15 Nov 2026)
 
+- Apply stub and target-code proof checks only to completion claims new in the
+  change, or renewed claims with changed code. Keep running affected finished
+  tasks' tests; their failures still refuse. A second task in the same file or
+  another module within the old task's scope no longer blames the old claim.
+  Stop also checks affected code and renewed receipts. Done omits successful
+  old-test runs from Other and names an old task's failing test on refusal.
+- Keep passing test renames to one repair finding in local hooks. Hide test
+  output for unfinished tasks in pre-commit; a missing declared test gets one
+  note saying the unfinished task may land.
+- Say "no task changed in this change" for bare check --base too. Add the
+  second honest task flow to the offline examples, now 16 cases.
 - Let finished tasks with test receipts commit passing command repairs even
   when completion was recorded on the branch. Pre-commit and Stop print one
   repair note, without a command-change refusal beside it. Failing commands

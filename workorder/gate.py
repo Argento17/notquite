@@ -1846,7 +1846,7 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
         reason = f"{tid}: its test ran but no test passed ({empty})"
         return f"regression: {tid}'s test fails on this code\n{reason}" if regression else reason
     if code == 0:
-        if notes is not None and not empty:
+        if notes is not None and not empty and not test_update_noted(notes, tid):
             note = f"{tid}: its test passed when this check ran it"
             if note not in notes:
                 notes.append(note)
@@ -2327,6 +2327,26 @@ def test_update_note(tid, what):
             f'the pull request needs workorder-allow:{tid}')
 
 
+def test_update_noted(notes, tid):
+    return any(note.startswith(f'{tid}: test ') and 'after committing run workorder renew' in note
+               for note in notes)
+
+
+def unfinished_test_missing(root, record, staged=False):
+    """Recognise a declared path that has not been written in this snapshot yet."""
+    if record['status'] in FINISHED:
+        return None
+    command = declared_test(record) or []
+    # Inline commands and Python module names are not test-file arguments.
+    if not uses_pytest(record) and any(flag in command for flag in ('-c', '-m')):
+        return None
+    named = paths_named_by_command(command, root, include_missing=True)
+    files = set(s.files(root, '.', staged))
+    if any(not any(p == path or p.startswith(path + '/') for p in files) for path in named):
+        return f"{record['id']}: its test file is not there yet; an unfinished task may land"
+    return None
+
+
 def local_test_update(root, record, staged=False, *, counts=None, timeout=None):
     """An existing finished task may commit passing test edits before renewing."""
     tid = record['id']
@@ -2380,14 +2400,23 @@ def local_test_problems(root, base, record, *, pending_review=False, command_not
     notes = kwargs.setdefault('notes', [])
     start = len(notes)
     kwargs.setdefault('results', {})
-    labeled = local_command_problems(root, base, record, kwargs.get('staged', False),
+    staged = kwargs.get('staged', False)
+    labeled = local_command_problems(root, base, record, staged,
                                     allow_finished=command_notes, notes=notes, results=kwargs['results'],
                                     counts=kwargs.get('counts'), timeout=kwargs.get('timeout'))
+    if staged and record['status'] not in FINISHED and not kwargs.get('completed'):
+        missing = unfinished_test_missing(root, record, staged=True)
+        if missing:
+            notes.append(missing)
+            return labeled
+    repaired = command_notes and test_update_noted(notes, record['id'])
     # Shared configuration belongs to one repository finding, even when several
     # task comparisons read it. The individual comparisons still run as usual.
     shared = repository_review_problems(root, base, records(root, kwargs.get('staged', False), errors={}),
         staged=kwargs.get('staged', False), config_only=True)
     for problem in shared + test_change_problems(root, base, record, review_configs=False, **kwargs):
+        if repaired and str(problem).startswith(f"{record['id']}: its test files lost or changed"):
+            continue  # the passing repair note already explains renewal and review
         if problem == wrapper_note(record) and not kwargs.get('completed') and record['status'] not in FINISHED:
             if problem not in notes:
                 notes.append(problem)
@@ -2400,6 +2429,8 @@ def local_test_problems(root, base, record, *, pending_review=False, command_not
         else:
             labeled.append(problem)
     notes[start:] = [comparison_message(line, base, ref, label) for line in notes[start:]]
+    if repaired:
+        notes[:] = [line for line in notes if line != f"{record['id']}: its test passed when this check ran it"]
     return [comparison_message(line, base, ref, label) for line in labeled]
 
 
@@ -2471,6 +2502,32 @@ def task_change_touched(root, base, record, staged=False):
     code = task_code_paths(root, record, base, staged) - material
     return bool(changed_paths(root, base, staged) &
                 (task_test_paths(root, record, base, staged) | code))
+
+
+def completion_changed(root, base, record, staged=False):
+    """Only a new claim or renewed evidence for changed code owes proof of this change."""
+    tid, status = record['id'], record['status']
+    if status not in FINISHED:
+        return False
+    before = fields_at(root, tid, base) or {}
+    if before.get('status') != status:
+        return True
+    histories = task_history(root, base)
+    if histories is None:
+        commits = s.git(root, 'log', '--format=%H', f'{base}..HEAD', '--', f'tasks/{tid}.md').stdout.split()
+        statuses = [committed_status(root, tid, commit) for commit in commits]
+    else:
+        statuses = [value for _, value in histories.get(tid, [])]
+    if any(value != status for value in statuses):
+        return True  # reopening and restoring the status makes a fresh claim
+    run = latest_test_run(root, record, staged)
+    carried = {entry['hash'] for entry in s.entries(root, tid, rev=base)}
+    if not run or {run.get('hash'), run.get('legacy', {}).get('hash')} & carried:
+        return False
+    previous = implementation_at(root, base, tid) or {}
+    material = repository_test_files(root, base, records(root, staged, errors={}), staged)
+    code = task_code_paths(root, record, base, staged) - material
+    return run.get('code') != previous.get('code') and bool(code & changed_paths(root, base, staged))
 
 
 def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None, results=None):
@@ -2701,6 +2758,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             notes.append(line.removeprefix('NOT DONE  ') + '; task is not claimed finished')
 
     finishing = completed or record['status'] in FINISHED
+    new_completion = completed or completion_changed(root, base, record, staged)
 
     def review(line, what='it', lines=False, label_only=False):
         accepted = (allow if allow_failure is None else allow_failure) if label_only else allow or (allow_lines and lines)
@@ -2748,10 +2806,12 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             key = _test_key(record, timeout)
             if key not in results:
                 results[key] = run_snapshot_test(root, current_root, command, s.test_timeout(record, timeout), counts,
-                                                 staged=staged, protected=repository_files(root, base))
+                                                 staged=staged, protected=repository_files(root, base),
+                                                 quiet=staged and not finishing)
             if unavailable(results[key][0]):
                 return problems
-            failed = run_declared_test(root, record, counts, notes, strict, results, timeout=timeout)
+            failed = run_declared_test(root, record, counts, notes, strict, results, timeout=timeout,
+                                       regression=finishing and not new_completion)
             if failed:
                 test_failure(failed)
             base_command = declared_test(before) if before else None
@@ -2767,14 +2827,14 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                                                    s.test_timeout(record, timeout), counts, overlays)
                 return results[own_key]
 
-            if finishing and not failed:
+            if new_completion and not failed:
                 stub = stub_problem(root, base, record, staged=staged, timeout=timeout, counts=counts, results=results)
                 if stub:
                     if allow if allow_failure is None else allow_failure:
                         notes.append(str(stub) + ' (allowed by workorder-allow:' + tid + ')')
                     else:
                         problems.append(stub)
-            if ((finishing or prove_change) and task_change_touched(root, base, record, staged)
+            if ((new_completion or prove_change) and task_change_touched(root, base, record, staged)
                     and not failed and (refactor or not verification_task(root, record, staged))):
                 overlays = {}
                 # Shared helpers and fixtures must be current too: an import of
@@ -2862,7 +2922,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                     return problems
                 missing = s.missing_test_dependency(base_command, own_code, own_output, root=root)
                 if missing or isinstance(own_code, str):
-                    if own_output:
+                    if own_output and (finishing or not staged):
                         s.print_test_output(own_output, failed=True)
                     test_failure(f'{tid}: could not run its tests on {base}: {missing or own_code}')
                     return problems
@@ -2875,7 +2935,8 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                     else:
                         notes.append(f'{tid}: its tests already fail on {base} code; this change is not blamed for that failure')
                     return problems
-                s.print_test_output(base_output, failed=True, label=f'Tests from {base_label} on this code:')
+                if finishing or not staged:
+                    s.print_test_output(base_output, failed=True, label=f'Tests from {base_label} on this code:')
                 if paths or finishing:
                     review(f'{tid}: its tests from {base} fail on this code',
                            'this intended behavior change or test rename', label_only=True)
@@ -3068,9 +3129,12 @@ def has_work_receipt(root, base, changed, staged=False, allow=(), new_tasks=None
     return False
 
 
-def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all_tests=False):
+def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all_tests=False,
+                  unchanged_base=False):
     claims = "not claimed finished" if single_unclaimed else f"{counts['claimed']} claimed DONE or CLOSED"
     line = f"checked {_count(counts['tasks'], 'task')} ({claims})"
+    if unchanged_base:
+        line = 'no task changed in this change'
     if run_tests:
         ran = counts.get('tests', 0)
         cached = counts.get('cached', 0)
@@ -3534,6 +3598,9 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             if not local_base:
                 problems += local_command_problems(root, revision, record, staged=True, allow_finished=True,
                     notes=notes, results=results, counts=counts, timeout=timeout)
+                missing = unfinished_test_missing(root, record, staged=True)
+                if missing:
+                    notes.append(missing)
             owns_change = False
             if local_base and changed:
                 try:

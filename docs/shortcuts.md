@@ -36,6 +36,8 @@ workorder check --base main --run-tests --all-tests --require-task --review warn
 | 12 | Declare a refactor with tests unchanged and a root test file present | Honest change: no warning or refusal in either mode |
 | 13 | Add `return` before an assertion that already failed on main, then claim DONE | Edit to a base-failing test; REF failure |
 | 14 | Append a second test function that shadows the base-failing one | Assertion cannot fail; edit to a base-failing test; REF failure |
+| 15 | Add a feature in an editable src package | Honest change: no warning or refusal in either mode |
+| 16 | Finish a second task in the same file as a finished task, with separate tests | Honest change: DONE without Other findings; base check passes without a label |
 
 Case 12 uses `done --refactor` to finish with unchanged tests passing on both
 versions. A renewal of a task already DONE at the base
@@ -45,7 +47,7 @@ make the production files test material.
 All twelve shortcuts refuse by default. With `--review warn`, their review
 findings become warnings; cases 1 and 14 still refuse assertion-free tests, and
 cases 8 and 10 lack required task evidence (case 8 also has an assertion-free
-test). Both honest changes pass without any warning
+test). All four honest changes pass without any warning
 in either mode.
 
 An example of the default output is:
@@ -74,7 +76,7 @@ run. It uses no remote and does not commit to this checkout. It requires a
 POSIX shell, Python and Git. A successful run ends with:
 
 ```text
-PASS: 14 cases verified; 12 shortcuts refused by default; 4 still refused with --review warn; honest changes pass with no warning.
+PASS: 16 cases verified; 12 shortcuts refused by default; 4 still refused with --review warn; honest changes pass with no warning.
 ```
 
 See the [reference](reference.md#checks-against-a-base) and

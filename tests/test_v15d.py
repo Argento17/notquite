@@ -60,6 +60,10 @@ def test_renamed_finished_test_commits_renews_and_needs_label(local_repo):
     assert 'test command changed and passes on this code' in output
     assert 'after committing run workorder renew --task TASK-1' in output
     assert 'workorder-allow:TASK-1' in output
+    findings = [line for line in output.splitlines() if 'workorder-allow:TASK-1' in line]
+    assert len(findings) == 1, output
+    assert 'lost or changed' not in output and 'its test passes on' not in output, output
+    assert [line for line in output.splitlines() if line.startswith('Note: TASK-1:')] == findings, output
     refused = cli(root, 'done', '--task', 'TASK-1')
     assert refused.returncode == 1 and 'test changed:' in refused.stdout
     result = cli(root, 'renew', '--task', 'TASK-1')
@@ -88,6 +92,7 @@ def test_finished_test_change_is_a_local_note(local_repo, hook, change):
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'after committing run workorder renew --task TASK-1' in result.stdout
     assert 'workorder receipt test' not in result.stdout
+    assert 'lost or changed' not in result.stdout and 'its test passes on' not in result.stdout, result.stdout
 
 
 @pytest.mark.parametrize('hook', ['precommit', 'stop'])
@@ -182,8 +187,8 @@ def test_done_other_tasks_only_in_one_other_line(local_repo, review):
     fill_sections(task(root, 'TASK-3', ships='none', test=store.join_command([PYTHON, 'test_new.py'])))
     (root / 'new.py').write_text('def value():\n    return 3\n')
     (root / 'test_new.py').write_text('from new import value\nassert value() == 3\n')
-    (root / 'tests/test_1.py').write_text(TEST + '# edited\n')
-    (root / 'tests/test_2.py').write_text(TEST + '# also edited\n')
+    (root / 'tests/test_1.py').write_text(TEST.replace('== 2', '== 2.0'))
+    (root / 'tests/test_2.py').write_text(TEST.replace('== 2', '== 2.0'))
     commit_all(root)
     result = cli(root, 'done', '--task', 'TASK-3', *(['--needs-review'] if review else []))
     other = [line for line in result.stdout.splitlines() if 'TASK-1' in line or 'TASK-2' in line]

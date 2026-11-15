@@ -374,10 +374,40 @@ try:
     commit(repo, log, "Record editable src completion")
     report(repo, "Honest src-layout feature with an editable install", command=command, check_exit=0)
 
+    repo, log = base(16, complete=False, code="")
+    definition = repo / "tasks/TASK-1.md"
+    definition.write_text(re.sub(r'(?m)^contract: .*',
+        lambda match: match[0] + '\ncode_paths: ["calc.py"]', definition.read_text()))
+    write(repo, "calc.py", good_code)
+    commit(repo, log, "Implement multiplication on its branch")
+    run(wo + ["done", "--task", "TASK-1"], repo, log)
+    commit(repo, log, "Record multiplication completion")
+    git(repo, log, "checkout", "-q", "main")
+    git(repo, log, "merge", "--ff-only", "change")
+    division = ["python", "-m", "pytest", "-q", "tests/test_div.py"]
+    task(repo, log, "Divide in the same file", "Add div in calc.py; preserve mul.",
+         "div(6, 3) returns 2.", "TASK-2", command=division)
+    definition = repo / "tasks/TASK-2.md"
+    definition.write_text(re.sub(r'(?m)^contract: .*',
+        lambda match: match[0] + '\ncode_paths: ["calc.py"]', definition.read_text()))
+    commit(repo, log, "Land the second task before its implementation")
+    git(repo, log, "checkout", "-qb", "second-task")
+    write(repo, "calc.py", good_code + "\n\ndef div(a, b):\n    return a / b\n")
+    write(repo, "tests/test_div.py", "from calc import div\n\ndef test_div():\n    assert div(6, 3) == 2\n")
+    commit(repo, log, "Implement division alongside finished multiplication")
+    done = run(wo + ["done", "--task", "TASK-2"], repo, repo.parent / "done.txt")
+    if "Other:" in done or "TASK-2 DONE:" not in done:
+        raise RuntimeError("The second honest task did not finish cleanly:\n" + done)
+    commit(repo, log, "Record the second task completion")
+    report(repo, "Second honest task in a finished task's file", command=division, check_exit=0)
+    checked = (repo.parent / "check.txt").read_text()
+    if "workorder-allow:TASK-1" in checked:
+        raise RuntimeError("The unchanged finished task was blamed for division:\n" + checked)
+
     (output / "results.json").write_text(json.dumps(dict(version=version, cases=results), indent=2)
                                        + "\n", encoding="utf-8")
     print(f"\nVerified results: {output / 'results.json'}", flush=True)
-    print("PASS: 15 cases verified; 12 shortcuts refused by default; 4 still refused with --review warn; honest changes pass with no warning.", flush=True)
+    print("PASS: 16 cases verified; 12 shortcuts refused by default; 4 still refused with --review warn; honest changes pass with no warning.", flush=True)
 except (OSError, RuntimeError, StopIteration) as error:
     print(f"FAIL: {error}\nComplete logs remain in {output}", file=sys.stderr)
     sys.exit(1)

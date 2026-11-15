@@ -101,8 +101,14 @@ def relevant_tasks(root):
             selected.add(tid)
         elif record.get('status') in gate.FINISHED:
             try:
-                if gate.strict_test_files(root, record, 'HEAD') & (gate.changed_paths(root, 'HEAD')
-                                                                  | gate.changed_paths(root, 'HEAD', True)):
+                protected = gate.strict_test_files(root, record, revision)
+                changed = gate.changed_paths(root, revision) | gate.changed_paths(root, revision, True)
+                if gate.declared_test(record):
+                    protected |= gate.task_code_paths(root, record, revision)
+                    protected |= gate.task_code_paths(root, record, revision, staged=True)
+                    if tid in gate.worked_tasks(changed):
+                        selected.add(tid)
+                if protected & changed:
                     selected.add(tid)
             except (s.Refused, OSError, ValueError):
                 selected.add(tid)
@@ -153,7 +159,8 @@ def run(root, event):
         except s.Refused:
             continue  # readable completion claims already received their parse error above
         base = gate.local_test_base(root, record)
-        staged = bool((gate.strict_test_files(root, record, 'HEAD') | {f'tasks/{tid}.md'})
+        staged = bool((gate.strict_test_files(root, record, 'HEAD', staged=True)
+                       | gate.task_code_paths(root, record, 'HEAD', staged=True) | {f'tasks/{tid}.md'})
                       & gate.changed_paths(root, 'HEAD', True))
         if staged:
             record = s.record(root, tid, True)

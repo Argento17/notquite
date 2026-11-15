@@ -185,6 +185,8 @@ def done_refusal(tid, status, lines, other=()):
         owners = finding_tasks(reason)
         if owners and tid not in owners:
             other |= owners
+            if reason.startswith('regression:'):
+                own.append(reason)
         else:
             own.append(reason)
     if status in gate.FINISHED:
@@ -321,7 +323,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 if review_note in problems:
                     continue
                 if owners and tid not in owners:
-                    other_notes |= owners
+                    if not review_note.endswith(': its test passed when this check ran it'):
+                        other_notes |= owners
                 elif review_note != wrapper:
                     print(f"Note: {review_note}")
             if problems:
@@ -573,6 +576,8 @@ def main(argv=None):
             if options.run_tests and counts["tests"] == 0:
                 print("no declared test ran in this check")
             print(gate.check_summary(counts, options.run_tests or bool(counts.get('tests')),
+                                    unchanged_base=bool(options.base and not counts['tasks']
+                                                        and not options.run_tests and not options.all_tests),
                                     unchanged_all_tests=bool(options.base and options.all_tests
                                                              and not counts['tasks']
                                                              and counts.get('tested_tasks'))))
