@@ -90,7 +90,11 @@ def parser():
     renew = commands.add_parser("renew", help="record implemented and the task's test again on the current"
                                 " commit (after a squash merge or rebase); merges are computed")
     renew.add_argument("--task", required=True)
-    renew.add_argument("--refactor", action="store_true", help="keep the refactor declaration after a rebase")
+    renewal_kind = renew.add_mutually_exclusive_group()
+    renewal_kind.add_argument("--refactor", action="store_true", default=None,
+                              help="declare unchanged tests passing before and after (kept by default)")
+    renewal_kind.add_argument("--no-refactor", action="store_false", dest="refactor",
+                              help="drop the previous refactor declaration")
     note = commands.add_parser("note", help="set the next action or add a dated Progress line")
     note.add_argument("--task", required=True)
     note.add_argument("--next", dest="next_text", help="set the task's next field")
@@ -165,11 +169,17 @@ def finding_tasks(text):
     return set(re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', text))
 
 
-def done_refusal(tid, status, lines):
+def other_findings(other):
+    if other:
+        print(f'  Other:    {len(other)} other tasks have findings ({", ".join(sorted(other))}); '
+              'workorder check --base <target> --run-tests shows them')
+
+
+def done_refusal(tid, status, lines, other=()):
     """Show this task's findings once and one next action; summarize other tasks."""
     reasons = list(dict.fromkeys(part.strip() for line in lines if line.startswith('  Missing:')
                                  for part in line.removeprefix('  Missing:').splitlines() if part.strip()))
-    own, other = [], set()
+    own, other = [], set(other)
     for reason in reasons:
         owners = finding_tasks(reason)
         if owners and tid not in owners:
@@ -182,10 +192,11 @@ def done_refusal(tid, status, lines):
         print(f'{tid}: DONE was not written; the status stays {status}')
     for reason in own:
         print(f'  Missing:  {reason}')
-    if other:
-        print(f'  Other:    {len(other)} other tasks have findings ({", ".join(sorted(other))}); '
-              'workorder check --base <target> --run-tests shows them')
+    other_findings(other)
     steps = [line for line in lines if line.startswith('  Next:')]
+    if any('test changed:' in reason for reason in own):
+        steps = [f'  Next:     commit the test change, then run workorder renew --task {tid}; '
+                 f'the pull request needs workorder-allow:{tid}']
     print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
 
 
@@ -307,16 +318,14 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 owners = finding_tasks(review_note)
                 if review_note in problems:
                     continue
-                if owners and tid not in owners and gate._accepts_allow_label(review_note):
+                if owners and tid not in owners:
                     other_notes |= owners
                 elif review_note != wrapper:
                     print(f"Note: {review_note}")
-            if other_notes and not problems:
-                print(f'Note: {len(other_notes)} other tasks have findings ({", ".join(sorted(other_notes))}); '
-                      'workorder check --base <target> --run-tests shows them')
             if problems:
-                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in problems])
+                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in problems], other_notes)
                 return 1
+            other_findings(other_notes)
         else:
             print('Note: could not compare with the target: fetch origin first')
             changed_command = gate.local_command_problems(root, 'HEAD', record)
@@ -428,7 +437,7 @@ def main(argv=None):
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
                         options.template, options.test, options.local, test_paths=named, code_paths=options.code_paths)
             where = ("reserved on origin" if shared
-                     else "local id: --local, not reserved on origin" if options.local
+                     else "local id: local numbering requested, not reserved on origin" if options.local
                      else "local id: no origin remote, so other clones could pick the same id")
             print(f"{tid} opened: tasks/{tid}.md ({where})")
         elif options.action == "receipt":
@@ -474,7 +483,23 @@ def main(argv=None):
             if not command:
                 raise s.Refused(f"{options.task} declares no test; add test: to tasks/{options.task}.md,"
                                 " or put the test command after --")
-            refactor = options.refactor or gate.latest_test_run(root, record).get('refactor', False)
+            previous = next((item for item in reversed(s.entries(root, options.task)) if item['kind'] == 'test'), {})
+            refactor = previous.get('refactor', False) if options.refactor is None else options.refactor
+            if refactor:
+                import tempfile
+                base = gate.local_test_base(root, record)
+                if not base:
+                    raise s.Refused('a declared refactor needs a locally available target; fetch origin first')
+                revision, _ = gate.comparison_base(root, base)
+                if gate.refactor_test_files(root, record, revision) & gate.changed_paths(root, revision):
+                    raise s.Refused(f'{options.task}: its test files changed; use renew --no-refactor to drop the declaration')
+                with tempfile.TemporaryDirectory(prefix='workorder-refactor-') as temporary:
+                    code, output = gate.run_ref_test(root, Path(temporary) / 'base', revision, command,
+                                                     s.test_timeout(record, options.timeout), None)
+                if isinstance(code, str):
+                    raise s.Refused(f'{options.task}: could not compare with {base}: {code}')
+                if code or gate.pytest_no_pass(output):
+                    raise s.Refused(f'{options.task}: a declared refactor needs its test to pass on {base}')
             failed = False
             # Merges are computed from Git history; renew never records one that might not count.
             for kind in ("implemented", "test"):

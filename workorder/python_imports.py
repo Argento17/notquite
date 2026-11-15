@@ -1,4 +1,5 @@
 """Keep Python source and import evidence local to a test checkout."""
+import ast
 import json
 import os
 from pathlib import Path, PureWindowsPath
@@ -98,37 +99,116 @@ def interpreter(command, root, env):
 
 
 PROBE = r'''
-import importlib.util, json, pathlib, sys
+import ast, csv, importlib.metadata, importlib.util, json, pathlib, site, sys, sysconfig
 root = pathlib.Path(sys.argv[1]).resolve()
+names = set(json.loads(sys.argv[2]))
+for distribution in importlib.metadata.distributions():
+    direct = distribution.read_text('direct_url.json')
+    if not direct or json.loads(direct).get('dir_info', {}).get('editable') is not True:
+        continue
+    names.update((distribution.read_text('top_level.txt') or '').split())
+    # Some Python versions filter missing files from Distribution.files. An
+    # editable RECORD may still name sources provided by its finder or .pth.
+    entries = [row[0] for row in csv.reader((distribution.read_text('RECORD') or '').splitlines()) if row]
+    for entry in entries:
+        path = pathlib.PurePosixPath(str(entry))
+        if path.suffix == '.pth':
+            pth = pathlib.Path(distribution.locate_file(entry))
+            for line in pth.read_text(encoding='utf-8').splitlines():
+                if not line.strip() or line.startswith(('#', 'import ' , 'import\t')):
+                    continue
+                source = pth.parent / line.strip()
+                if source.is_dir():
+                    for child in source.iterdir():
+                        if child.suffix == '.py' or child.is_dir() and any(child.rglob('*.py')):
+                            if child.stem.isidentifier():
+                                names.add(child.stem)
+        if path.suffix not in ('.py', '.so', '.pyd') or not path.parts:
+            continue
+        name = path.parts[0].split('.')[0]
+        if name.isidentifier() and not name.startswith('__editable__'):
+            names.add(name)
+        if path.name.startswith('__editable__') and path.suffix == '.py':
+            # Read the installed finder without importing additional modules or
+            # evaluating its mapping expressions. Setuptools emits literal maps.
+            tree = ast.parse(pathlib.Path(distribution.locate_file(entry)).read_text(encoding='utf-8'))
+            for node in tree.body:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+                if any(isinstance(target, ast.Name) and target.id in ('MAPPING', 'NAMESPACES') for target in targets):
+                    mapping = ast.literal_eval(node.value)
+                    names.update(name.split('.')[0] for name in mapping)
+allowed = set(site.getsitepackages())
+allowed.update(path for path in sys.path if pathlib.Path(path).name in ('site-packages', 'dist-packages'))
+allowed.update(sysconfig.get_path(key) for key in ('purelib', 'platlib', 'stdlib', 'platstdlib'))
+if site.ENABLE_USER_SITE:
+    allowed.add(site.getusersitepackages())
+allowed = [str(pathlib.Path(path).resolve()) for path in allowed if path]
 locations = {}
-for name in json.loads(sys.argv[2]):
+for name in sorted(names):
+    if not name.isidentifier():
+        continue
     spec = importlib.util.find_spec(name)
     if spec is not None:
         paths = list(spec.submodule_search_locations or [])
         if spec.origin and spec.origin not in ('built-in', 'frozen'):
             paths.append(spec.origin)
         locations[name] = paths
-print('WORKORDER_IMPORTS=' + json.dumps(locations))
+print('WORKORDER_IMPORTS=' + json.dumps({'locations': locations, 'allowed': allowed}))
 '''
 
 
+def test_imports(root, command):
+    """Read top-level imports in test material without executing that material."""
+    from . import store as s
+    from .gate import looks_like_test
+    listing = s._git_run(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard',
+                         required=False, isolated=True)
+    paths = {root / path for path in listing.stdout.split('\0')
+             if path.endswith('.py') and looks_like_test(path)}
+    for word in command[1:]:
+        path = root / word.split('::', 1)[0]
+        if path.suffix == '.py':
+            paths.add(path)
+    names = set()
+    sources = []
+    if '-c' in command:
+        position = command.index('-c') + 1
+        if position < len(command):
+            sources.append(command[position])
+    for path in paths:
+        try:
+            sources.append(path.read_bytes())
+        except OSError:
+            continue
+    for source_text in sources:
+        try:
+            tree = ast.parse(source_text)
+        except (SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name.split('.')[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                names.add(node.module.split('.')[0])
+    return names
+
+
 def check(root, source, command, env, timeout=None):
-    names = sorted(set(packages(root)) | set(packages(source)))
-    if not names:
-        return None
+    names = sorted(set(packages(root)) | set(packages(source)) | test_imports(root, command))
     python = interpreter(command, root, env)
     if python is None:
-        return ImportFailure('could not verify the Python interpreter used by the test command')
+        return ImportFailure('could not verify the Python interpreter used by the test command') if names else None
     try:
         run = subprocess.run([*python, '-c', PROBE, str(root), json.dumps(names)], cwd=root, env=env,
-                             capture_output=True, text=True, errors='replace', timeout=timeout or 10)
+                             capture_output=True, text=True, errors='replace', timeout=10)
         line = next(line for line in run.stdout.splitlines() if line.startswith('WORKORDER_IMPORTS='))
-        locations = json.loads(line.split('=', 1)[1])
+        report = json.loads(line.split('=', 1)[1])
         if run.returncode:
             raise ValueError(run.stderr.strip())
-        for name, paths in locations.items():
+        allowed = [root.resolve(), *map(Path, report['allowed'])]
+        for name, paths in report['locations'].items():
             for path in paths:
-                if not Path(path).resolve().is_relative_to(root.resolve()):
+                if not any(Path(path).resolve().is_relative_to(parent) for parent in allowed):
                     return ImportFailure(f'the tests import {name} from {path}, outside the comparison copy; '
                                          'add pythonpath = ["src"] under [tool.pytest.ini_options] '
                                          'or install the package non-editable')

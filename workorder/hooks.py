@@ -99,6 +99,13 @@ def relevant_tasks(root):
         before = s.metadata_texts(root, revision).get(path)
         if before != current:
             selected.add(tid)
+        elif record.get('status') in gate.FINISHED:
+            try:
+                if gate.strict_test_files(root, record, 'HEAD') & (gate.changed_paths(root, 'HEAD')
+                                                                  | gate.changed_paths(root, 'HEAD', True)):
+                    selected.add(tid)
+            except (s.Refused, OSError, ValueError):
+                selected.add(tid)
     return selected
 
 
@@ -131,20 +138,25 @@ def run(root, event):
         return 0
     relevant = relevant_tasks(root)
     claimed = completion_claims(root, relevant)
-    problems = []
+    problems, notes = [], []
     if claimed:
-        for line in gate.check(root):
+        for line in gate.check(root, notes=notes, local_hook=True):
             owner = re.match(r'(?:NOT DONE\s+)?([A-Z][A-Z0-9]*-[1-9][0-9]*)\b', line)
             if owner and owner[1] in claimed:
                 problems.append(line)
+        notes[:] = [line for line in notes if not line.startswith('Evidence:')]
     _, owned = local_claims(root)
-    notes, results = [], {}
+    results = {}
     for tid in sorted(relevant):
         try:
             record = s.record(root, tid)
         except s.Refused:
             continue  # readable completion claims already received their parse error above
         base = gate.local_test_base(root, record)
+        staged = bool((gate.strict_test_files(root, record, 'HEAD') | {f'tasks/{tid}.md'})
+                      & gate.changed_paths(root, 'HEAD', True))
+        if staged:
+            record = s.record(root, tid, True)
         if gate.waiting_for_review(root, record):
             notes.append(f'{tid}: ' + gate.pending_review_message(tid))
         if record['status'] == 'CANCELLED' and tid in owned:
@@ -158,11 +170,11 @@ def run(root, event):
                     f'a reviewer accepts closing a task without finishing it with --allow {tid}', tid))
         if tid in claimed and base:
             problems += gate.local_test_problems(root, base, record, notes=notes, results=results,
-                                                 pending_review=True, command_notes=True)
+                                                 pending_review=True, command_notes=True, staged=staged)
         else:
             revision = gate.comparison_base(root, base)[0] if base else 'HEAD'
             problems += gate.local_command_problems(root, revision, record, allow_finished=True,
-                                                    notes=notes, results=results)
+                                                    notes=notes, results=results, staged=staged)
     for note in gate.summarize_notes(notes):
         print(f'Note: {note}')
     if problems:

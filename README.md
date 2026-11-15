@@ -76,7 +76,7 @@ if its test still fails, the pull request needs the reviewer's explicit `workord
 Ordinary tasks need a code change since the target merge base (or task creation).
 Use `--no-code-change` only when no code files changed. For intentional test edits,
 `--needs-review` writes DONE pending a reviewer label or approval. Use `--refactor`
-for unchanged tests passing before and after. `new --code-paths src/calc.py` sets code scope. [Task format](docs/reference.md#task-files).
+for unchanged tests passing before and after. Plain `renew` keeps that declaration; `renew --no-refactor` drops it. `new --code-paths src/calc.py` sets code scope. [Task format](docs/reference.md#task-files).
 
 For installed `src/` projects (including `pip install -e .`), copies put `src/` and the copy root first on `PYTHONPATH` and verify package locations before comparing.
 

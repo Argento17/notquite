@@ -6,13 +6,18 @@
   imports with the test interpreter before using a comparison, including a
   cached or parallel run. Outside imports are unavailable comparisons accepted
   only by the task label, never evidence of weak tests or a passing refactor.
-  Init notices installed src packages. Add real offline editable-install tests.
+  Cover every editable distribution's PEP 610 metadata, top-level names, RECORD
+  and finder mappings, including .pth source roots, plus imports in test files
+  and inline Python test commands. Allow the interpreter's own
+  site-packages and standard library. Init notices installed src packages.
+  Add real offline editable-install tests, including remapped package folders.
 - Count pytest.warns, deprecated_call, raises and fail, plus unittest assertion
   context managers. Scan only added or changed test functions against the base
   syntax tree; leave unchanged functions and comment-only edits alone.
 - Warn about missing paths named by new --test. Permit local command repairs on
   unfinished tasks without receipts. Renew preserves a refactor declaration
-  after a rebase and accepts --refactor explicitly.
+  after later commits and rebases, rechecks its conditions, and accepts
+  --refactor explicitly. Use renew --no-refactor to drop it on purpose.
 - Require workorder-allow:scope:ID or an approving review for code outside a
   task's scope; a test-change label cannot accept it. Print shared assertion
   findings once. Done lists its task's findings, one summary for other tasks,
@@ -29,9 +34,9 @@
   test material, following up to four calls. Recognise assert, verify, check,
   expect and ensure names. A task label can accept unusual assertion syntax;
   an approving review alone or warning mode cannot.
-- Treat literal-only comparisons, other constant expressions and equality of
-  the same name, attribute or subscript like assert True, so a missing module
-  at the base cannot supply their only failure.
+- Treat literal-only comparisons, other constant expressions, and equality or
+  identity of the same name, attribute or subscript like assert True, so a
+  missing module at the base cannot supply their only failure.
 - Run each task's test once in a temporary copy where all changed or added
   Python function bodies raise NotImplementedError. Refuse tests that still
   pass; only the task's explicit reviewer label accepts the finding in a base
@@ -41,14 +46,20 @@
   in an optional test receipt member. Existing files need no migration.
 - Let pre-commit and Stop note a repaired command for an already finished task
   when the new command passes. Pre-commit runs the staged code. The note names
-  the review label; done still refuses changed commands.
+  the review label; done still refuses changed commands. A passing finished-task
+  test rename or edit can be committed before renewal; the note says to run
+  renew after committing. The pre-commit hook notes test changes, including
+  test edits made while merging main. The pull-request check refuses them
+  without the reviewer label (or an approving review where allowed).
 - Keep failures as local progress notes when finished tasks are reopened, but
   require the task's explicit reviewer label when its current test fails in a
   pull-request base check. Approval and warning mode do not accept the failure.
 - Keep no-code-change, refactor, pending-review and new-test-origin notes
   separate for each task. Missing base task or test evidence no longer implies
   that a test landed earlier.
-- Report each shared configuration edit once with all its owners. Run the
+- Report each shared configuration edit once with all its owners, without
+  duplicate per-task notes. Done always groups other tasks into one Other line.
+  Explain new --local in words instead of printing the flag as its reason. Run the
   red-before-green comparison only when the task's own code or tests changed.
 - Exclude lockfiles from the code-to-task requirement and add repeatable
   `check --require-task-ignore GLOB` path exceptions, with a workflow example.

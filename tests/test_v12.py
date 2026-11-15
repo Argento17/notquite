@@ -201,7 +201,7 @@ def test_crlf_import_addition_and_assertion_review_on_every_platform(local_repo,
     assert cli(root, 'check', '--review', 'refuse', '--base', base).returncode == 1
 
 
-def test_staged_crlf_reuses_working_result_without_copy(local_repo, monkeypatch, capsys):
+def test_staged_crlf_reuses_working_result_after_import_probe(local_repo, monkeypatch, capsys):
     root = local_repo
     git(root, 'config', 'core.autocrlf', 'true')
     # Explicit CRLF bytes reproduce Windows checkout on all platforms.
@@ -211,9 +211,9 @@ def test_staged_crlf_reuses_working_result_without_copy(local_repo, monkeypatch,
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
     ok(root, 'done', '--task', 'TASK-1', '--no-code-change')
     git(root, 'add', 'tasks', '.workorder')
-    def no_copy(*args, **kwargs):
-        pytest.fail('cache hit copied the repository')
-    monkeypatch.setattr(gate, '_test_snapshot', no_copy)
+    def no_run(*args, **kwargs):
+        pytest.fail('cache hit reran the test')
+    monkeypatch.setattr(store, 'run_test', no_run)
     assert gate.check(root, staged=True) == []
     assert re.search(r'\(reused from \d{2}:\d{2} UTC\)', capsys.readouterr().out)
 
@@ -258,7 +258,7 @@ def test_command_edit_without_remote_is_refused_against_head(local_repo, monkeyp
 
 
 @pytest.mark.parametrize('attributes', [False, True])
-def test_cached_changed_tests_do_not_copy_current_or_ref_code(local_repo, monkeypatch, attributes):
+def test_cached_changed_tests_reprobe_without_rerunning(local_repo, monkeypatch, attributes):
     root = local_repo
     if attributes:
         (root / '.gitattributes').write_text('* text=auto eol=lf\n')
@@ -268,10 +268,9 @@ def test_cached_changed_tests_do_not_copy_current_or_ref_code(local_repo, monkey
     ok(root, 'done', '--needs-review', '--task', 'TASK-1')
     git(root, 'add', 'tasks', '.workorder')
     assert gate.check(root, staged=True) == []
-    def no_copy(*args, **kwargs):
-        pytest.fail('cached test comparison copied a repository')
-    monkeypatch.setattr(gate, '_test_snapshot', no_copy)
-    monkeypatch.setattr(gate, '_ref_test_snapshot', no_copy)
+    def no_run(*args, **kwargs):
+        pytest.fail('cached test comparison reran a test')
+    monkeypatch.setattr(store, 'run_test', no_run)
     assert gate.check(root, staged=True) == []
 
 

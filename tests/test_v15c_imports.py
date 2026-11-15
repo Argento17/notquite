@@ -2,10 +2,11 @@
 import os
 from pathlib import Path
 import subprocess
-import sysconfig
 import venv
 
 import pytest
+
+from test_environment import TEST_SITE
 
 from workorder import gate, store
 from test_workorder import PACKAGE, PYTHON, cli, git, local_repo, task
@@ -33,7 +34,7 @@ def editable(root, tmp_path):
     venv.EnvBuilder(with_pip=True).create(environment)
     python = environment / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     site = subprocess.check_output([str(python), '-c', 'import sysconfig; print(sysconfig.get_path("purelib"))'], text=True).strip()
-    (Path(site) / 'test_tools.pth').write_text(sysconfig.get_path('purelib') + '\n')
+    (Path(site) / 'test_tools.pth').write_text(str(TEST_SITE) + '\n')
     (root / 'src/wo_sample').mkdir(parents=True)
     (root / 'src/wo_sample/__init__.py').write_text('def value():\n    return 1\n')
     (root / 'build_backend.py').write_text(BACKEND)

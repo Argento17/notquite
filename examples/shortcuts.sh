@@ -9,6 +9,8 @@ if [ "$#" -gt 2 ]; then
 fi
 PYTHON=${1:-python3}
 OUTPUT_PARENT=${2:-${TMPDIR:-/tmp}}
+WORKORDER_EXAMPLES=$(dirname "$0")
+export WORKORDER_EXAMPLES
 exec "$PYTHON" - "$OUTPUT_PARENT" <<'PY'
 import json
 import os
@@ -18,9 +20,12 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import sysconfig
+import runpy
 import venv
 
+
+tools = runpy.run_path(str(Path(os.environ.pop("WORKORDER_EXAMPLES")) / "local_tools.py"))
+python, tool_site = tools["isolated_tools"]()
 
 parent = Path(sys.argv[1]).expanduser().resolve()
 parent.mkdir(parents=True, exist_ok=True)
@@ -32,7 +37,7 @@ print(f"Disposable repositories and complete logs: {output}", flush=True)
 bin_dir = output / "bin"
 bin_dir.mkdir()
 python_alias = bin_dir / "python"
-python_alias.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$@"\n', encoding="utf-8")
+python_alias.write_text("#!/bin/sh\nexec " + shlex.quote(python) + ' "$@"\n', encoding="utf-8")
 python_alias.chmod(0o755)
 env = os.environ.copy()
 for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
@@ -43,7 +48,7 @@ env.update(PATH=str(bin_dir) + os.pathsep + env.get("PATH", ""),
            PYTHONDONTWRITEBYTECODE="1", NO_COLOR="1", TERM="dumb")
 empty_hooks = output / "empty-hooks"
 empty_hooks.mkdir()
-wo = [sys.executable, "-m", "workorder"]
+wo = [python, "-m", "workorder"]
 test = ["python", "-m", "pytest", "-q", "tests/test_calc.py"]
 check = ["check", "--base", "main", "--run-tests", "--all-tests", "--require-task"]
 
@@ -351,7 +356,7 @@ try:
     venv.EnvBuilder(with_pip=True).create(environment)
     executable = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     site = subprocess.check_output([str(executable), "-c", 'import sysconfig; print(sysconfig.get_path("purelib"))'], text=True).strip()
-    (Path(site) / "test_tools.pth").write_text(sysconfig.get_path("purelib") + "\n")
+    (Path(site) / "test_tools.pth").write_text(str(tool_site) + "\n")
     run([str(executable), "-m", "pip", "install", "--no-index", "--no-build-isolation", "--no-deps", "-e", "."], repo, log)
     command = [str(executable), "-m", "pytest", "-q", "tests/test_calc.py"]
     # Set the interpreter in the task before implementation, on main.

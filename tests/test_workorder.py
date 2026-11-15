@@ -17,7 +17,9 @@ import pytest
 from workorder import gate, store
 
 PACKAGE = Path(__file__).resolve().parents[1]
-PYTHON = sys.executable
+from test_environment import TEST_PYTHON
+
+PYTHON = TEST_PYTHON
 
 
 def git(root, *args):
