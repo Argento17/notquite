@@ -20,6 +20,16 @@ def timeout_argument(value):
         raise argparse.ArgumentTypeError(str(error)) from None
 
 
+def jobs_argument(value):
+    try:
+        jobs = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError('jobs must be a positive integer') from None
+    if jobs < 1:
+        raise argparse.ArgumentTypeError('jobs must be a positive integer')
+    return jobs
+
+
 def parser():
     result = argparse.ArgumentParser(
         prog="workorder", description="The task record for coding agents: every task recorded, a clear history, agents always go back to it.",
@@ -108,6 +118,11 @@ def parser():
                        help="with --run-tests: also test every DONE/CLOSED task, once per code, command and timeout")
     check.add_argument("--require-task", action="store_true",
                        help="with --base: require a new counting receipt on a task with a concrete test command for non-test code changes")
+    check.add_argument('--require-task-ignore', action='append', default=[], metavar='GLOB',
+                       help='with --require-task: ignore matching repository paths (repeatable)')
+    for sub in (done, check):
+        sub.add_argument('--jobs', type=jobs_argument, metavar='N',
+                         help='run distinct test commands with N workers (default: CPU count)')
     check.add_argument("--review", choices=["warn", "refuse"],
                        help="with --base: refuse test changes until accepted (default), or opt in to warnings")
     check.add_argument("--base", metavar="REF",
@@ -159,7 +174,7 @@ def done_refusal(tid, status, lines):
 @s.test_output_session()
 @s.completion_transaction
 def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_change=False, refactor=False,
-                require_test_first=False):
+                require_test_first=False, jobs=None):
     """Use the same evidence and claim checks as the individual commands, restoring status on refusal."""
     status = None
     try:
@@ -171,7 +186,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             raise s.Refused('--refactor cannot be combined with --needs-review or --no-code-change')
         dirty = s.dirty_paths(root)
         if dirty:
-            raise s.Refused("commit the code first; " + s.describe_dirty(dirty))
+            setup = {'AGENTS.md', 'CLAUDE.md', '.claude/settings.json', '.github/workflows/workorder.yml'}
+            advice = 'commit the files written by workorder init first; ' if setup & set(dirty) else 'commit the code first; '
+            raise s.Refused(advice + s.describe_dirty(dirty))
         command = gate.declared_test(record)
         if not command:
             raise s.Refused(f"{tid} needs a declared test command; add test: to tasks/{tid}.md")
@@ -237,9 +254,13 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         print("Acceptance:")
         print(filled["Acceptance"])
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
+        results = {}
+        stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results)
+        if stub:
+            done_refusal(tid, status, [f'  Missing:  {stub}'])
+            return 1
         if base:
             notes = []
-            results = {}
             revision, label = gate.comparison_base(root, base)
             for problem in gate.repository_review_problems(root, revision, gate.records(root, errors={})):
                 problem = gate.comparison_message(problem, revision, base, label)
@@ -255,7 +276,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             problems = gate.local_test_problems(root, base, record, timeout=timeout, notes=notes,
                                                 completed=True, pending_review=needs_review, results=results)
             problems += gate.local_regression_problems(root, base, exclude={tid}, timeout=timeout,
-                                                       notes=notes, results=results, pending_review=needs_review)
+                                                       notes=notes, results=results, pending_review=needs_review, jobs=jobs)
             if not needs_review:
                 problems += [note for note in notes if gate._accepts_allow_label(note)]
             for review_note in notes:
@@ -343,7 +364,7 @@ def main(argv=None):
             return run(root, options.event)
         elif options.action == "done":
             return finish_task(root, s.task_id(options.task), options.note, options.timeout,
-                               options.needs_review, options.no_code_change, options.refactor, options.require_test_first)
+                               options.needs_review, options.no_code_change, options.refactor, options.require_test_first, options.jobs)
         elif options.action == "new":
             shared = s.has_origin(root) and not options.local
             if options.test_paths is None and gate.wrapper_paths({'test': options.test}) is not None:
@@ -463,7 +484,8 @@ def main(argv=None):
             problems = gate.check(root, options.staged, options.base, notes, allow, options.run_tests, counts,
                                   options.strict_tests, options.all_tests, options.require_task,
                                   timeout=options.timeout, review=options.review or "refuse",
-                                  approving_review=options.approving_review, require_test_first=options.require_test_first)
+                                  approving_review=options.approving_review, require_test_first=options.require_test_first,
+                                  jobs=options.jobs, require_task_ignore=options.require_task_ignore)
             if (options.staged and not counts["tasks"] and not problems and not notes
                     and not counts.get("warnings") and not options.run_tests):
                 return 0

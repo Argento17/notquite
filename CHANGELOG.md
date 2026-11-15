@@ -6,14 +6,39 @@
   test material, following up to four calls. Recognise assert, verify, check,
   expect and ensure names. A task label can accept unusual assertion syntax;
   an approving review alone or warning mode cannot.
-- Treat literal-only comparisons and other constant expressions like assert
-  True, so a missing module at the base cannot supply their only failure.
+- Treat literal-only comparisons, other constant expressions and equality of
+  the same name, attribute or subscript like assert True, so a missing module
+  at the base cannot supply their only failure.
+- Run each task's test once in a temporary copy where all changed or added
+  Python function bodies raise NotImplementedError. Refuse tests that still
+  pass; only the task's explicit reviewer label accepts the finding in a base
+  check. Declared refactors and valid no-code-change runs are exempt.
 - Refuse --no-code-change when code changed since the merge base or task
   creation. Validate receipt exemptions too, and retain the comparison base
   in an optional test receipt member. Existing files need no migration.
 - Let pre-commit and Stop note a repaired command for an already finished task
   when the new command passes. Pre-commit runs the staged code. The note names
   the review label; done still refuses changed commands.
+- Keep failures as local progress notes when finished tasks are reopened, but
+  require the task's explicit reviewer label when its current test fails in a
+  pull-request base check. Approval and warning mode do not accept the failure.
+- Keep no-code-change, refactor, pending-review and new-test-origin notes
+  separate for each task. Missing base task or test evidence no longer implies
+  that a test landed earlier.
+- Report each shared configuration edit once with all its owners. Run the
+  red-before-green comparison only when the task's own code or tests changed.
+- Exclude lockfiles from the code-to-task requirement and add repeatable
+  `check --require-task-ignore GLOB` path exceptions, with a workflow example.
+- Add positive `check/done --jobs N`, defaulting to the CPU count. Distinct
+  current test commands run concurrently with stable task output order;
+  identical commands still share a run. Local checks select affected finished
+  tasks by their recorded implementation paths and selected test paths.
+- Require the explicit `workorder-allow:workflow` reviewer label for changes
+  to the default or renamed generated Workorder workflow. Author-added labels
+  remain ignored.
+- End init with its written-file list and exact add/commit command, including
+  Claude settings when written and listing the local hook without staging it.
+  Local task IDs now account for reservation tags already present in the clone.
 - Give the test CLI helper 120 seconds for slower Windows runs. Update the
   documentation and version to 0.15.0.
 

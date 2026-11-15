@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 import configparser
 import copy
 import difflib
@@ -1222,6 +1224,8 @@ def refactor_test_files(root, record, base, staged=False):
 
 def test_origin(root, record, base, label, staged=False):
     paths = refactor_test_files(root, record, base, staged)
+    paths = {path for path in paths if posixpath.basename(path) not in PYTEST_CONFIG_NAMES | {'conftest.py'}
+             and path not in pytest_configs(root, record)}
     existing = paths & repository_files(root, base)
     unchanged = bool(existing) and not paths & changed_paths(root, base, staged)
     command = declared_test(record)
@@ -1241,6 +1245,12 @@ def test_first_problem(tid, label):
 
 ASSERTION_PREFIXES = ('assert', 'verify', 'check', 'expect', 'ensure')
 ASSERTION_HELPER_DEPTH = 4
+
+
+def self_equality(test):
+    return (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
+            and isinstance(test.left, (ast.Name, ast.Attribute, ast.Subscript))
+            and ast.dump(test.left) == ast.dump(test.comparators[0]))
 
 
 class _AssertionScan:
@@ -1350,6 +1360,8 @@ class _AssertionScan:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
             return False
         if isinstance(node, ast.Assert):
+            if self_equality(node.test):
+                return False
             return any(isinstance(child, (ast.Name, ast.Attribute, ast.Subscript, ast.Call))
                        for child in ast.walk(node.test))
         if isinstance(node, ast.Call):
@@ -1393,6 +1405,15 @@ def assertion_problems(root, base, record, staged=False, paths=None, material=No
         if not path.endswith('.py'):
             continue
         tree, _ = scanner.module(path)
+        # Script tests can assert at module scope rather than defining test_ functions.
+        # A self-comparison there supplies no evidence either.
+        top = [node for node in tree.body
+               if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+        tautologies = [node for node in top if isinstance(node, ast.Assert) and self_equality(node.test)]
+        context = scanner.context(path)
+        if tautologies and not any(scanner.assertion(node, path, context) for node in top):
+            problems.append(AssertionProblem(
+                f"{record['id']}: {path} asserts nothing that can fail", path, tautologies[0].lineno, True))
         for function in functions(tree):
             context = scanner.context(path)
             context.update(scanner.scopes.get(function, {}))
@@ -1584,7 +1605,8 @@ def scope(root, reference, staged, names, all_records, include_tests=False, stri
     if include_tests:
         for tid, record in all_records.items():
             try:
-                if strict_test_files(root, record, reference, staged) & changed:
+                if (strict_test_files(root, record, reference, staged) & changed
+                        or record['status'] in FINISHED and task_code_paths(root, record, reference, staged) & changed):
                     touched.add(tid)
             except (s.Refused, OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as error:
                 if errors is None:
@@ -1732,6 +1754,50 @@ def test_result(run, counts, *, quiet=False, failures_only=False):
 
 def _test_key(record, timeout):
     return tuple(declared_test(record) or []), s.test_timeout(record, timeout)
+
+
+def prefetch_tests(root, records, results, counts=None, timeout=None, staged=False, jobs=None, snapshot=False,
+                   protected=()):
+    """Run distinct commands concurrently, then print their output in task order."""
+    pending = {}
+    for record in sorted(records, key=lambda value: value['id']):
+        key = _test_key(record, timeout)
+        if declared_test(record) and key not in results:
+            pending.setdefault(key, record)
+    if not pending:
+        return
+
+    def run(key):
+        # Context variables carry the reuse policy, but workers must not mutate
+        # the main thread's read cache while another worker is using it.
+        token = s._READS.set(None)
+        command, deadline = key
+        try:
+            if staged or snapshot:
+                with tempfile.TemporaryDirectory(prefix='workorder-parallel-') as temporary:
+                    destination = Path(temporary) / 'code'
+                    _test_snapshot(root, destination, staged=staged, protected=protected)
+                    return s.cached_test(_snapshot_command(command, root, destination), destination, deadline,
+                                         cache_root=root, logical_command=command, fresh=not s._REUSE_TESTS.get())
+            return s.cached_test(command, root, deadline, fresh=not s._REUSE_TESTS.get())
+        except (OSError, ValueError, s.Refused, subprocess.SubprocessError) as error:
+            run = subprocess.CompletedProcess(command, 127, '', str(error))
+            run.not_started = True
+            return run
+        finally:
+            s._READS.reset(token)
+
+    with ThreadPoolExecutor(max_workers=jobs or os.cpu_count() or 1) as pool:
+        futures = {key: pool.submit(copy_context().run, run, key) for key in pending}
+        for key, future in futures.items():
+            run = future.result()
+            if getattr(run, 'not_started', False):
+                results[key] = 127, run.stderr
+                continue
+            if not hasattr(run, 'cached'):
+                run.cached = False
+            results[key] = test_result(run, counts, failures_only=staged)
+    s.invalidate_reads()
 
 
 def run_declared_test(root, record, counts=None, notes=None, strict=False, results=None, regression=False,
@@ -2264,40 +2330,111 @@ def waiting_for_review(root, record, staged=False):
     return pending_review(root, record, target[1] if target else None, staged)
 
 
+def task_test_paths(root, record, base, staged=False):
+    return {path for path in strict_test_files(root, record, base, staged)
+            if posixpath.basename(path) not in PYTEST_CONFIG_NAMES | {'conftest.py'}
+            and path not in pytest_configs(root, record)}
+
+
+def task_code_paths(root, record, base, staged=False):
+    changed = changed_paths(root, base, staged)
+    if 'code_paths' in record:
+        scopes = {posixpath.normpath(path) for path in record['code_paths']}
+        return {path for path in changed if any(scope == '.' or path == scope or path.startswith(scope + '/')
+                                               for scope in scopes)}
+    implemented = newest_implementation(s.entries(root, record['id'], staged))
+    if implemented:
+        paths = implemented.get('implementation_paths')
+        if paths or paths is not None and verification_task(root, record, staged):
+            return set(paths)
+        if paths == {}:
+            commit = implemented['commit'] if not implemented['missing'] else base
+            return set(s.code_tree(root, commit))
+        # Old receipts do not retain their original implementation boundary.
+        # The current merge base may be newer than their commit, so diffing it
+        # against that commit can erase ownership of already landed code.
+        commit = implemented['commit'] if not implemented['missing'] else base
+        return set(s.code_tree(root, commit))
+    material = repository_test_files(root, base, records(root, staged, errors={}), staged)
+    return {path for path in changed - material if needs_task_receipt(path)}
+
+
+def task_change_touched(root, base, record, staged=False):
+    material = repository_test_files(root, base, records(root, staged, errors={}), staged)
+    code = task_code_paths(root, record, base, staged) - material
+    return bool(changed_paths(root, base, staged) &
+                (task_test_paths(root, record, base, staged) | code))
+
+
+def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None, results=None):
+    """A passing test must fail when all changed Python functions are unavailable."""
+    run = latest_test_run(root, record, staged)
+    if run.get('refactor') or run.get('no_code_change'):
+        return None
+    command = declared_test(record)
+    if not command:
+        return None
+    from .python_stubs import changed_functions
+    material = repository_test_files(root, base, records(root, staged, errors={}), staged)
+    material |= strict_test_files(root, record, base, staged)
+    overlays, descriptions = {}, []
+    for path in sorted(changed_paths(root, base, staged) - material):
+        if not path.endswith('.py') or not needs_task_receipt(path):
+            continue
+        current = _test_bytes(root, path, staged=staged)
+        if current is None:
+            continue
+        try:
+            content, names = changed_functions(_test_bytes(root, path, base), current)
+        except (SyntaxError, ValueError, UnicodeError) as error:
+            return f"{record['id']}: could not stub changed functions in {path}: {error}"
+        if content is not None:
+            overlays[path] = content, None
+            descriptions.append(f'{", ".join(names)} in {path}')
+    if not overlays:
+        return None
+    results = {} if results is None else results
+    key = ('stub', record['id'], base, staged, _test_key(record, timeout))
+    if key not in results:
+        with tempfile.TemporaryDirectory(prefix='workorder-stub-') as temporary:
+            results[key] = run_snapshot_test(root, Path(temporary) / 'code', command,
+                s.test_timeout(record, timeout), counts, staged=staged, overlays=overlays, quiet=True)
+    code, output = results[key]
+    if isinstance(code, str) or code in {5, 124, 127}:
+        return f"{record['id']}: could not run its test with changed functions stubbed out: {code}"
+    if code == 0:
+        text = (f"{record['id']}: its test still passes with the changed functions stubbed out "
+                f"({'; '.join(descriptions)}); it does not exercise the change")
+        finding = AssertionProblem(text, next(iter(overlays)), label_only=True)
+        return AssertionProblem(reviewer_label(finding, record['id']), finding.path, label_only=True)
+    return None
+
+
 def local_regression_problems(root, base, *, exclude=(), staged=False, timeout=None,
-                              notes=None, results=None, counts=None, pending_review=False):
-    """Run finished tasks whose recorded code or selected tests the branch touches."""
+                              notes=None, results=None, counts=None, pending_review=False, jobs=None):
+    """Run finished tasks whose recorded code or selected tests the change touches."""
     revision, _ = comparison_base(root, base)
     changed = changed_paths(root, revision, staged)
     results = {} if results is None else results
-    problems = []
+    problems, selected = [], []
     for tid, record in sorted(records(root, staged, errors={}).items()):
         if tid in exclude or record['status'] not in FINISHED:
             continue
         try:
-            implemented = newest_implementation(s.entries(root, tid, staged))
             protected = strict_test_files(root, record, revision, staged)
+            protected |= task_code_paths(root, record, revision, staged)
             if protected & changed:
+                selected.append(record)
+        except (s.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
+            problems.append(f'{tid}: could not select its current test: {error}')
+    prefetch_tests(root, selected, results, counts, timeout, staged, jobs)
+    for record in selected:
+        tid = record['id']
+        try:
+            if strict_test_files(root, record, revision, staged) & changed:
                 problems += local_test_problems(root, base, record, staged=staged, timeout=timeout,
                     notes=notes if notes is not None else [], results=results, counts=counts,
                     pending_review=staged or pending_review, command_notes=staged)
-            if implemented:
-                paths = implemented.get('implementation_paths')
-                if paths:
-                    protected |= set(paths)
-                else:
-                    # Old receipts and empty implementation ranges have no narrower
-                    # ownership information. Include their available code tree.
-                    commit = implemented['commit'] if not implemented['missing'] else revision
-                    protected |= set(s.code_tree(root, commit))
-            if not protected & changed:
-                continue
-            command = declared_test(record)
-            key = _test_key(record, timeout)
-            if command and key not in results and staged:
-                with tempfile.TemporaryDirectory(prefix='workorder-regression-') as temporary:
-                    results[key] = run_snapshot_test(root, Path(temporary) / 'code', command,
-                        s.test_timeout(record, timeout), counts, staged=True)
             failed = run_declared_test(root, record, counts, notes, results=results,
                                        regression=True, timeout=timeout)
             if failed:
@@ -2458,7 +2595,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             problems.append(ReviewProblem(reviewer_label(finding, tid), finding.path, finding.line, label_only))
 
     def addition_rule():
-        if paths and not changed:
+        if task_test_paths(root, record, base, staged) & set(paths) and not changed:
             review(f"{tid}: its test files changed since {base} ({', '.join(paths)}); "
                    f"its tests already fail on {base}, so any change needs review")
 
@@ -2498,7 +2635,15 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                                                    s.test_timeout(record, timeout), counts, overlays)
                 return results[own_key]
 
-            if (finishing or prove_change) and not failed and (refactor or not verification_task(root, record, staged)):
+            if finishing and not failed:
+                stub = stub_problem(root, base, record, staged=staged, timeout=timeout, counts=counts, results=results)
+                if stub:
+                    if allow if allow_failure is None else allow_failure:
+                        notes.append(str(stub) + ' (allowed by workorder-allow:' + tid + ')')
+                    else:
+                        problems.append(stub)
+            if ((finishing or prove_change) and task_change_touched(root, base, record, staged)
+                    and not failed and (refactor or not verification_task(root, record, staged))):
                 overlays = {}
                 # Shared helpers and fixtures must be current too: an import of
                 # a new helper from an old file is not evidence about base code.
@@ -2696,8 +2841,13 @@ def worked_tasks(changed):
             | {s.receipt_task(p) for p in changed} - {None})
 
 
+LOCKFILES = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'Pipfile.lock',
+             'uv.lock', 'Cargo.lock', 'go.sum', 'Gemfile.lock', 'composer.lock'}
+
+
 def needs_task_receipt(path):
-    return (not path.startswith(('tasks/', '.workorder/', '.notquite/', 'docs/', '.github/'))
+    return (posixpath.basename(path) not in LOCKFILES
+            and not path.startswith(('tasks/', '.workorder/', '.notquite/', 'docs/', '.github/'))
             and not path.endswith(('.md', '.rst', '.txt', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf'))
             and posixpath.basename(path) not in {'.gitignore', '.gitattributes', '.gitmodules', '.editorconfig'}
             and not posixpath.basename(path).startswith('LICENSE'))
@@ -2808,7 +2958,9 @@ def summarize_notes(notes, verbose=False):
     groups = {}
     for note in notes:
         match = re.match(r'([A-Z][A-Z0-9]*-[1-9][0-9]*)(?:: | )(.*)', note)
-        key = match[2] if match else note
+        exemption = any(text in note for text in ('finished with --no-code-change', 'is a declared refactor',
+                                                   'DONE pending review', "'s test was written in this change"))
+        key = match[2] if match and not exemption else note
         groups.setdefault(key, []).append(note)
     result = []
     for kind, lines in groups.items():
@@ -2878,7 +3030,9 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
             else:
                 problems.append(AssertionProblem(reviewer_label(problem, named[0] if named else 'tests'),
                                                  path, problem.line, True))
-        edits = test_file_changes(root, base, tests_record, staged, strict_tests, protected={path})
+        config_lines = _pytest_policy_changes(root, base, tests_record, [path], staged)
+        is_config = any('pytest configuration changed' in line for line in config_lines)
+        edits = None if is_config else test_file_changes(root, base, tests_record, staged, strict_tests, protected={path})
         if run_tests and not named:
             try:
                 failure = unowned_test_failure(root, base, path, material, staged, timeout, counts)
@@ -2893,8 +3047,7 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
                 elif notes is not None:
                     notes.append(f'{failure} (allowed by workorder-allow:tests)')
                 edits = None
-        lines = ([edits] if edits else []) + _pytest_policy_changes(
-            root, base, tests_record, [path], staged)
+        lines = ([edits] if edits else []) + config_lines
         for line in lines:
             if 'tests' not in allow and not set(named) & set(allow):
                 problems.append(review_problem(root, base,
@@ -2935,7 +3088,7 @@ def code_path_problems(root, base, changed, code, all_records, staged, allow, no
 @s.test_output_session()
 def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, counts=None,
           strict_tests=False, all_tests=False, require_task=False, timeout=None, review="refuse",
-          approving_review=False, require_test_first=False):
+          approving_review=False, require_test_first=False, jobs=None, require_task_ignore=()):
     counts = {} if counts is None else counts
     notes = [] if notes is None else notes
     revision, label = comparison_base(root, base) if base else (None, None)
@@ -2950,7 +3103,8 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
     with s.test_reuse(staged and not run_tests):
         problems = _check(root, staged, revision, notes, allow, run_tests, counts,
                           strict_tests, all_tests, require_task, timeout, base_label=base,
-                          explicit_allow=explicit_allow, require_test_first=require_test_first)
+                          explicit_allow=explicit_allow, require_test_first=require_test_first,
+                          jobs=jobs, require_task_ignore=require_task_ignore)
     if base:
         notes[start:] = [comparison_message(line, revision, base, label) for line in notes[start:]]
         problems = [comparison_message(line, revision, base, label) for line in problems]
@@ -2972,7 +3126,7 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
 
 def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, counts=None,
            strict_tests=False, all_tests=False, require_task=False, timeout=None, base_label=None,
-           explicit_allow=(), require_test_first=False):
+           explicit_allow=(), require_test_first=False, jobs=None, require_task_ignore=()):
     """Problems that refuse the check.
 
     Plain check reads every task. With --staged (the pre-commit hook) or --base REF (CI) it judges the
@@ -3002,11 +3156,25 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
     problems = [f"{tid}: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())
                 if tid in selected]
     new_tasks = set()
+    if base:
+        for path in sorted(changed or ()):
+            if not path.startswith('.github/workflows/'):
+                continue
+            previous = _test_bytes(root, path, base) or b''
+            current = _test_bytes(root, path, staged=staged) or b''
+            if (path == '.github/workflows/workorder.yml'
+                    or b'python -m workorder.review_labels' in previous + current):
+                text = f'{path}: Workorder workflow changed; a reviewer accepts it with the label workorder-allow:workflow'
+                if 'workflow' in explicit_allow:
+                    notes.append(text + ' (allowed)')
+                else:
+                    problems.append(AssertionProblem(text, path, label_only=True))
     if require_task and changed:
         test_material = repository_test_files(root, base, all_records, staged)
         for record in all_records.values():
             test_material |= strict_test_files(root, record, base, staged)
-        code = {path for path in changed - test_material if needs_task_receipt(path)}
+        code = {path for path in changed - test_material if needs_task_receipt(path)
+                and not any(fnmatch.fnmatchcase(path, pattern) for pattern in require_task_ignore)}
         recorded = has_work_receipt(root, base, changed, staged, allow, new_tasks)
         if not code or recorded:
             new_tasks.clear()
@@ -3072,6 +3240,22 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
     proven = set()
     supported = set()
     worked = worked_tasks(changed) if changed is not None else set(names)
+    reopened = {tid for tid, record in all_records.items()
+                if base and record['status'] in {'IN_PROGRESS', 'BLOCKED'}
+                and committed_status(root, tid, base) in FINISHED}
+    selected |= reopened
+    runnable = []
+    for tid, record in sorted(all_records.items()):
+        if tid in errors:
+            continue
+        comparison = bool(base and tid in selected and
+                          (tid in worked or strict_test_files(root, record, base, staged) & changed
+                           or record['status'] in FINISHED and task_change_touched(root, base, record, staged)))
+        if (tid in reopened or run_tests and (comparison or record['status'] in FINISHED
+                                             and (all_tests or tid in worked))):
+            runnable.append(record)
+    prefetch_tests(root, runnable, results, counts, timeout, staged, jobs, snapshot=bool(base),
+                   protected=repository_files(root, base) if base else ())
 
     def walk(tid):
         if tid in visiting:
@@ -3123,13 +3307,24 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         elif record['status'] in FINISHED and record['contract'] == 'none' and tid not in cycles:
             supported.add(tid)
         if base:
+            if tid in reopened:
+                failure = (run_declared_test(root, record, counts, notes, results=results, timeout=timeout)
+                           if declared_test(record) else None)
+                if failure:
+                    text = (f'{tid} was reopened while its test fails on this code; '
+                            f'a reviewer accepts it with the label workorder-allow:{tid}')
+                    if tid in explicit_allow:
+                        notes.append(text + ' (allowed)')
+                    else:
+                        problems.append(AssertionProblem(text, f'tasks/{tid}.md', label_only=True))
             if record['status'] in FINISHED:
                 unchanged, origin = test_origin(root, record, base, base_label or base, staged)
                 notes.append(origin)
                 if require_test_first and not unchanged and tid not in explicit_allow:
                     problems.append(TestFirstProblem(test_first_problem(tid, base_label or base),
                                                      f'tasks/{tid}.md', label_only=True))
-            if tid in worked or strict_test_files(root, record, base, staged) & changed:
+            if (tid in worked or strict_test_files(root, record, base, staged) & changed
+                    or record['status'] in FINISHED and task_change_touched(root, base, record, staged)):
                 problems += test_change_problems(root, base, record, timeout, staged=staged,
                                                  strict=strict_tests, allow=tid in allow,
                                                  allow_lines='tests' in allow, run_tests=run_tests,
@@ -3184,9 +3379,8 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 problems += local_test_problems(root, local_base, record, timeout=timeout, staged=True,
                                                 counts=counts, notes=notes, results=results, pending_review=True,
                                                 command_notes=True)
-        if (run_tests and tid in worked and not all_tests and not found and record["status"] in FINISHED
-                and _test_key(record, timeout) not in results):
-            if staged and declared_test(record):
+        if run_tests and tid in worked and not all_tests and not found and record["status"] in FINISHED:
+            if staged and declared_test(record) and _test_key(record, timeout) not in results:
                 with tempfile.TemporaryDirectory(prefix='workorder-current-') as temporary:
                     results[_test_key(record, timeout)] = run_snapshot_test(
                         root, Path(temporary) / 'code', declared_test(record),
@@ -3206,11 +3400,22 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                                            regression=True, timeout=timeout)
                 if failed:
                     problems.append(failed)
-    elif staged and not base and selected:
-        targets = {local_test_base(root, record) for tid, record in all_records.items() if tid in selected}
+    elif staged and not base:
+        targets = {local_test_base(root, record) for record in all_records.values()}
         for target in sorted(targets - {None}):
             problems += local_regression_problems(root, target, staged=True, timeout=timeout,
-                                                  notes=notes, results=results, counts=counts)
+                                                  notes=notes, results=results, counts=counts, jobs=jobs)
+    if base:
+        for tid, record in sorted(all_records.items()):
+            if record['status'] not in FINISHED:
+                continue
+            run = latest_test_run(root, record, staged)
+            if run.get('no_code_change'):
+                notes.append(f'{tid} finished with --no-code-change')
+            if run.get('refactor') and not any(note.startswith(f'{tid} is a declared refactor') for note in notes):
+                notes.append(f'{tid} is a declared refactor')
+            if pending_review(root, record, base, staged):
+                notes.append(f'{tid} DONE pending review')
     refused = set(re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', '\n'.join(problems)))
     counts['_supported'] = supported
     counts['tests_only'] = len(supported - refused)

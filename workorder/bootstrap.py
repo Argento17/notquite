@@ -63,6 +63,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+        # Optional: append --require-task-ignore GLOB for each code path exception, for example:
+        # --require-task-ignore 'docs/**' --require-task-ignore '*.md'
         run: |
           # Reviewed task ids, unowned tests, or the code-to-task requirement.
           gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/events" > "$RUNNER_TEMP/workorder-label-events.json"
@@ -175,6 +177,7 @@ def claude_settings(root):
 def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
     settings = claude_settings(root) if claude else None
+    written = []
     hook = root / s.git(root, 'rev-parse', '--git-path', 'hooks/pre-commit').stdout.strip()
     hook_name = '.git/hooks/pre-commit'
     hook_exists = hook.exists()
@@ -203,6 +206,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         else:
             path.write_text(original + ('\n\n' if original else '') + AGENT_BLOCK,
                             encoding='utf-8', newline='\n')
+            written.append(name)
             print(f'{name}: added agent block')
     # Git for Windows runs hooks without an executable bit; elsewhere the bit is required.
     runnable = hook_exists and (os.name == 'nt' or bool(hook.stat().st_mode & 0o111))
@@ -219,6 +223,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             print(f'{hook_name}: kept as {previous.name}; the new hook calls it first')
         hook.write_text(HOOK, encoding='utf-8', newline='\n')
         hook.chmod(hook.stat().st_mode | 0o111)
+        written.append(hook_name)
         print(f'{hook_name}: installed')
     path = s.local_path(root, '.github/workflows/workorder.yml')
     if path.exists() and not update_workflow:
@@ -253,6 +258,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(workflow, encoding='utf-8', newline='\n')
+            written.append('.github/workflows/workorder.yml')
             print('.github/workflows/workorder.yml: written')
         print('CI dependencies: ' + (dependencies or 'no project test dependencies detected'))
     if settings:
@@ -265,5 +271,13 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(updated, indent=2) + '\n', encoding='utf-8', newline='\n')
+            written.append('.claude/settings.json')
             print('.claude/settings.json: installed SessionStart and Stop hooks')
+    if not check:
+        print('Files written:' if written else 'No files written.')
+        for name in written:
+            print(f'  {name}')
+        tracked = [name for name in written if name != hook_name]
+        if tracked:
+            print('git add ' + shlex.join(tracked) + " && git commit -m 'Set up Workorder'")
     return int(missing)

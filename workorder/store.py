@@ -548,10 +548,11 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
     local = local_only or not has_origin(root)
     for _ in range(30):
         try:
-            refs = {} if local else remote_refs(root)
+            refs = (git(root, 'for-each-ref', '--format=%(refname)',
+                        NAMESPACE + 'ids/').stdout.splitlines() if local else remote_refs(root))
         except Refused as error:
             raise Refused(f"origin could not be reached ({error}); workorder new --local numbers the task"
-                          " from the task files without it") from None
+                          " from the task files and locally known reservations without it") from None
         stem = NAMESPACE + f"ids/{prefix}-"
         numbers = [int(ref[len(stem):]) for ref in refs
                    if ref.startswith(stem) and ref[len(stem):].isdigit()]
