@@ -147,6 +147,10 @@ def test_inline_test_imports_cannot_resolve_outside_copy(local_repo, tmp_path, m
     outside = tmp_path / 'outside'
     outside.mkdir()
     (outside / 'foreign.py').write_text('value = 123\n')
+    # foreign is this project's module, not an unrelated external dependency.
+    (local_repo / 'foreign.py').write_text('value = 123\n')
+    (outside / 'sitecustomize.py').write_text(f'import sys\nsys.path.insert(0, {str(outside)!r})\nimport foreign\n')
+    commit_all(local_repo)
     monkeypatch.setenv('PYTHONPATH', str(outside))
     code, output = gate.run_snapshot_test(local_repo, tmp_path / 'copy',
         [PYTHON, '-c', 'from foreign import value; assert value == 123'], None, None)

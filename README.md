@@ -79,6 +79,7 @@ Use `--no-code-change` only when no code files changed. For intentional test edi
 for unchanged tests passing before and after. Plain `renew` keeps that declaration; `renew --no-refactor` drops it. `new --code-paths src/calc.py` sets code scope. [Task format](docs/reference.md#task-files).
 
 For installed `src/` projects (including `pip install -e .`), copies put `src/` and the copy root first on `PYTHONPATH` and verify package locations before comparing.
+Only the project's own packages must resolve inside the copy; editable dependencies may live elsewhere.
 
 ## Working with coding agents
 

@@ -6,11 +6,17 @@
   imports with the test interpreter before using a comparison, including a
   cached or parallel run. Outside imports are unavailable comparisons accepted
   only by the task label, never evidence of weak tests or a passing refactor.
-  Cover every editable distribution's PEP 610 metadata, top-level names, RECORD
-  and finder mappings, including .pth source roots, plus imports in test files
-  and inline Python test commands. Allow the interpreter's own
-  site-packages and standard library. Init notices installed src packages.
-  Add real offline editable-install tests, including remapped package folders.
+  Check repository packages and top-level names of installed distributions
+  matching the project's pyproject.toml or setup.cfg name (PEP 503 normalised),
+  using top-level names, RECORD and finder mappings, including .pth source roots.
+  Allow unrelated dependencies wherever installed, including editable siblings
+  and Workorder itself. Give source-layout advice only for src/ and root packages.
+  Init notices installed src packages. Add real offline editable-install tests,
+  including remapped package folders and second clones sharing an install.
+- Give each test subprocess a temporary pytest cache through PYTEST_ADDOPTS,
+  preserving user options and quoting Windows paths. Clean it up after the run;
+  parallel commands no longer race on the checkout's .pytest_cache. Workorder's
+  own result-cache keys are unchanged.
 - Count pytest.warns, deprecated_call, raises and fail, plus unittest assertion
   context managers. Scan only added or changed test functions against the base
   syntax tree; leave unchanged functions and comment-only edits alone.

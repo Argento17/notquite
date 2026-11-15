@@ -1338,24 +1338,28 @@ inherited `PYTHONPATH`. This also protects a current clone sharing another
 clone's editable environment. Base-code, old-test, stub and REF self-runs use
 the copy's roots. Before using a copy result, a short probe uses the same
 interpreter, startup flags, environment and working directory to locate its
-own top-level packages, including src and flat namespaces, and the names imported
-by Python test files and inline `python -c` tests. It also reads every editable distribution's PEP 610
-`direct_url.json` in that interpreter, using `top_level.txt`, `RECORD` and editable
-finder mappings (and .pth source roots) to cover remapped layouts such as `pkg/unipkg`. Python comparisons
-still create the copy and probe imports on a cache hit. Imports from that
-interpreter's site-packages and standard library are allowed. `init` prints one line when its Python environment can find
-an installed package belonging to a src layout.
+own top-level packages, including src and flat namespaces and modules. It also
+reads installed distributions whose name matches the project's `[project] name`
+in pyproject.toml or `[metadata] name` in setup.cfg, ignoring case and treating
+runs of `.`, `_` and `-` alike (PEP 503). Their `top_level.txt`, `RECORD`, editable
+finder mappings and .pth source roots cover remapped layouts such as `pkg/unipkg`,
+including a second clone sharing the first clone's editable install. Python
+comparisons still create the copy and probe imports on a cache hit, including
+inline `python -c` commands. Dependencies with other top-level names may resolve anywhere, whether
+installed editable, in site-packages, or provided through PYTHONPATH. Workorder
+itself can stay editable when used to test another project. `init` prints one
+line when its Python environment can find an installed package belonging to a src layout.
 
 An outside import reports, for example:
 
 ```text
-TASK-1: could not compare with origin/main: the tests import click from /checkout/src/click, outside the comparison copy; add pythonpath = ["src"] under [tool.pytest.ini_options] or install the package non-editable
+TASK-1: could not compare with origin/main: the tests import click from /checkout/src/click, outside the comparison copy; add pythonpath = ["src"] under [tool.pytest.ini_options] or install the project non-editable
 ```
 
-`could not compare` appears when any of those names resolves outside the copy
-and outside the interpreter's site-packages or standard library. This includes
-an editable dependency even when repository discovery does not see its package.
-Install Workorder itself non-editable when it shares the test environment.
+`could not compare` appears when one of the project's own names resolves outside
+the copy. The advice names `src` or `.` only when that layout contains the
+project's package. For a remapped layout, it says to install the project
+non-editable or run the tests so they import this checkout's code.
 This is a comparison that could not run. It never proves that a test is weak,
 that it passes on main's code, or that a refactor passed. The task's explicit
 `workorder-allow:TASK-1` label accepts the unavailable comparison; approval and
@@ -1363,6 +1367,14 @@ warning mode do not. `done --needs-review` can record a pending review for it.
 Current test failures still refuse. A wrapper whose Python interpreter cannot
 be identified also produces an unavailable comparison. The probe checks Python
 startup resolution; tests or plugins can subsequently change import behavior.
+
+Each test subprocess gets its own temporary pytest cache through an appended
+`-o cache_dir=...` in `PYTEST_ADDOPTS`. Existing options are preserved, and paths
+are quoted for pytest's parsing on Windows too. The cache is removed afterwards,
+including failed and timed-out runs; cleanup errors are ignored. Concurrent runs
+do not share `.pytest_cache` in the checkout. Workorder's result-cache key is
+computed before this temporary environment and is unchanged. Commands that do
+not use pytest continue to run normally.
 
 When `MERGE_HEAD` exists, comparison uses the merge base between the target and
 the pending merge's parents. A merge of main therefore compares against the

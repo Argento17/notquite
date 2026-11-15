@@ -1,5 +1,6 @@
 """Keep Python source and import evidence local to a test checkout."""
 import ast
+import configparser
 import json
 import os
 from pathlib import Path, PureWindowsPath
@@ -21,7 +22,7 @@ def environment(root, env):
     return dict(env, PYTHONPATH=os.pathsep.join(roots))
 
 
-def packages(root):
+def packages(root, *, modules=False):
     """Find package roots in repository source, including flat namespaces.
 
     Git excludes ignored dependencies and virtual environments. A namespace
@@ -31,10 +32,10 @@ def packages(root):
     listing = s._git_run(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard',
                          required=False, isolated=True)
     paths = listing.stdout.split('\0') if not listing.returncode else []
-    return package_names(relative for relative in paths if (root / relative).is_file())
+    return package_names((relative for relative in paths if (root / relative).is_file()), modules=modules)
 
 
-def package_names(paths):
+def package_names(paths, *, modules=False):
     """Apply the same package inventory to a checkout or revision path list."""
     from .gate import looks_like_test
     found = set()
@@ -51,9 +52,56 @@ def package_names(paths):
         if not parts:
             continue
         name = Path(parts[0]).stem if len(parts) == 1 else parts[0]
-        if name.isidentifier() and (src or len(parts) > 1):
+        if name.isidentifier() and (modules or src or len(parts) > 1):
             found.add(name)
     return sorted(found)
+
+
+def project_name(root):
+    """Read the distribution name without requiring tomllib on Python 3.10."""
+    try:
+        text = (root / 'pyproject.toml').read_text(encoding='utf-8')
+        try:
+            import tomllib
+        except ImportError:
+            name = _project_name_310(text)
+        else:
+            project = tomllib.loads(text).get('project', {})
+            name = project.get('name', '') if isinstance(project, dict) else ''
+        if isinstance(name, str) and name:
+            return name
+    except (OSError, ValueError):
+        pass  # Unreadable pytest configuration must not stop other test tools.
+    try:
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(root / 'setup.cfg', encoding='utf-8')
+        return config.get('metadata', 'name', fallback='').strip()
+    except (OSError, ValueError, configparser.Error):
+        return ''
+
+
+def _project_name_310(text):
+    # Read just [project].name on 3.10, including TOML's literal/basic and
+    # multiline strings. Validate the decoded distribution name, not its spelling.
+    section, lines = False, []
+    for line in text.splitlines():
+        if re.match(r'^\s*\[', line):
+            section = bool(re.fullmatch(r'''\s*\[\s*(?:project|"project"|'project')\s*\]\s*(?:#.*)?''', line))
+        elif section:
+            lines.append(line)
+    match = re.search(r'''(?ms)^\s*(?:name|"name"|'name')\s*=\s*("{3}|'{3}|"|')(.*?)\1\s*(?:#[^\n]*)?$''', '\n'.join(lines))
+    if not match:
+        return ''
+    quote, value = match.groups()
+    if len(quote) == 3:
+        value = value.removeprefix('\n')
+    if quote.startswith('"'):
+        value = re.sub(r'\\\n\s*', '', value)
+        try:
+            value = ast.literal_eval(quote + value + quote)
+        except (ValueError, SyntaxError):
+            return ''
+    return value if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', value) else ''
 
 
 def interpreter(command, root, env):
@@ -99,12 +147,14 @@ def interpreter(command, root, env):
 
 
 PROBE = r'''
-import ast, csv, importlib.metadata, importlib.util, json, pathlib, site, sys, sysconfig
-root = pathlib.Path(sys.argv[1]).resolve()
-names = set(json.loads(sys.argv[2]))
+import ast, csv, importlib.metadata, importlib.util, json, pathlib, re, sys
+names = set(json.loads(sys.argv[1]))
+normalize = lambda name: re.sub(r'[-_.]+', '-', name).lower()
+projects = {normalize(name) for name in json.loads(sys.argv[2]) if name}
 for distribution in importlib.metadata.distributions():
-    direct = distribution.read_text('direct_url.json')
-    if not direct or json.loads(direct).get('dir_info', {}).get('editable') is not True:
+    # Other distributions are dependencies, wherever and however installed.
+    # Matching by name also covers a second clone using the first one's install.
+    if normalize(distribution.metadata.get('Name', '')) not in projects:
         continue
     names.update((distribution.read_text('top_level.txt') or '').split())
     # Some Python versions filter missing files from Distribution.files. An
@@ -137,12 +187,6 @@ for distribution in importlib.metadata.distributions():
                 if any(isinstance(target, ast.Name) and target.id in ('MAPPING', 'NAMESPACES') for target in targets):
                     mapping = ast.literal_eval(node.value)
                     names.update(name.split('.')[0] for name in mapping)
-allowed = set(site.getsitepackages())
-allowed.update(path for path in sys.path if pathlib.Path(path).name in ('site-packages', 'dist-packages'))
-allowed.update(sysconfig.get_path(key) for key in ('purelib', 'platlib', 'stdlib', 'platstdlib'))
-if site.ENABLE_USER_SITE:
-    allowed.add(site.getusersitepackages())
-allowed = [str(pathlib.Path(path).resolve()) for path in allowed if path]
 locations = {}
 for name in sorted(names):
     if not name.isidentifier():
@@ -153,66 +197,43 @@ for name in sorted(names):
         if spec.origin and spec.origin not in ('built-in', 'frozen'):
             paths.append(spec.origin)
         locations[name] = paths
-print('WORKORDER_IMPORTS=' + json.dumps({'locations': locations, 'allowed': allowed}))
+print('WORKORDER_IMPORTS=' + json.dumps(locations))
 '''
 
 
-def test_imports(root, command):
-    """Read top-level imports in test material without executing that material."""
-    from . import store as s
-    from .gate import looks_like_test
-    listing = s._git_run(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard',
-                         required=False, isolated=True)
-    paths = {root / path for path in listing.stdout.split('\0')
-             if path.endswith('.py') and looks_like_test(path)}
-    for word in command[1:]:
-        path = root / word.split('::', 1)[0]
-        if path.suffix == '.py':
-            paths.add(path)
-    names = set()
-    sources = []
-    if '-c' in command:
-        position = command.index('-c') + 1
-        if position < len(command):
-            sources.append(command[position])
-    for path in paths:
-        try:
-            sources.append(path.read_bytes())
-        except OSError:
-            continue
-    for source_text in sources:
-        try:
-            tree = ast.parse(source_text)
-        except (SyntaxError, ValueError):
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names.update(alias.name.split('.')[0] for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
-                names.add(node.module.split('.')[0])
-    return names
+def import_advice(name, root, source):
+    for relative in ('src', '.'):
+        for checkout in (root, source):
+            base = checkout / relative
+            package = base / name
+            if (base / (name + '.py')).is_file() or package.is_dir() and any(package.rglob('*.py')):
+                return (f'add pythonpath = ["{relative}"] under [tool.pytest.ini_options] '
+                        'or install the project non-editable')
+    return "install the project non-editable or run the tests so they import this checkout's code"
 
 
 def check(root, source, command, env, timeout=None):
-    names = sorted(set(packages(root)) | set(packages(source)) | test_imports(root, command))
     python = interpreter(command, root, env)
+    # Flat utility scripts alone must not turn a native test command into a
+    # Python comparison. Identifiable Python commands also check flat modules.
+    names = sorted(set(packages(root, modules=python is not None))
+                   | set(packages(source, modules=python is not None)))
     if python is None:
         return ImportFailure('could not verify the Python interpreter used by the test command') if names else None
     try:
-        run = subprocess.run([*python, '-c', PROBE, str(root), json.dumps(names)], cwd=root, env=env,
+        projects = sorted({project_name(root), project_name(source)} - {''})
+        run = subprocess.run([*python, '-c', PROBE, json.dumps(names), json.dumps(projects)], cwd=root, env=env,
                              capture_output=True, text=True, errors='replace', timeout=10)
         line = next(line for line in run.stdout.splitlines() if line.startswith('WORKORDER_IMPORTS='))
         report = json.loads(line.split('=', 1)[1])
         if run.returncode:
             raise ValueError(run.stderr.strip())
-        allowed = [root.resolve(), *map(Path, report['allowed'])]
-        for name, paths in report['locations'].items():
+        for name, paths in report.items():
             for path in paths:
-                if not any(Path(path).resolve().is_relative_to(parent) for parent in allowed):
+                if not Path(path).resolve().is_relative_to(root.resolve()):
                     return ImportFailure(f'the tests import {name} from {path}, outside the comparison copy; '
-                                         'add pythonpath = ["src"] under [tool.pytest.ini_options] '
-                                         'or install the package non-editable')
-    except (OSError, ValueError, StopIteration, subprocess.SubprocessError) as error:
+                                         + import_advice(name, root, source))
+    except (OSError, ValueError, configparser.Error, StopIteration, subprocess.SubprocessError) as error:
         return ImportFailure(f'could not verify project imports: {error or "the import probe failed"}')
     return None
 

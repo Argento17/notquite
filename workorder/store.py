@@ -1416,35 +1416,40 @@ def test_timeout(record, override=None):
 def run_test(command, root, timeout=None, capture_output=True, *, isolated=False):
     """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
     from .python_imports import environment
-    env = environment(root, copy_environment() if isolated else os.environ.copy())
-    # Keep the ordinary subprocess path when there is no deadline. With a deadline,
-    # use a process group so child test runners cannot keep captured pipes open.
-    if timeout is None:
-        return subprocess.run(list(command), cwd=root, capture_output=capture_output,
-                              encoding="utf-8", errors="replace",
-                              env=env)
-    with subprocess.Popen(list(command), cwd=root, stdout=subprocess.PIPE if capture_output else None,
-                          stderr=subprocess.PIPE if capture_output else None,
-                          encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
-                          env=env) as process:
-        try:
-            output, errors = process.communicate(timeout=timeout)
-            return subprocess.CompletedProcess(command, process.returncode, output, errors)
-        except subprocess.TimeoutExpired:
-            if os.name != 'nt':
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            else:
-                process.kill()
-            output, errors = process.communicate()
-            message = f"test timed out after {timeout:g} seconds (exit 124)\n"
-            if capture_output:
-                errors = (errors or "") + message
-            else:
-                print(message, end='', file=sys.stderr, flush=True)
-            return subprocess.CompletedProcess(command, 124, output, errors)
+    # pytest parses this environment option with shlex even on Windows. Each
+    # subprocess owns its cache; it never becomes part of our result-cache key.
+    with tempfile.TemporaryDirectory(prefix="workorder-pytest-", ignore_cleanup_errors=True) as cache:
+        env = environment(root, copy_environment() if isolated else os.environ.copy())
+        env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "")
+                                 + " -o cache_dir=" + shlex.quote(cache))
+        # Keep the ordinary subprocess path when there is no deadline. With a deadline,
+        # use a process group so child test runners cannot keep captured pipes open.
+        if timeout is None:
+            return subprocess.run(list(command), cwd=root, capture_output=capture_output,
+                                  encoding="utf-8", errors="replace",
+                                  env=env)
+        with subprocess.Popen(list(command), cwd=root, stdout=subprocess.PIPE if capture_output else None,
+                              stderr=subprocess.PIPE if capture_output else None,
+                              encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
+                              env=env) as process:
+            try:
+                output, errors = process.communicate(timeout=timeout)
+                return subprocess.CompletedProcess(command, process.returncode, output, errors)
+            except subprocess.TimeoutExpired:
+                if os.name != 'nt':
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    process.kill()
+                output, errors = process.communicate()
+                message = f"test timed out after {timeout:g} seconds (exit 124)\n"
+                if capture_output:
+                    errors = (errors or "") + message
+                else:
+                    print(message, end='', file=sys.stderr, flush=True)
+                return subprocess.CompletedProcess(command, 124, output, errors)
 
 
 def _test_state(root, isolated=False):

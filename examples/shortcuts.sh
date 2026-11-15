@@ -9,8 +9,6 @@ if [ "$#" -gt 2 ]; then
 fi
 PYTHON=${1:-python3}
 OUTPUT_PARENT=${2:-${TMPDIR:-/tmp}}
-WORKORDER_EXAMPLES=$(dirname "$0")
-export WORKORDER_EXAMPLES
 exec "$PYTHON" - "$OUTPUT_PARENT" <<'PY'
 import json
 import os
@@ -20,12 +18,12 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import runpy
+import sysconfig
 import venv
 
 
-tools = runpy.run_path(str(Path(os.environ.pop("WORKORDER_EXAMPLES")) / "local_tools.py"))
-python, tool_site = tools["isolated_tools"]()
+python = sys.executable
+tool_site = Path(sysconfig.get_path('purelib'))
 
 parent = Path(sys.argv[1]).expanduser().resolve()
 parent.mkdir(parents=True, exist_ok=True)

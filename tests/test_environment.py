@@ -1,13 +1,14 @@
-"""Subprocess tools must not carry the editable checkout into sample projects."""
+"""Use the invoking test environment, including an editable Workorder install."""
 from pathlib import Path
 import os
-import runpy
+import sys
+import sysconfig
 
-_tools = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/local_tools.py"))
 if os.environ.get('WORKORDER_TEST_PYTHON'):
     TEST_PYTHON = os.environ['WORKORDER_TEST_PYTHON']
     TEST_SITE = Path(os.environ['WORKORDER_TEST_SITE'])
 else:
-    TEST_PYTHON, TEST_SITE = _tools['isolated_tools']()
+    TEST_PYTHON = sys.executable
+    TEST_SITE = Path(sysconfig.get_path('purelib'))
     os.environ['WORKORDER_TEST_PYTHON'] = TEST_PYTHON
     os.environ['WORKORDER_TEST_SITE'] = str(TEST_SITE)
