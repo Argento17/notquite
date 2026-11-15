@@ -1138,6 +1138,20 @@ def proposed_receipts(root, tid):
     return transaction[2] if transaction and transaction[:2] == (root, tid) else None
 
 
+def annotate_pending_review(root, tid, findings):
+    """Attach review details to the unpublished test receipt in a completion transaction."""
+    pending = proposed_receipts(root, tid)
+    if not pending or pending[-1]['kind'] != 'test' or not pending[-1].get('pending_review'):
+        raise Refused('pending findings need a proposed test receipt')
+    item = pending[-1]
+    item['pending_findings'] = [
+        {'message': str(line), 'label_only': '(or an approving review)' not in line}
+        for line in dict.fromkeys(findings)]
+    item.pop('hash')
+    item['hash'] = digest(packed(item).encode())
+    invalidate_reads()
+
+
 def completion_transaction(function):
     """Check proposed receipts in memory; publish them only with a supported DONE."""
     @wraps(function)
@@ -1274,6 +1288,12 @@ LEGACY_DIR = ".notquite/"
 CODE_PATHS = (".", ":(exclude)tasks", ":(exclude).workorder", ":(exclude).notquite")
 
 
+def generated_path(path):
+    """Build metadata and Python caches do not belong to a task's code scope."""
+    return (path.endswith('.pyc') or any(part in {'__pycache__', '.pytest_cache'}
+            or part.endswith(('.egg-info', '.dist-info')) for part in path.split('/')[:-1]))
+
+
 # Commits never change, so their fingerprints are worked out once per run.
 _DIGESTS = {}
 _PRESENT = {}
@@ -1385,7 +1405,9 @@ def index_code(root):
 
 def dirty_paths(root):
     """Uncommitted or untracked code files; task records and receipts do not count."""
-    status = git(root, "status", "--porcelain", "--untracked-files=all", "--", *CODE_PATHS).stdout
+    generated = [f':(exclude,glob)**/{pattern}' for pattern in
+                 ('*.egg-info/**', '*.dist-info/**', '__pycache__/**', '*.pyc', '.pytest_cache/**')]
+    status = git(root, "status", "--porcelain", "--untracked-files=all", "--", *CODE_PATHS, *generated).stdout
     return [line[3:] for line in status.splitlines()]
 
 

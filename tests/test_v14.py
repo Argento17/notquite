@@ -64,7 +64,7 @@ def test_declared_refactor_completes_and_is_visible_to_reviewer(local_repo):
     assert result.returncode == 1 and "its test passes on origin/main's code too" in result.stdout
 
 
-@pytest.mark.parametrize('change', ['comment', 'new-test', 'config'])
+@pytest.mark.parametrize('change', ['assertion', 'new-test', 'config'])
 def test_refactor_refuses_any_changed_test_material(local_repo, change):
     root = local_repo
     branch(root, 'TASK-3', TEST)
@@ -73,7 +73,7 @@ def test_refactor_refuses_any_changed_test_material(local_repo, change):
         (root / 'pytest.ini').write_text('[pytest]\naddopts = -q\n')
     else:
         (root / 'tests/test_div.py').write_text(TEST + (
-            '# comment\n' if change == 'comment' else '\ndef test_more():\n    assert div(8, 2) == 4\n'))
+            '    assert div(8, 2) == 4\n' if change == 'assertion' else '\ndef test_more():\n    assert div(8, 2) == 4\n'))
     commit_all(root)
     result = cli(root, 'done', '--task', 'TASK-3', '--refactor')
     assert result.returncode == 1, result.stdout + result.stderr
@@ -114,7 +114,8 @@ def test_pending_review_writes_done_and_waits_for_reviewer(local_repo, monkeypat
         commit_all(root)
     output = ok(root, 'done', '--task', 'TASK-6', '--needs-review',
                 *([] if changed_tests else ['--no-code-change']))
-    expected = 'TASK-6 DONE, pending review: the pull request needs workorder-allow:TASK-6 or an approving review'
+    expected = ('TASK-6 DONE, pending review: the pull request needs workorder-allow:TASK-6'
+                + ('' if changed_tests else ' or an approving review'))
     assert expected in output
     assert store.record(root, 'TASK-6')['status'] == 'DONE'
     assert store.entries(root, 'TASK-6')[-1].get('pending_review') is True
@@ -150,7 +151,7 @@ def test_new_module_import_cannot_make_assertion_free_test_count(local_repo, bod
     (root / 'tests/test_div.py').write_text('from calc import div\n\ndef test_div():\n    ' + body + '\n')
     commit_all(root)
     if action == 'done':
-        result = cli(root, 'done', '--task', 'TASK-2', '--needs-review')
+        result = cli(root, 'done', '--task', 'TASK-2')
     else:
         claim(root)
         result = check(root)
@@ -321,7 +322,7 @@ def test_assertion_free_test_cannot_hide_behind_pathless_command(local_repo, act
     (root / 'tests/test_div.py').write_text('from calc import div\ndef test_div():\n    assert True\n')
     commit_all(root)
     if action == 'done':
-        result = cli(root, 'done', '--task', 'TASK-2', '--needs-review')
+        result = cli(root, 'done', '--task', 'TASK-2')
     else:
         claim(root)
         result = check(root)
@@ -344,7 +345,7 @@ def test_refactor_cannot_keep_declaration_after_test_edit(local_repo):
     (root / 'calc.py').write_text(CODE + '# refactor\n')
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-3', '--refactor')
-    (root / 'tests/test_div.py').write_text(TEST + '# edited later\n')
+    (root / 'tests/test_div.py').write_text(TEST + '    assert div(8, 2) == 4\n')
     result = check(root, '--allow', 'TASK-3,tests')
     assert result.returncode == 1
     assert 'TASK-3: its test files changed; use --needs-review' in result.stdout
@@ -402,7 +403,7 @@ def test_pathless_refactor_refuses_changed_collected_tests(local_repo, action):
     commit_all(root)
     if action == 'check':
         ok(root, 'done', '--task', 'TASK-3', '--refactor')
-    (root / 'tests/test_div.py').write_text(TEST + '# test edited\n')
+    (root / 'tests/test_div.py').write_text(TEST + '    assert div(8, 2) == 4\n')
     commit_all(root)
     result = (cli(root, 'done', '--task', 'TASK-3', '--refactor') if action == 'done'
               else check(root, '--allow', 'TASK-3,tests'))

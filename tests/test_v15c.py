@@ -157,11 +157,14 @@ def test_merge_target_test_changes_are_not_refactor_edits(local_repo):
     result = cli(root, 'check', '--staged')
     assert result.returncode == 0, result.stdout + result.stderr
     assert gate.comparison_base(root, 'origin/main')[0] == target
-    # A branch-owned test edit during the merge still refuses the refactor.
+    # A passing branch-owned test edit during the merge needs renewal and review.
     (root / 'tests/test_div.py').write_text(TEST + '# branch edit\n')
     git(root, 'add', 'tests/test_div.py')
     result = cli(root, 'check', '--staged')
-    assert result.returncode == 1 and 'its test files changed' in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'it is a declared refactor' in result.stdout
+    assert 'renew --task TASK-2 --no-refactor' in result.stdout
+    assert 'workorder-allow:TASK-2' in result.stdout
 
 
 def test_done_reports_other_findings_once_in_summary(local_repo):

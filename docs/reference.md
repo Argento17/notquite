@@ -55,7 +55,9 @@ accept a false exemption.
 
 When tests changed on purpose, rerun `done --task ID --needs-review`. Passing,
 supported evidence is recorded with optional `pending_review: true` on the test
-receipt, and the command writes DONE:
+receipt, and the command writes DONE. `pending_findings` records the messages
+and whether each needs the task label. `show`, `check` and `done` list them under
+the pending review:
 
 ```text
 TASK-6 DONE, pending review: the pull request needs workorder-allow:TASK-6 or an approving review
@@ -63,7 +65,10 @@ TASK-6 DONE, pending review: the pull request needs workorder-allow:TASK-6 or an
 
 Changed shared test data and affected finished tasks are checked too. Their notes
 list any additional task labels or `workorder-allow:tests` for files without an owner.
-Current test failures still refuse completion with `--needs-review`.
+Current test failures still refuse completion with `--needs-review`. Assertion
+findings, a test that passes with changed functions stubbed out, and unavailable
+import comparisons can be recorded pending review; these need the task label.
+An approving review accepts only the findings it already accepts in a base check.
 
 No status edit is needed after review. `show` says `waiting for review` while the
 receipt has not landed on the target. Local hooks accept the pending claim with
@@ -75,8 +80,8 @@ An unfinished task with no receipts can repair its command locally without a
 label; once receipts exist, the existing review rule applies. `new --test`
 warns about a named path that does not exist yet. Creating it before `new`,
 including an untracked file in the same change, avoids the warning.
-The flag does not accept failed current tests, assertion-free Python tests,
-missing evidence, changed test commands or dependencies. Without it, `done`
+The flag does not accept failed current tests, missing evidence, changed test
+commands or dependencies. Without it, `done`
 refuses test changes locally. The pre-commit hook notes test changes, including
 branch edits made while merging main. During a pending merge, test files whose
 staged content equals the incoming parent's content get no test-change note.
@@ -86,6 +91,7 @@ For a finished task's changed test command or files, a passing new command lets
 the local hooks note the stale test receipt. Pre-commit runs the staged code;
 Stop also uses staged test edits when present, otherwise the working copy.
 Commit the test change, run `workorder renew --task ID`, then commit its receipts.
+Once the new receipts cover the commit, the hook omits the renewal instruction.
 The note names the task label needed for the pull request. A task marked DONE/CLOSED
 with test receipts gets this treatment even when it was finished on this branch.
 `done` still refuses changed commands. Hooks keep their existing command checks
@@ -108,7 +114,15 @@ the comparison with `--run-tests` and prints:
 TASK-3 is a declared refactor: tests unchanged, passing before and after
 ```
 
-Changed test files refuse with `its test files changed; use --needs-review`.
+A new `done --refactor` declaration with changed test files refuses with
+`its test files changed; use --needs-review`. For an already finished declared
+refactor, passing test edits are notes in pre-commit and Stop. After committing,
+run `workorder renew --task ID --no-refactor` or
+`workorder done --task ID --needs-review`. The pull request needs
+`workorder-allow:ID`; a failing edit still refuses.
+Python test files whose syntax trees are unchanged, such as comment and blank-line
+edits, count as unchanged in hooks, completion, renewal and base checks. Other
+edits retain their review rules.
 `--refactor` cannot be combined with `--needs-review` or `--no-code-change`.
 A later test receipt without the marker ends the declaration.
 
@@ -591,7 +605,8 @@ If no changed function belongs to the task, there is no stub check or note.
 If the command still passes, it does not exercise the changed functions and
 completion is refused. The diagnostic names those functions and files.
 Only the task's explicit reviewer label accepts this finding in a base check;
-an approving review, `--allow tests`, `--needs-review` and `--review warn` do not.
+an approving review, `--allow tests` and `--review warn` do not. Locally,
+`done --needs-review` records the finding and writes DONE pending that label.
 Declared refactors and valid no-code-change runs are exempt. This check only
 covers Python function changes; a failing run does not prove that every changed
 function was exercised or that the test checks the intended result.
@@ -624,8 +639,8 @@ body does not count. Production imports do not become test material.
 The task's explicit `workorder-allow:TASK-2` label accepts an unusual valid test;
 `--allow tests` accepts this finding only for files with no task owner. An
 approving review alone and `--review warn` do not accept it. `done` still refuses
-unrecognised syntax; record passing evidence with `renew`, set the completion
-claim after checking Acceptance, and obtain the task label for the pull request.
+unrecognised syntax. Fix the test, or run `workorder done --task TASK-2 --needs-review`;
+the pull request needs `workorder-allow:TASK-2`. Confirm Acceptance before completion.
 Current test failures still refuse even with the label. Only added or changed test functions are scanned, by comparing syntax trees
 with the merge base. Comments and unchanged functions in an edited file are
 left alone. A smoke test that only checks that a call does not raise can be
@@ -820,7 +835,9 @@ The run count appears when tests run and counts tasks, including failures and
 cached results. Current-code and base-code runs of one task count once. When all
 comparisons were cached the summary says `(cached)`; when some were, it says
 `(some comparisons cached)`. A missing executable does not count. If none ran, another line says
-`no declared test ran in this check`. Task counts include unreadable and removed
+`no declared test ran in this check`. A base check with no changed task and no
+test runs says only `no task changed in this change`, including after a merge
+that only brings in main's test edit. Task counts include unreadable and removed
 tasks; unreadable claims are excluded from the claim count. An unfinished
 single-task summary says `checked 1 task (not claimed finished)`.
 Supported finished claims without a contract also get the Acceptance reminder;
@@ -866,6 +883,12 @@ that task evidence with `--allow no-task`.
 The rule applies only to non-test code: all recognised test files and explicit `test_paths` are excluded. It also excludes `tasks/`, `.workorder/`, `.notquite/`, `docs/`, `.github/`,
 `*.md`, `*.rst`, `*.txt`, `LICENSE*`, Git ignore/attribute rules, editor settings and common image/PDF assets. This exemption does not change the code
 fingerprint used by receipts. Generated pull request checks enable the rule.
+
+Paths under `*.egg-info/`, `*.dist-info/`, `__pycache__/`, `.pytest_cache/`
+and files ending in `.pyc` are generated output. They do not count as code,
+need no task or scope label, and are omitted from new implementation path maps.
+Existing receipts that list them remain readable; historical fingerprints keep
+their original format.
 
 Lockfiles are always excluded from this task requirement, including in nested
 folders: `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `poetry.lock`,
@@ -1024,7 +1047,9 @@ time followed by the first 12 hex digits of its hash. Every receipt has
 receipts add `command`, `exit_code` and `valid`. A test run made by
 `done --no-code-change` also has `no_code_change: true` and optional `no_code_change_base` naming its comparison commit; ordinary runs omit them.
 `done --refactor` adds optional `refactor: true`; `done --needs-review` adds
-optional `pending_review: true`. Readers from 0.13.0 can read these members,
+optional `pending_review: true` and `pending_findings`, a list of objects with
+`message` text and a `label_only` boolean. Existing receipts may omit these fields.
+Readers from 0.13.0 can read these members,
 but 0.14 is needed to apply their new review rules. Read-backs add `target` and
 `output_sha256`. Recorded merges add `ref`. New implemented receipts add
 `implementation_base` and `implementation_paths`: a map from each changed path
@@ -1210,6 +1235,9 @@ Other claimed tasks retain their Claimed and Evidence statuses. If HEAD differs
 from the implementation, a successful Result says the declared test passed on
 implemented code, naming that commit; it does not say it passed on current code. A timeline test that does not count includes `(does not count: <reason>)`, even if the command exited 0. For implementation, tests or Acceptance work, `show` suggests `workorder done --task ID`. With `test: any`, that advice asks for a concrete command first; individual receipts remain available for tasks keeping `any`.
 
+A named check says `TASK-1's files are unchanged since <sha>` when later commits
+leave that task's code paths and selected test files unchanged.
+
 Before a merge, `merge of the tested code` is owed. Advice about differing merged code is used only if the target has commits since the merge base touching implementation paths. A stale claim does not change the recorded evidence's computed state, but an unsupported claim displays `Evidence: claim not supported on this code` instead of `Evidence: CLOSED`; its Result names the mismatch, for example: `Result: the DONE claim is on code other than the tested code; run workorder renew --task TASK-1`.
 
 ## Task-first development
@@ -1287,7 +1315,7 @@ trade-off above. Install additional non-Python dependencies in the workflow as
 needed. The agent block says to work on a branch, open a pull request, and after
 the merge run `workorder check <ID>` on main. Start with `git fetch origin`;
 use `git pull --rebase origin main` only on main. On a feature branch, merge or
-rebase main as needed, then renew if the tested code changed. It also says: "If `done` refuses
+rebase main as needed, then renew only if the task's own code or test files changed. It also says: "If `done` refuses
 or prints a warning, report it; do not say the task is done."
 
 The installed pre-commit hook is:

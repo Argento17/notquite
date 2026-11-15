@@ -165,7 +165,7 @@ def run(root, event):
         if staged:
             record = s.record(root, tid, True)
         if gate.waiting_for_review(root, record):
-            notes.append(f'{tid}: ' + gate.pending_review_message(tid))
+            notes.append(f'{tid}: ' + gate.pending_review_message(tid, gate.pending_findings(root, record, staged=staged)))
         if record['status'] == 'CANCELLED' and tid in owned:
             target = gate.merge_target(root, record)
             reference = base or (target[0] if target else None)

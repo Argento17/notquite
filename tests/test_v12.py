@@ -92,7 +92,7 @@ def test_unrelated_unfinished_wrapper_does_not_refuse_base_check(local_repo, all
     (root / 'README.md').write_text('A documentation change.\n')
     result = cli(root, 'check', '--base', base, *(['--run-tests', '--all-tests'] if all_tests else []))
     assert result.returncode == 0, result.stdout
-    assert ('checked 0 tasks' if all_tests else 'no task changed in this change') in result.stdout
+    assert 'no task changed in this change' in result.stdout
 
 
 def test_new_wrapper_requests_explicit_test_paths_before_writing(local_repo):

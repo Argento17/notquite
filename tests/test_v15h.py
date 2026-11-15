@@ -193,18 +193,14 @@ def test_done_next_names_real_review_route_for_unusual_tests(local_repo, kind):
     body = 'beta(2)' if kind == 'assertion' else 'assert callable(beta)'
     (root / 'tests/test_beta.py').write_text('from beta import beta\n\ndef test_beta():\n    ' + body + '\n')
     commit_all(root)
-    for flags in ([], ['--needs-review']):
-        result = cli(root, 'done', '--task', 'TASK-1', *flags)
-        assert result.returncode == 1, result.stdout + result.stderr
-        next_line = next(line for line in result.stdout.splitlines() if 'Next:' in line)
-        assert 'fix the test' in next_line
-        assert 'workorder receipt implemented --task TASK-1' in next_line
-        assert 'workorder receipt test --task TASK-1' in next_line
-        assert 'status: DONE' in next_line and 'workorder-allow:TASK-1' in next_line
-        assert '--needs-review' not in next_line
-        assert store.entries(root, 'TASK-1') == []
-    # Follow the stated route. Passing current evidence and the explicit label are still required.
-    claim(root, 'TASK-1')
+    result = cli(root, 'done', '--task', 'TASK-1')
+    assert result.returncode == 1, result.stdout + result.stderr
+    next_line = next(line for line in result.stdout.splitlines() if 'Next:' in line)
+    assert 'fix the test, or run workorder done --task TASK-1 --needs-review' in next_line
+    assert 'workorder-allow:TASK-1' in next_line
+    assert store.entries(root, 'TASK-1') == []
+    output = ok(root, 'done', '--task', 'TASK-1', '--needs-review')
+    assert 'TASK-1 DONE, pending review' in output
     assert check(root).returncode == 1
     assert check(root, '--approving-review').returncode == 1
     accepted = check(root, '--allow', 'TASK-1')

@@ -1368,7 +1368,7 @@ def test_an_earlier_done_is_kept_when_later_code_lands_and_explain_notes_it(clon
     ok(one, "check")
     explained = cli(one, "check", "TASK-1")
     assert explained.returncode == 0
-    assert f"Note:     the code has changed since {old}; this verdict is about {old}" in explained.stdout
+    assert f"Note:     TASK-1's files are unchanged since {old}" in explained.stdout
 
 
 def test_check_base_finds_receipts_dropped_in_a_later_commit(clones):

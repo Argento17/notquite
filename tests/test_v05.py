@@ -171,8 +171,8 @@ def test_check_reports_actual_tests_run(local_repo, kind, expected):
     result = cli(root, 'check', '--base', base, '--run-tests')
     assert result.returncode == (0 if kind in {'pass', 'empty'} else 1)
     summary = f"; ran {expected} " + ("task's declared test" if expected == 1 else "tasks' declared tests")
-    assert summary in result.stdout
-    assert ('no declared test ran in this check' in result.stdout) == (expected == 0)
+    assert ('no task changed in this change' if kind == 'empty' else summary) in result.stdout
+    assert ('no declared test ran in this check' in result.stdout) == (expected == 0 and kind != 'empty')
 
 
 @pytest.mark.parametrize('explicit', [False, True])

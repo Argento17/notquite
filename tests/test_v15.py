@@ -212,9 +212,11 @@ def test_finished_test_command_repair_is_a_local_note(local_repo, monkeypatch, c
         monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
         assert hooks.run(root, 'stop') == 0
         output = capsys.readouterr().out
+    repair = '' if target or action == 'staged' else 'after committing run workorder renew --task TASK-1; '
     assert output.count('Note: TASK-1: test command changed and passes on this code; '
-                        'after committing run workorder renew --task TASK-1; '
-                        'the pull request needs workorder-allow:TASK-1') == 1
+                        + repair + 'the pull request needs workorder-allow:TASK-1') == 1
+    if target or action == 'staged':
+        assert 'after committing run workorder renew' not in output
     assert 'test changed:' not in output
     assert 'workorder-allow:TASK-1' in output
     result = cli(root, 'check', '--base', base, '--run-tests', '--allow', 'TASK-1')

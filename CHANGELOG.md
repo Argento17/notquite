@@ -2,6 +2,23 @@
 
 ## 0.15.0 (15 Nov 2026)
 
+- Let finished declared refactors commit passing test edits. Local hooks advise
+  renew --no-refactor or done --needs-review after committing; failing edits
+  still refuse, and the pull request still needs the task label.
+- Let done --needs-review record assertion, stub and unavailable-comparison
+  findings as DONE pending review. Store the pending findings in the test
+  receipt and list them under review. Label-only findings still need the task
+  label; failures, missing evidence, command and dependency changes still refuse.
+- Treat Python tests with unchanged syntax trees as unchanged throughout hooks,
+  done, renew and base checks, including comment and blank-line edits.
+- Exclude egg-info, dist-info, Python bytecode and pytest cache output from task
+  and scope requirements and new implementation path maps. Keep existing
+  receipts readable, including those that recorded generated files.
+- Describe unchanged task files after unrelated work lands. Tell agents to
+  renew only for their task's own code or test changes. Omit renewal advice
+  when receipts already cover the commit, pluralize missing-test notes, and
+  use “no task changed in this change” for empty base checks with --run-tests.
+
 - Limit each task's stub check to changed functions in its declared code paths.
   Without a declaration, exclude other tasks' declared paths. If none belong
   to the task, omit the check and its note in done, hooks and base checks.
@@ -9,8 +26,8 @@
   and fixtures. A new conftest needs configuration review only for existing
   tests below its folder; edits to an existing conftest keep their review rule.
 - Make done's Next line name a working review route for findings requiring a
-  task label. Unusual assertions and stub findings still need explicit receipts
-  and review; unavailable comparisons can use --needs-review. Mixed findings
+  task label. Assertion, stub and unavailable-comparison findings can use
+  --needs-review; the pull request still requires the label. Mixed findings
   retain the general next step.
 - Say that a test-first failure is required, and omit the skipped-base-test
   comparison note when the selected tests were written in the change.

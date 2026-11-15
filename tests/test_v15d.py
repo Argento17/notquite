@@ -86,7 +86,7 @@ def test_finished_test_change_is_a_local_note(local_repo, hook, change):
     if change == 'rename':
         rename_test(root)
     else:
-        (root / 'tests/test_1.py').write_text(TEST + '# explanation\n')
+        (root / 'tests/test_1.py').write_text(TEST + '    assert div(8, 2) == 4\n')
         git(root, 'add', '-A')
     result = cli(root, 'check', '--staged') if hook == 'precommit' else stop(root)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -141,7 +141,7 @@ def test_renew_rechecks_refactor_conditions(local_repo, explicit, change):
     ok(root, 'done', '--task', 'TASK-2', '--refactor')
     commit_all(root)
     if change == 'test':
-        (root / 'tests/test_div.py').write_text(TEST + '# edited\n')
+        (root / 'tests/test_div.py').write_text(TEST + '    assert div(8, 2) == 4\n')
         commit_all(root)
     else:
         git(root, 'checkout', '-q', 'main')

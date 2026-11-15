@@ -139,15 +139,16 @@ def test_pending_merge_notes_only_branch_test_edits(local_repo, branch_edit, hoo
     git(root, 'switch', 'work')
     git(root, 'merge', '--no-commit', '--no-ff', 'main')
     if branch_edit:
-        path.write_text(path.read_text() + '# branch edit during merge\n')
+        path.write_text(path.read_text() + '    assert div(12, 3) == 4\n')
         git(root, 'add', '-A')
     result = cli(root, 'check', '--staged') if hook == 'precommit' else stop(root)
     output = result.stdout + result.stderr
-    assert result.returncode == ((1 if hook == 'precommit' else 2) if branch_edit else 0), output
+    assert result.returncode == 0, output
     if branch_edit:
-        assert 'its test files changed; use --needs-review' in output
+        assert 'it is a declared refactor' in output
+        assert 'renew --task TASK-1 --no-refactor' in output
         result = hooked_commit(root)
-        assert result.returncode == 1, result.stdout + result.stderr
+        assert result.returncode == 0, result.stdout + result.stderr
     else:
         assert 'after committing run workorder renew' not in output, output
         assert 'workorder-allow:TASK-1' not in output, output
@@ -235,7 +236,7 @@ def test_branch_finished_test_edit_keeps_commit_renew_flow(local_repo):
     root = local_repo
     finished_on_branch(root)
     path = root / 'tests/test_fn.py'
-    path.write_text(path.read_text() + '# explanation\n')
+    path.write_text(path.read_text() + '    assert div(8, 2) == 4\n')
     output = commit_with_hook(root)
     assert 'test files changed and passes on this code' in output
     ok(root, 'renew', '--task', 'TASK-1')
@@ -252,7 +253,7 @@ def test_edit_after_renewed_rename_has_one_repair_note(local_repo, hook):
     ok(root, 'renew', '--task', 'TASK-1')
     commit_with_hook(root)
     path = root / 'tests/test_fn2.py'
-    path.write_text(path.read_text() + '# explanation after renewal\n')
+    path.write_text(path.read_text() + '    assert div(8, 2) == 4\n')
     git(root, 'add', '-A')
     result = hooked_commit(root) if hook == 'precommit' else stop(root)
     output = result.stdout + result.stderr

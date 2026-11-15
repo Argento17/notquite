@@ -207,13 +207,8 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
             steps = [f'  Next:     land the failing test before the work; to request an exception, '
                      f'run workorder receipt implemented --task {tid} and workorder receipt test --task {tid}, '
                      f'then set status: DONE in tasks/{tid}.md; the pull request needs workorder-allow:{tid}']
-        elif any('asserts nothing that can fail' in reason or 'still passes with the changed functions stubbed out' in reason
-               for reason in own):
-            steps = [f'  Next:     fix the test; for an unusual valid test, run workorder receipt implemented --task {tid} '
-                     f'and workorder receipt test --task {tid}, then set status: DONE in tasks/{tid}.md; '
-                     f'the pull request needs workorder-allow:{tid}']
         elif not needs_review:
-            steps = [f'  Next:     fix the test or comparison, or run workorder done --task {tid} --needs-review; '
+            steps = [f'  Next:     fix the test, or run workorder done --task {tid} --needs-review; '
                      f'the pull request needs workorder-allow:{tid}']
     print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
 
@@ -264,15 +259,17 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 raise s.Refused('test-first needs a locally available target')
         if refactor and not base:
             raise s.Refused('a declared refactor needs a locally available target; fetch origin first')
-        if refactor and gate.refactor_test_files(root, record, revision) & gate.changed_paths(root, revision):
+        if refactor and gate.changed_test_paths(root, revision, gate.refactor_test_files(root, record, revision)):
             raise s.Refused(f'{tid}: its test files changed; use --needs-review')
         material = gate.repository_test_files(root, revision, gate.records(root, errors={}))
         material |= gate.strict_test_files(root, record, revision)
         assertion_problems = gate.assertion_problems(root, revision, record,
             paths=gate.refactor_test_files(root, record, revision), material=material)
-        if assertion_problems:
+        pending_findings = [gate.reviewer_label(problem, tid) for problem in assertion_problems]
+        if assertion_problems and not needs_review:
             raise s.Refused('\n'.join(assertion_problems))
-        if not no_code_change and not any(gate.needs_task_receipt(path)
+        unchanged_finished = status in gate.FINISHED and not gate.task_change_touched(root, revision, record)
+        if not no_code_change and not unchanged_finished and not any(gate.needs_task_receipt(path)
                                           for path in gate.changed_paths(root, revision)):
             raise s.Refused(f'{tid}: no code changed since {reference}; nothing was implemented; '
                             'land the task on main first, then do the work on a branch')
@@ -305,9 +302,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         results = {}
         stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results)
-        if stub and needs_review and isinstance(stub, gate.ComparisonProblem):
-            if not base:
-                print(f'Note: {stub}')
+        if stub and needs_review and gate._accepts_allow_label(stub):
+            pending_findings.append(stub)
         elif stub:
             done_refusal(tid, status, [f'  Missing:  {stub}'], needs_review=needs_review)
             return 1
@@ -341,7 +337,10 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                     if not review_note.endswith(': its test passed when this check ran it'):
                         other_notes |= owners
                 elif review_note != wrapper:
-                    print(f"Note: {review_note}")
+                    if needs_review and gate._accepts_allow_label(review_note):
+                        pending_findings.append(review_note)
+                    else:
+                        print(f"Note: {review_note}")
             if problems:
                 done_refusal(tid, status, [f'  Missing:  {problem}' for problem in problems], other_notes,
                              needs_review=needs_review)
@@ -354,6 +353,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 done_refusal(tid, status, [f'  Missing:  {problem}' for problem in changed_command],
                              needs_review=needs_review)
                 return 1
+        if needs_review:
+            s.annotate_pending_review(root, tid, pending_findings)
         path = s.local_path(root, f"tasks/{tid}.md")
         before = path.read_bytes()
         supported = False
@@ -377,7 +378,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         _, owed, delivery = gate.verdict(root, s.record(root, tid))
         debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""
         if needs_review or gate.waiting_for_review(root, s.record(root, tid)):
-            print(f'{tid} DONE, ' + gate.pending_review_message(tid) + debt)
+            findings = gate.pending_findings(root, s.record(root, tid))
+            print(f'{tid} DONE, ' + gate.pending_review_message(tid, findings) + debt)
         else:
             print(f"{tid} DONE: its declared test passed on this code{debt}")
         push = " and push" if s.has_origin(root) else ""
@@ -517,7 +519,7 @@ def main(argv=None):
                 if not base:
                     raise s.Refused('a declared refactor needs a locally available target; fetch origin first')
                 revision, _ = gate.comparison_base(root, base)
-                if gate.refactor_test_files(root, record, revision) & gate.changed_paths(root, revision):
+                if gate.changed_test_paths(root, revision, gate.refactor_test_files(root, record, revision)):
                     raise s.Refused(f'{options.task}: its test files changed; use renew --no-refactor to drop the declaration')
                 with tempfile.TemporaryDirectory(prefix='workorder-refactor-') as temporary:
                     code, output = gate.run_ref_test(root, Path(temporary) / 'base', revision, command,
@@ -593,11 +595,10 @@ def main(argv=None):
                 print("check: OK")
             if notes:
                 print("\n".join(f"Note: {note}" for note in gate.summarize_notes(notes, options.verbose)))
-            if options.run_tests and counts["tests"] == 0:
+            if options.run_tests and counts["tests"] == 0 and not (options.base and not counts['tasks']):
                 print("no declared test ran in this check")
             print(gate.check_summary(counts, options.run_tests or bool(counts.get('tests')),
-                                    unchanged_base=bool(options.base and not counts['tasks']
-                                                        and not options.run_tests and not options.all_tests),
+                                    unchanged_base=bool(options.base and not counts['tasks']),
                                     unchanged_all_tests=bool(options.base and options.all_tests
                                                              and not counts['tasks']
                                                              and counts.get('tested_tasks'))))
