@@ -5,13 +5,15 @@ or when it never covers the new code. The first seven examples introduce the
 same bug: multiplication adds instead when the first argument is negative. The
 original test checks `mul(-3, 4) == -12`; the bug returns `1`.
 
-All ten shortcuts keep their own selected test command passing. Workorder
+All twelve shortcuts keep their own selected test command passing. Workorder
 refuses the first seven without reviewer acceptance. The eighth adds broken
 division without task evidence. The ninth is an honest feature, accepted without
 a label. Cases 10 and 11 weaken multiplication's assertion while recording
 unrelated task activity; both refuse even though multiplication's task file and
 receipts are untouched. Case 12 refactors `src/app.py` while a root-level test
 file already exists and the tests stay unchanged; the check accepts it.
+Cases 13 and 14 start from a failing test on main and make that test pass by
+adding a line; both refuse.
 
 Each example starts in its own disposable Git repository. `main` has correct
 multiplication, two passing tests, and a completed `TASK-1`. For cases 1–7 the
@@ -29,7 +31,7 @@ The own-test command is `python -m pytest -q tests/test_calc.py`, except case
 7, which runs its narrowed command, and cases 10–12, which run all of `tests/`. Output excerpts retain the actual
 messages and pytest summaries; elapsed times vary.
 
-Captured with `workorder 0.9.0` and pytest 9.2.0 on Linux.
+Captured with `workorder 0.10.0` and pytest 9.2.0 on Linux.
 
 ## 1. Replace the assertion with `assert True`
 
@@ -346,6 +348,47 @@ Workorder (exit 0):
 check: OK
 ```
 
+## 13. `return` at the top of a test that failed on main
+
+`main` has the multiplication bug and `test_mul_negative` still asserts
+`mul(-3, 4) == -12`. The task stays in progress there. On the branch, add
+`return` as the first line of that test, run `workorder renew --task TASK-1`,
+and set the status to DONE. The selected command passes. The tests from main
+still fail, and the added line is a change to a test that already failed.
+
+Own test (exit 0):
+
+```text
+2 passed in 0.00s
+```
+
+Workorder (exit 1):
+
+```text
+TASK-1: its test files changed since main (tests/test_calc.py); its tests already fail on main, so any change needs review; a reviewer accepts it with --allow TASK-1
+TASK-1: its tests from main fail on this code; a reviewer accepts this intended behavior change or test rename with --allow TASK-1
+```
+
+## 14. A second `test_mul_negative` that shadows the first
+
+The same failing test is on main. On the branch, append another
+`def test_mul_negative()` that asserts `True`. Python keeps the second
+function, so the selected command passes and the original assertion is never
+run. That is still a change to a test that already failed.
+
+Own test (exit 0):
+
+```text
+2 passed in 0.00s
+```
+
+Workorder (exit 1):
+
+```text
+TASK-1: its test files changed since main (tests/test_calc.py); its tests already fail on main, so any change needs review; a reviewer accepts it with --allow TASK-1
+TASK-1: its tests from main fail on this code; a reviewer accepts this intended behavior change or test rename with --allow TASK-1
+```
+
 ## Reproduce the catalogue
 
 From a clone of this repository, use a Python environment with Workorder and
@@ -372,7 +415,7 @@ from which it was launched. No reported test run is piped into a filtering tool.
 A successful run ends with:
 
 ```text
-PASS: 12 cases verified; 10 shortcuts refused; honest changes accepted without --allow.
+PASS: 14 cases verified; 12 shortcuts refused; honest changes accepted without --allow.
 ```
 
 The runner uses POSIX shell and Python instead of platform-specific `sed -i`
@@ -389,8 +432,9 @@ Failed or missing current tests for unfinished work are notes; test edits and
 REF regressions still need review.
 
 Comparisons against base tests cover tasks being worked on and every task
-whose tests changed. Repository tests outside those tasks are still reviewed;
-`--allow tests` accepts only unowned test changes. New counting implementation
+whose tests changed. `--allow tests` accepts every changed test line. It does
+not accept a pytest selection change, a base test that fails on the new code,
+or a change to a test that already failed at the base. New counting implementation
 or test receipts on tasks with concrete commands satisfy `--require-task`;
 notes, status edits and non-counting receipts do not. `--allow no-task` bypasses
 only that receipt requirement. See the [base-check reference](reference.md#checks-against-a-base)

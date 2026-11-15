@@ -222,10 +222,13 @@ def local_claim(root, tid, token='our-token', generation=1, released=False):
         git(root, 'update-ref', f'refs/tags/workorder/releases/{tid}/{oid}', oid)
 
 
-def refuse_network(monkeypatch):
+def refuse_network(monkeypatch, allow_claim_refresh=False):
     original = store._git_run
 
     def local_git(root, *args, **kwargs):
+        # SessionStart re-reads claim and release tags. Other hook commands still stay offline.
+        if allow_claim_refresh and args and args[0] in {'fetch', 'ls-remote'} and 'workorder' in ' '.join(args):
+            return original(root, *args, **kwargs)
         assert args[0] not in {'fetch', 'ls-remote', 'push'}, 'hook attempted a network command'
         return original(root, *args, **kwargs)
 
@@ -244,7 +247,7 @@ def test_session_start_shows_ready_and_only_tasks_held_in_this_clone(local_repo,
     token = store.claim_token_path(local_repo, 'TASK-5')
     token.write_text('token-with-no-fetched-tag-yet')
     git(local_repo, 'remote', 'add', 'origin', 'https://invalid.example/no-network.git')
-    refuse_network(monkeypatch)
+    refuse_network(monkeypatch, allow_claim_refresh=True)
     assert hooks.run(local_repo, 'session-start') == 0
     output = capsys.readouterr().out
     assert 'workorder ready' in output
@@ -259,11 +262,11 @@ def test_session_start_tracks_successful_claim_and_release_without_fetching(clon
     root, _ = clones
     store.claim(root, 'TASK-1')
     with monkeypatch.context() as no_network:
-        refuse_network(no_network)
+        refuse_network(no_network, allow_claim_refresh=True)
         assert hooks.run(root, 'session-start') == 0
     assert 'workorder show --task TASK-1' in capsys.readouterr().out
     store.release(root, 'TASK-1')
-    refuse_network(monkeypatch)
+    refuse_network(monkeypatch, allow_claim_refresh=True)
     assert hooks.run(root, 'session-start') == 0
     assert 'workorder show --task TASK-1' not in capsys.readouterr().out
 
@@ -283,7 +286,7 @@ def test_session_start_does_not_hold_a_task_after_losing_a_claim_race(clones, mo
     with pytest.raises(store.Refused, match='claimed by'):
         store.claim(root, 'TASK-1')
     assert store.claim_token_path(root, 'TASK-1').exists()
-    refuse_network(monkeypatch)
+    refuse_network(monkeypatch, allow_claim_refresh=True)
     assert hooks.run(root, 'session-start') == 0
     assert 'workorder show --task TASK-1' not in capsys.readouterr().out
 
@@ -370,5 +373,5 @@ def test_git_install_pin_follows_metadata_not_the_readme_text(local_repo, publis
                    "        run: |\n"
                    '          echo "add your test dependencies here" >&2\n'
                    "          exit 1\n")
-    assert text.strip().replace(shlex.quote(pin), 'workorder==0.9.0') in reference.replace(
+    assert text.strip().replace(shlex.quote(pin), 'workorder==0.10.0') in reference.replace(
         example_dependencies, placeholder)

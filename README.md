@@ -99,9 +99,10 @@ and default-branch pushes with `--run-tests --all-tests`. A conflicted squash
 can leave main with code that differs from the tested code, so the check on
 main can fail. Run `workorder renew --task <id>` on main and test again.
 
-Review includes repository tests and every task whose tests changed. Existing
-test edits need the owning `workorder-allow:<ID>` label, or
-`workorder-allow:tests` when unowned. `workorder-allow:no-task` accepts only the
+Review includes repository tests and every task whose tests changed. A task
+owns the files or folders its test names, plus pytest configuration on that
+path. `workorder-allow:<ID>` accepts that task's files. `workorder-allow:tests`
+accepts every changed test line. `workorder-allow:no-task` accepts only the
 code-to-task requirement. Current failures for completed tasks still refuse.
 [Review rules and the full workflow](docs/reference.md#checks-against-a-base).
 

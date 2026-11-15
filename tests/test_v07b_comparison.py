@@ -182,7 +182,8 @@ def test_pytest_default_discovery_compares_changed_tests(local_repo):
     result = checked(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
     assert '2 passed' in result.stdout and '1 passed' not in result.stdout
-    assert 'ran 2 declared tests' in result.stdout
+    # The pathless command runs the new test. It does not own the file, so there is no REF replay.
+    assert 'ran 1 declared test' in result.stdout
 
 
 @pytest.mark.parametrize('kind', ['script', 'binary'])

@@ -125,7 +125,7 @@ def test_worked_task_reuses_identical_ref_tests_without_test_file_edits(local_re
     touch(root)
     result = check(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'ran 1 declared test' in result.stdout
+    assert 'ran 2 declared tests (1 cached)' in result.stdout
 
 
 @pytest.mark.parametrize('explicit', [False, True])

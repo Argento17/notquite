@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.0 (unreleased)
+
+- When a task's test files changed and its tests already fail at the base, any
+  change to those files needs --allow ID. A finished task whose base tests
+  failed must have those tests pass on the new code unless --allow ID.
+- A task owns only the files or folders its test command or test_paths names,
+  plus conftest.py and pytest configuration on the path to them. `new --test`
+  records test_paths when the command names files or folders. --allow tests
+  accepts every changed test line.
+- Recognise test files named *.test.*, *.spec.* or *_test.go, and files under
+  test/, tests/ or __tests__/. A finished task whose test maps to no test
+  files, in a repository that has test files, is refused until test_paths is set.
+- Count cached test results in the run summary, and say (cached) when they were
+  reused. Do not suggest a reviewer label for a failing current test.
+- Cover tasks/, .workorder/, tests and .github/ in the CODEOWNERS example.
+  Session start re-reads claim and release tags, so a force-release from
+  another clone is no longer shown as held.
+- Update package versions and install pins to 0.10.0.
+
 ## 0.9.0 (unreleased)
 
 - Review all repository test roots and every task whose tests changed, including

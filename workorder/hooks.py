@@ -1,4 +1,4 @@
-"""Claude Code hook commands: local task context and completion checks, without fetching."""
+"""Claude Code hook commands: local task context and completion checks."""
 
 import json
 import re
@@ -6,6 +6,15 @@ import sys
 
 from . import gate
 from . import store as s
+
+
+def refresh_claim_refs(root):
+    """Re-read claim and release tags so a force-release from another clone is visible."""
+    if not s.has_origin(root):
+        return
+    spec = s.NAMESPACE + '*'
+    s.git(root, 'fetch', '--no-tags', '--refmap=', 'origin', f'+{spec}:{spec}', required=False)
+    s.invalidate_reads()
 
 
 def local_claims(root):
@@ -96,6 +105,7 @@ def relevant_tasks(root):
 @s.read_session()
 def run(root, event):
     if event == 'session-start':
+        refresh_claim_refs(root)
         claims, owned = local_claims(root)
         print('Run workorder ready to see available work.')
         for tid in owned:

@@ -456,11 +456,15 @@ def task_text(tid, data, template):
     today = dt.datetime.now(dt.timezone.utc).date().isoformat()
     extended = {**dict(business_owner="", priority="", created_at=today, mission="", depends_on=[],
                        blocks=[], next="", summary="", test=""), **data}
-    return ("---\n" + "".join(f"{k}: {packed(extended[k])}\n" for k in EXTENDED_ORDER)
+    order = list(EXTENDED_ORDER)
+    if extended.get("test_paths"):
+        order.insert(order.index("test") + 1, "test_paths")
+    return ("---\n" + "".join(f"{k}: {packed(extended[k])}\n" for k in order)
             + f"---\n\n# {tid}\n" + EXTENDED_BODY)
 
 
-def new(root, title, owner, ships="none", prefix="TASK", template="extended", test="", local_only=False):
+def new(root, title, owner, ships="none", prefix="TASK", template="extended", test="", local_only=False,
+        test_paths=None):
     repository(root)
     if template not in {"simple", "extended"}:
         raise Refused("template must be simple or extended")
@@ -486,7 +490,8 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
                     if ID.fullmatch(p.stem)]
         tid = f"{prefix}-{max(numbers, default=0) + 1}"
         data = dict(id=tid, title=title, owner=owner, status="IN_PROGRESS", ships=ships,
-                    waits_on=[], contract="none", **({"test": test} if test else {}))
+                    waits_on=[], contract="none", **({"test": test} if test else {}),
+                    **({"test_paths": list(test_paths)} if test_paths else {}))
         if local or reserve(root, NAMESPACE + f"ids/{tid}", {**data, "at": now(), "who": who(root)}):
             path = directory / f"{tid}.md"
             with path.open("x", encoding="utf-8", newline="\n") as stream:

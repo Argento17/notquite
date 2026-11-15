@@ -179,7 +179,8 @@ def finish_task(root, tid, note=None, timeout=None):
         base = gate.local_test_base(root, record)
         if base:
             notes = []
-            problems = gate.local_test_problems(root, base, record, timeout=timeout, notes=notes)
+            problems = gate.local_test_problems(root, base, record, timeout=timeout, notes=notes,
+                                                completed=True)
             for note in notes:
                 if note != wrapper:
                     print(f"Note: {note}")
@@ -253,8 +254,9 @@ def main(argv=None):
             return finish_task(root, s.task_id(options.task), options.note, options.timeout)
         elif options.action == "new":
             shared = s.has_origin(root) and not options.local
+            named = gate.paths_named_by_command(options.test) if options.test else None
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
-                        options.template, options.test, options.local)
+                        options.template, options.test, options.local, test_paths=named)
             where = ("reserved on origin" if shared
                      else "local id: --local, not reserved on origin" if options.local
                      else "local id: no origin remote, so other clones could pick the same id")

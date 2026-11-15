@@ -97,7 +97,7 @@ test_code = ("import pytest\nfrom calc import mul\n\n\ndef test_mul():\n"
              "    assert mul(3, 4) == 12\n" + negative_test)
 
 
-def base(number, honest=False, split_tests=False):
+def base(number, honest=False, split_tests=False, complete=True, code=None):
     folder = output / f"{number:02d}"
     folder.mkdir()
     repo = folder / "repo"
@@ -109,7 +109,7 @@ def base(number, honest=False, split_tests=False):
     git(repo, log, "config", "user.email", "demo@example.invalid")
     (repo / "tests").mkdir()
     write(repo, ".gitignore", "__pycache__/\n.pytest_cache/\n")
-    write(repo, "calc.py", good_code)
+    write(repo, "calc.py", good_code if code is None else code)
     if split_tests:
         (repo / "tests/mul").mkdir()
     test_path = "tests/mul/test_calc.py" if split_tests else "tests/test_calc.py"
@@ -120,8 +120,9 @@ def base(number, honest=False, split_tests=False):
     task(repo, log, "Multiply", "mul in calc.py.",
          "mul(a, b) returns a * b, also for negative numbers.", "TASK-1", command=command)
     commit(repo, log, "Define multiplication task")
-    run(wo + ["done", "--task", "TASK-1"], repo, log)
-    commit(repo, log, "Record TASK-1 completion")
+    if complete:
+        run(wo + ["done", "--task", "TASK-1"], repo, log)
+        commit(repo, log, "Record TASK-1 completion")
     if honest:
         # Define the ask at the base: this example tests additions, not acceptance
         # of a definition first introduced in the same change as its DONE claim.
@@ -300,10 +301,29 @@ try:
     report(repo, "Refactor production code; tests and the root probe stay unchanged",
            command=["python", "-m", "pytest", "-q", "tests"], check_exit=0)
 
+    repo, log = base(13, complete=False, code=broken_code)
+    replace(repo, "tests/test_calc.py", "def test_mul_negative():\n",
+            "def test_mul_negative():\n    return\n")
+    commit(repo, log, "Return before the failing assertion")
+    run(wo + ["renew", "--task", "TASK-1"], repo, log)
+    replace(repo, "tasks/TASK-1.md", 'status: "IN_PROGRESS"', 'status: "DONE"')
+    commit(repo, log, "Claim TASK-1 done after adding return")
+    report(repo, "Return at the top of a test that failed on main",
+           reasons=("so any change needs review", "its tests from main fail"))
+
+    repo, log = base(14, complete=False, code=broken_code)
+    write(repo, "tests/test_calc.py", test_code + "\n\ndef test_mul_negative():\n    assert True\n")
+    commit(repo, log, "Shadow the failing test with a second function")
+    run(wo + ["renew", "--task", "TASK-1"], repo, log)
+    replace(repo, "tasks/TASK-1.md", 'status: "IN_PROGRESS"', 'status: "DONE"')
+    commit(repo, log, "Claim TASK-1 done after shadowing the test")
+    report(repo, "Add a second test_mul_negative that shadows the failing one",
+           reasons=("so any change needs review", "its tests from main fail"))
+
     (output / "results.json").write_text(json.dumps(dict(version=version, cases=results), indent=2)
                                        + "\n", encoding="utf-8")
     print(f"\nVerified results: {output / 'results.json'}", flush=True)
-    print("PASS: 12 cases verified; 10 shortcuts refused; honest changes accepted without --allow.", flush=True)
+    print("PASS: 14 cases verified; 12 shortcuts refused; honest changes accepted without --allow.", flush=True)
 except (OSError, RuntimeError, StopIteration) as error:
     print(f"FAIL: {error}\nComplete logs remain in {output}", file=sys.stderr)
     sys.exit(1)

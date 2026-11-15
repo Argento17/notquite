@@ -131,7 +131,8 @@ def test_implicit_test_tree_guards_all_files(local_repo, selection, helper):
     store.add_note(root, 'TASK-1', 'Working')
     result = cli(root, 'check', '--base', base)
     assert result.returncode == 1 and path.relative_to(root).as_posix() in result.stdout
-    assert '--allow TASK-1' in result.stdout
+    # A named file, a pathless pytest command, and -c do not own every file under tests/.
+    assert '--allow tests' in result.stdout
 
 
 def test_import_outside_test_roots_does_not_make_a_package_a_test_file(local_repo):

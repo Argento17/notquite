@@ -367,23 +367,25 @@ step says to push main instead.
 ## Checks against a base
 
 `check --base REF` checks changed task records, receipts, contracts and evidence,
-and their dependents. Test review covers every inferred test file and every
-task whose selected tests changed, even when its task file and receipts are
-untouched. Inferred files are those under a folder named `tests` or `test`,
-under a folder the command names, named `test_*.py`, `*_test.py` or
-`conftest.py`, plus pytest configuration and pytest `testpaths`. A test file
-at the repository root does not make the root a test folder, so production
-code is not a test file. Importing a package from a test does not make that
-package a test file. Both REF and current definitions count. Metadata paths
-under `tasks/`, `.workorder/` and `.notquite/` stay outside test discovery.
+and their dependents. Test review covers repository test files and every task
+whose selected tests changed, even when its task file and receipts are
+untouched. Repository test files are files under `test/`, `tests/` or
+`__tests__/`, and files named `test_*.py`, `*_test.py`, `*_test.go`, `*.test.*`
+or `*.spec.*`, plus `conftest.py` and pytest configuration. A test file at the
+repository root does not make the root a test folder, so production code is
+not a test file. Importing a package from a test does not make that package a
+test file. Both REF and current definitions count. Metadata paths under
+`tasks/`, `.workorder/` and `.notquite/` stay outside test discovery.
 
 | Change or result | Default | Reviewer acceptance |
 |---|---|---|
-| Only added test lines or new test files | Passes | `--strict-tests` requires acceptance for additions too |
-| Removed or changed test lines, including a rename | Needs review | `--allow ID` for each owning task; `--allow tests` for unowned tests |
-| REF tests pass on REF code but fail on current code | Needs review | `--allow ID` accepts an intended behavior change or test rename |
+| Only added test lines or new test files, when the base tests passed | Passes | `--strict-tests` requires acceptance for additions too |
+| Any change to a test whose base tests already failed, including an added line | Needs review | `--allow ID`; `--allow tests` does not accept this |
+| Removed or changed test lines, including a rename | Needs review | `--allow ID` for that task; `--allow tests` accepts every changed test line |
+| REF tests fail on current code, including a finished task whose base tests already failed | Needs review | `--allow ID` accepts an intended behavior change or test rename |
 | Fewer pytest passes, or more skips, xfails or deselections | Needs review | `--allow ID` accepts changed outcomes |
-| New skip/xfail markers or calls, `-k`/`--deselect`, conftest or pytest configuration changes | Needs review, including additions | The owning task's acceptance, or `--allow tests` when unowned |
+| New skip/xfail markers or calls, or conftest or pytest configuration changes | Needs review, including additions | `--allow ID`, or `--allow tests` for those lines |
+| Pytest `-k` or `--deselect` changes | Needs review | `--allow ID` only |
 | Current declared tests fail for a DONE/CLOSED task | Refused | No label excuses the failure |
 | Current tests fail or are missing for IN_PROGRESS/BLOCKED work | A note; no finished claim is made | Test edits and REF regressions still need review |
 
@@ -413,14 +415,24 @@ edited assertions and failing REF assertions for each owning task:
 TASK-1: its tests from origin/main fail on this code; a reviewer accepts this intended behavior change or test rename with --allow TASK-1
 ```
 
-`test_paths` selects files or folders; a folder includes every file below it.
-Without it, inferred test files are files under a folder named `tests` or
-`test`, under a folder the command names, files named `test_*.py`, `*_test.py`
-or `conftest.py`, and pytest configuration. Helpers and data inside those
-folders count. A test file at the repository root does not pull in the rest of
-the repository, and importing a package does not make that package a test file.
-A missing named test never widens to unrelated tests. An explicit empty list
-selects no task test files, but cannot hide repository tests from file review.
+A task owns the files its test command names, the folders it names, and
+`test_paths`. A folder includes every file below it. It also owns `conftest.py`
+and pytest configuration on the path to those files. A named file does not
+include its siblings, and a command that names no path does not own every
+folder called `tests`. `workorder new --test` writes `test_paths` when the
+command names files or folders. Helpers and data count only when they are
+inside a named folder or named themselves. A test file at the repository root
+does not pull in the rest of the repository, and importing a package does not
+make that package a test file. A missing named test never widens to unrelated
+tests. An explicit empty `test_paths` selects no task test files, but cannot
+hide repository tests from file review. `--allow tests` accepts every changed
+test line in the change. It does not accept a pytest `-k` or `--deselect`
+change, a base test that fails on the new code, or any change to a test that
+already failed at the base.
+
+A finished task whose declared test maps to no test files at the base, when
+the repository has test files there, is refused:
+`TASK-1: no test files are known for its test; set test_paths`.
 
 Commands through make, npm, npx, yarn, pnpm, go, cargo, tox, nox, sh or bash, and
 non-test scripts, require explicit `test_paths` under `--base`. The
@@ -495,9 +507,10 @@ a summary, except `--staged` with nothing in scope:
 checked 3 tasks (2 claimed DONE or CLOSED); ran 2 declared tests
 ```
 
-The run count appears only with `--run-tests` and counts commands actually
-started, including failures and REF comparisons. A missing executable or cached
-result does not count as a new run. If none ran, another line says
+The run count appears only with `--run-tests` and counts declared commands this
+check used, including failures, REF comparisons and cached results. When every
+counted run was cached the summary says `(cached)`; when some were, it says
+`(N cached)`. A missing executable does not count. If none ran, another line says
 `no declared test ran in this check`. Task counts include unreadable and removed
 tasks; unreadable claims are excluded from the claim count. An unfinished
 single-task summary says `checked 1 task (not claimed finished)`.
@@ -555,7 +568,7 @@ jobs:
         with: {python-version: '3.12'}
       - name: Install project test dependencies
         run: python -m pip install -e '.[test]'
-      - run: python -m pip install workorder==0.9.0
+      - run: python -m pip install workorder==0.10.0
       - name: Check tasks after merge
         if: github.event_name == 'push'
         run: workorder check --run-tests --all-tests
@@ -575,8 +588,10 @@ and required code owner review on task, test and configuration paths. For exampl
 ```text
 # .github/CODEOWNERS — replace @your-org/reviewers with your reviewers
 /tasks/ @your-org/reviewers
+/.workorder/ @your-org/reviewers
 /tests/ @your-org/reviewers
 /test/ @your-org/reviewers
+/.github/ @your-org/reviewers
 /conftest.py @your-org/reviewers
 /pytest.ini @your-org/reviewers
 /tox.ini @your-org/reviewers
@@ -795,6 +810,11 @@ pre-commit hook from `workorder init`:
    hook. On that branch, `workorder check --run-tests --all-tests` passes when
    the merged code matches the tested code.
 
+Making a failing base test pass by adding `return`, or by adding a second
+function with the same name, changes a test that already failed. That change
+needs `--allow ID`. A finished task must also make the base tests pass on the
+new code unless `--allow ID`.
+
 A conflicted squash can change the tested lines. The check on the default
 branch can then fail. Run `workorder renew --task ID` there and test again.
 
@@ -818,7 +838,7 @@ test dependencies first, choosing and reporting the first match:
 It then installs Workorder at exactly the running version. For a Git installation,
 PEP 610 direct_url.json supplies the URL and resolved commit:
 `python -m pip install 'git+<url>@<commit>'`. A recorded subdirectory is retained.
-Other installations use `workorder==0.9.0` for this release.
+Other installations use `workorder==0.10.0` for this release.
 It runs `workorder check --base "origin/<base>" --run-tests --all-tests --require-task`,
 passing task ids and the special values `tests` and `no-task` from
 `workorder-allow:` labels to `--allow`. Pushes to the default branch run
@@ -866,10 +886,11 @@ settings or hooks. It installs command hooks for SessionStart and Stop:
 ```
 
 SessionStart lists tasks held by this clone and their `show` records, plus one
-line pointing to `workorder ready`. It does not run the full readiness scan. It reads local claim tags and private claim tokens;
-successful claims and releases cache their tags locally for these hooks. A token
-left by a failed claim is not ownership. It does not fetch, so another clone's
-release or reassignment becomes visible after the local tags are refreshed. Stop reads the hook JSON from stdin. When `stop_hook_active`
+line pointing to `workorder ready`. It does not run the full readiness scan.
+When a remote is configured, it re-reads claim and release tags from origin,
+then reads the local tags and private claim tokens. If that read fails, it
+keeps the claims already in this clone. A token left by a failed claim is not
+ownership. Stop reads the hook JSON from stdin. When `stop_hook_active`
 is true it exits 0 to prevent a stop loop. Otherwise it checks DONE/CLOSED claims only for tasks held by this clone or
 whose task file differs from the selected target branch. With no target, it compares task files with HEAD. Other tasks never block Stop. It exits 2
 with the NOT QUITE refusal lines on stderr if one of those claims lacks support.
