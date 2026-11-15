@@ -151,9 +151,8 @@ def test_needs_review_records_a_deliberate_test_change(local_repo, monkeypatch, 
     accepted = cli(root, 'done', '--task', 'TASK-6', '--needs-review')
     output = accepted.stdout + accepted.stderr
     assert accepted.returncode == 0, output
-    assert store.record(root, 'TASK-6')['status'] == 'IN_PROGRESS'
+    assert store.record(root, 'TASK-6')['status'] == 'DONE'
     assert 'pending review: the pull request needs workorder-allow:TASK-6' in output
-    store.set_task_field(root, 'TASK-6', 'status', 'DONE')  # Claim in the reviewed PR.
     git(root, 'add', 'tasks', '.workorder')
     hook = real_git(root, 'commit', '-qm', 'Record the review')
     hook_output = hook.stdout + hook.stderr
@@ -292,7 +291,7 @@ def test_hook_shows_test_output_only_when_the_test_fails(local_repo):
     passed = passing.stdout + passing.stderr
     assert passing.returncode == 0, passed
     assert 'UNIQUE_PASS_OUTPUT' not in passed
-    assert 'ran 1 declared test' in passed
+    assert "ran 1 task's declared test" in passed
     path.write_text(path.read_text(encoding='utf-8') + '\n<!-- pass again -->\n', encoding='utf-8')
     cached = real_git(root, 'commit', '-aqm', 'Note a cached pass')
     cached_output = cached.stdout + cached.stderr

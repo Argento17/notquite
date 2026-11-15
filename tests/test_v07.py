@@ -28,26 +28,26 @@ def test_done_refusal_reports_the_status_it_kept(local_repo, reason):
 
 
 @pytest.mark.parametrize('reason', ['tracked', 'untracked', 'missing-test', 'any'])
-def test_done_saves_note_before_early_refusal(local_repo, reason):
+def test_done_does_not_save_note_on_early_refusal(local_repo, reason):
     root = local_repo
     path = task(root, ships='none', test=None if reason == 'missing-test' else 'any' if reason == 'any' else PASS)
     if reason in {'tracked', 'untracked'}:
         (root / ('app.py' if reason == 'tracked' else 'new.py')).write_text('unfinished = True\n')
     result = cli(root, 'done', '--task', 'TASK-1', '--note', 'Keep this handover')
     assert result.returncode == 1 and store.record(root, 'TASK-1')['status'] == 'IN_PROGRESS'
-    assert re.search(r'^- \d{4}-\d{2}-\d{2}: Keep this handover$', path.read_text(), re.M)
+    assert not re.search(r'^- \d{4}-\d{2}-\d{2}: Keep this handover$', path.read_text(), re.M)
     assert not store.entries(root, 'TASK-1')
 
 
 @pytest.mark.parametrize('final_error', [False, True])
-def test_done_final_refusal_restores_status_and_keeps_note(local_repo, monkeypatch, capsys, final_error):
+def test_done_final_refusal_restores_record(local_repo, monkeypatch, capsys, final_error):
     path = task(local_repo, status='BLOCKED', ships='none', test=PASS)
     fill_sections(path)
     explain = gate.explain
 
-    def refuse(root, tid, claim=None):
+    def refuse(root, tid, claim=None, rerun=False):
         if claim is not None:
-            return explain(root, tid, claim)
+            return explain(root, tid, claim, rerun=rerun)
         assert store.record(root, tid)['status'] == 'DONE'
         if final_error:
             raise store.Refused('final refusal')
@@ -58,7 +58,8 @@ def test_done_final_refusal_restores_status_and_keeps_note(local_repo, monkeypat
     assert command.main(['done', '--no-code-change', '--task', 'TASK-1', '--note', 'Keep final handover']) == 1
     output = capsys.readouterr().out
     assert store.record(local_repo, 'TASK-1')['status'] == 'BLOCKED'
-    assert ': Keep final handover' in path.read_text()
+    assert ': Keep final handover' not in path.read_text()
+    assert not store.entries(local_repo, 'TASK-1')
     assert 'TASK-1: DONE was not written; the status stays BLOCKED' in output
     assert 'Missing:  final refusal' in output
     assert 'Claimed:  DONE' not in output and 'The status says DONE' not in output
@@ -129,7 +130,8 @@ def test_init_reminds_clones_to_install_the_hook(local_repo, tmp_path, check):
     assert not hook.exists()
     result = cli(clone, 'init', *(['--check'] if check else []))
     assert result.returncode == int(check)
-    assert 'Hooks are not cloned; run workorder init in every clone.' in result.stdout
+    assert ('Hooks are not cloned; run workorder init in every clone.' if check else
+            'Hooks are not cloned; setting up the pre-commit hook in this clone.') in result.stdout
     assert hook.exists() != check
     if not check:
         assert 'Hooks are not cloned' not in ok(clone, 'init')
@@ -223,9 +225,9 @@ def test_skipped_only_rerun_does_not_also_say_passed(local_repo, all_tests):
 
 def test_release_versions_and_reference_pin():
     from workorder import __version__
-    assert __version__ == '0.13.0'
-    assert 'version = "0.13.0"' in (PACKAGE / 'pyproject.toml').read_text()
-    assert 'workorder==0.13.0' in (PACKAGE / 'docs/reference.md').read_text()
+    assert __version__ == '0.14.0'
+    assert 'version = "0.14.0"' in (PACKAGE / 'pyproject.toml').read_text()
+    assert 'workorder==0.14.0' in (PACKAGE / 'docs/reference.md').read_text()
 
 
 def test_init_workflow_uses_running_version(local_repo, monkeypatch):

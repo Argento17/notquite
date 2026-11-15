@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import wraps
 import hashlib
@@ -51,15 +51,19 @@ def print_once(message):
             seen.add(message)
 
 
-def print_test_output(output, errors='', failed=False):
+def print_test_output(output, errors='', failed=False, label=None):
     # The same output can be used for evidence, current, REF and all-task checks.
     key = ('test-output', failed, re.sub(r' in \d+(?:\.\d+)?s', ' in <time>s', output + errors))
     seen = _TEST_OUTPUTS.get()
     if seen is not None:
         if key in seen:
+            if label:
+                print_once(label + ' (same output as above)')
             return
         seen.add(key)
-    if failed:
+    if label:
+        print(label)
+    elif failed:
         print('Failure:')
     print(output, end='')
     print(errors, end='', file=sys.stderr)
@@ -520,12 +524,14 @@ def task_text(tid, data, template):
     order = list(EXTENDED_ORDER)
     if extended.get("test_paths"):
         order.insert(order.index("test") + 1, "test_paths")
+    if 'code_paths' in extended:
+        order.insert(order.index('contract'), 'code_paths')
     return ("---\n" + "".join(f"{k}: {packed(extended[k])}\n" for k in order)
             + f"---\n\n# {tid}\n" + EXTENDED_BODY)
 
 
 def new(root, title, owner, ships="none", prefix="TASK", template="extended", test="", local_only=False,
-        test_paths=None):
+        test_paths=None, code_paths=None):
     repository(root)
     if template not in {"simple", "extended"}:
         raise Refused("template must be simple or extended")
@@ -533,6 +539,8 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
         raise Refused("use an uppercase prefix, nonempty title and owner")
     if test.strip():
         split_command(test, "--test")
+    for path in code_paths or []:
+        local_path(root, path)
     directory = local_path(root, "tasks")
     directory.mkdir(exist_ok=True)
     # Without an origin remote, ids are numbered locally and not coordinated with other clones.
@@ -552,7 +560,8 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
         tid = f"{prefix}-{max(numbers, default=0) + 1}"
         data = dict(id=tid, title=title, owner=owner, status="IN_PROGRESS", ships=ships,
                     waits_on=[], contract="none", **({"test": test} if test else {}),
-                    **({"test_paths": list(test_paths)} if test_paths else {}))
+                    **({"test_paths": list(test_paths)} if test_paths else {}),
+                    **({'code_paths': list(code_paths)} if code_paths is not None else {}))
         if local or reserve(root, NAMESPACE + f"ids/{tid}", {**data, "at": now(), "who": who(root)}):
             path = directory / f"{tid}.md"
             with path.open("x", encoding="utf-8", newline="\n") as stream:
@@ -913,8 +922,13 @@ def receipt_texts(root, tid, staged=False, rev=None):
     if rev or staged:
         return {p: checked_text(text, p) for p, text in metadata_texts(
             root, rev, tid if rev and rev != "HEAD" else None, staged).items() if receipt_task(p) == tid}
-    return {p: read_text(root, p)
-            for p in receipt_paths(root, staged, rev, tid) if receipt_task(p) == tid}
+    texts = {p: read_text(root, p)
+             for p in receipt_paths(root, staged, rev, tid) if receipt_task(p) == tid}
+    pending = proposed_receipts(root, tid)
+    if pending is not None:
+        texts.update({f'.workorder/receipts/{tid}/{receipt_name(item)}': packed(item) + '\n'
+                      for item in pending})
+    return texts
 
 
 def verify_receipt(root, tid, value):
@@ -1111,13 +1125,54 @@ def write_receipt(root, tid, data):
     return path
 
 
+_PROPOSED_RECEIPTS = ContextVar('workorder_proposed_receipts', default=None)
+
+
+def proposed_receipts(root, tid):
+    transaction = _PROPOSED_RECEIPTS.get()
+    return transaction[2] if transaction and transaction[:2] == (root, tid) else None
+
+
+def completion_transaction(function):
+    """Check proposed receipts in memory; publish them only with a supported DONE."""
+    @wraps(function)
+    def complete(root, tid, *args, **kwargs):
+        path = local_path(root, f'tasks/{task_id(tid)}.md')
+        before = path.read_bytes() if path.is_file() else None
+        pending, written = [], []
+        succeeded = False
+        with ledger_lock(root, tid):
+            token = _PROPOSED_RECEIPTS.set((root, tid, pending))
+            try:
+                result = function(root, tid, *args, **kwargs)
+                if result == 0:
+                    for item in pending:
+                        written.append(write_receipt(root, tid, item))
+                    succeeded = True
+                return result
+            finally:
+                if not succeeded:
+                    for receipt_path in written:
+                        receipt_path.unlink()
+                    if before is not None and path.read_bytes() != before:
+                        path.write_bytes(before)
+                _PROPOSED_RECEIPTS.reset(token)
+                invalidate_reads()
+    return complete
+
+
 def append(root, tid, item):
     history = entries(root, tid)
     followed = {p for e in history for p in e.get("parents", [e.get("previous", "")])}
     heads = sorted(e["hash"] for e in history if e["hash"] not in followed)
     data = {**item, "task": tid, "at": now(), "who": who(root), "parents": heads}
     data["hash"] = digest(packed(data).encode())
-    write_receipt(root, tid, data)
+    pending = proposed_receipts(root, tid)
+    if pending is None:
+        write_receipt(root, tid, data)
+    else:
+        pending.append(data)
+        invalidate_reads()
     return data
 
 
@@ -1578,7 +1633,7 @@ def missing_test_dependency(command, code, output, root=None):
 
 
 def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None,
-            no_code_change=False):
+            no_code_change=False, refactor=False, pending_review=False):
     repository(root)
     definition = record(root, tid)
     commit = head(root)
@@ -1590,6 +1645,10 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
     data = {"kind": kind, "commit": commit, "code": code_digest(root, commit)}
     if kind == 'test' and no_code_change:
         data['no_code_change'] = True
+    if kind == 'test' and refactor:
+        data['refactor'] = True
+    if kind == 'test' and pending_review:
+        data['pending_review'] = True
     if kind == 'implemented':
         from . import gate
         base, _ = gate.implementation_base(root, definition)
@@ -1642,5 +1701,5 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         data.update(command=list(command), exit_code=exit_code, valid=valid)
         if kind != "test":
             data.update(target=target, output_sha256=digest(output.encode()))
-    with ledger_lock(root, tid):
+    with ledger_lock(root, tid) if proposed_receipts(root, tid) is None else nullcontext():
         return append(root, tid, data)

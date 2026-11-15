@@ -61,9 +61,9 @@ def test_unowned_test_additions_pass_without_acceptance(local_repo):
     root = local_repo
     (root / 'tests').mkdir()
     probe = root / 'tests/test_one.py'
-    probe.write_text('def test_one():\n    assert True\n')
+    probe.write_text('def test_one():\n    assert 1 == 1\n')
     base = commit_all(root)
-    probe.write_text(probe.read_text() + '\ndef test_two():\n    assert True\n')
+    probe.write_text(probe.read_text() + '\ndef test_two():\n    assert 1 == 1\n')
     assert cli(root, 'check', '--base', base).returncode == 0
 
 
@@ -259,7 +259,7 @@ def test_nothing_to_ship_and_implemented_code_wording(local_repo):
     commit_all(root)
     for arguments in [('check', 'TASK-1'), ('show', '--task', 'TASK-1')]:
         result = cli(root, *arguments)
-        assert 'Evidence: supports the claim (nothing to ship)' in result.stdout
+        assert 'Evidence: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)' in result.stdout
     (root / 'another.py').write_text('value = 2\n')
     commit_all(root)
     result = cli(root, 'check', 'TASK-1')

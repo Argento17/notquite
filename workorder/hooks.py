@@ -145,6 +145,8 @@ def run(root, event):
         except s.Refused:
             continue  # readable completion claims already received their parse error above
         base = gate.local_test_base(root, record)
+        if gate.waiting_for_review(root, record):
+            notes.append(f'{tid}: ' + gate.pending_review_message(tid))
         if record['status'] == 'CANCELLED' and tid in owned:
             target = gate.merge_target(root, record)
             reference = base or (target[0] if target else None)

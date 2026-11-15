@@ -36,7 +36,7 @@ def test_done_refuses_empty_or_placeholder_sections(local_repo, section, body):
     assert result.returncode == 1
     assert 'fill in Scope and Acceptance first' in result.stdout
     assert store.record(local_repo, 'TASK-1')['status'] == 'IN_PROGRESS'
-    assert ': Still defining the work' in path.read_text()
+    assert ': Still defining the work' not in path.read_text()
     assert not store.entries(local_repo, 'TASK-1')
 
 
@@ -87,7 +87,7 @@ def test_check_and_show_use_claimed_and_evidence(local_repo):
     ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     for args in [('check', 'TASK-1'), ('show', '--task', 'TASK-1')]:
         output = ok(local_repo, *args)
-        assert 'Claimed:  DONE' in output and 'Evidence: supports the claim (nothing to ship)' in output
+        assert 'Claimed:  DONE' in output and 'Evidence: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)' in output
         assert 'computed CLOSED' not in output and 'Computed:' not in output
     assert 'Result: the declared test passed on this code' in ok(local_repo, 'check', 'TASK-1')
 
@@ -149,11 +149,12 @@ def test_timeout_is_a_failed_run_with_exit_124(local_repo, action, source):
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'timed out' in result.stdout + result.stderr
     assert '124' in result.stdout + result.stderr
-    if action != 'check':
+    if action == 'done':
+        assert store.record(root, 'TASK-1')['status'] == 'IN_PROGRESS'
+        assert not store.entries(root, 'TASK-1')
+    elif action != 'check':
         receipt = store.entries(root, 'TASK-1')[-1]
         assert receipt['kind'] == 'test' and receipt['exit_code'] == 124 and not receipt['valid']
-        if action == 'done':
-            assert store.record(root, 'TASK-1')['status'] == 'IN_PROGRESS'
         assert 'timed out' in ok(root, 'show', '--task', 'TASK-1')
 
 

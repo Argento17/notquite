@@ -262,7 +262,7 @@ def test_repo_closes_only_after_merge_of_tested_code(clones):
     task(one, status="CLOSED")
     assert cli(one, "check").returncode == 1
     merge(one)
-    assert "Evidence: CLOSED" in ok(one, "show", "--task", "TASK-1")
+    assert "computed: CLOSED" in ok(one, "show", "--task", "TASK-1")
     ok(one, "check")
 
 
@@ -334,7 +334,7 @@ def test_live_needs_successful_readback_after_deployment(clones):
     assert cli(one, "check").returncode == 1
     assert readback(one, "live").returncode == 0
     ok(one, "check")
-    assert "Evidence: CLOSED" in ok(one, "show", "--task", "TASK-1")
+    assert "computed: CLOSED" in ok(one, "show", "--task", "TASK-1")
 
 
 def test_failed_or_wrong_stamp_deploy_cannot_close(clones):
@@ -791,7 +791,7 @@ def test_latest_test_run_decides_and_history_is_kept(clones):
     task(one, status="DONE")
     fail = [PYTHON, "-c", "raise SystemExit(2)"]
     passed(one)
-    assert "Evidence: DONE" in ok(one, "show", "--task", "TASK-1")
+    assert "computed: DONE" in ok(one, "show", "--task", "TASK-1")
     ok(one, "check")
     cli(one, "receipt", "test", "--task", "TASK-1", "--", *fail)
     assert "Evidence: IN_PROGRESS" in ok(one, "show", "--task", "TASK-1")
@@ -801,7 +801,7 @@ def test_latest_test_run_decides_and_history_is_kept(clones):
             in refused.stdout)
     assert cli(one, "check").returncode == 1
     passed(one)
-    assert "Evidence: DONE" in ok(one, "show", "--task", "TASK-1")
+    assert "computed: DONE" in ok(one, "show", "--task", "TASK-1")
     ok(one, "check")
     kinds = [(e["kind"], e.get("exit_code")) for e in store.entries(one, "TASK-1")]
     assert kinds == [("implemented", None), ("test", 0), ("test", 2), ("test", 0)]
@@ -894,7 +894,7 @@ def test_crlf_checkout_of_committed_records_still_verifies(clones):
         (one / path).write_bytes(data.replace(b"\n", b"\r\n"))
     assert ok(one, "check").splitlines()[0] == "check: OK"
     passed(one)
-    assert "Evidence: DONE" in ok(one, "show", "--task", "TASK-1")
+    assert "computed: DONE" in ok(one, "show", "--task", "TASK-1")
 
 
 def claim_tag_value(root, tid="TASK-1", generation=1):
@@ -1472,7 +1472,7 @@ def test_a_later_merge_receipt_that_cannot_count_does_not_undo_an_earlier_one(cl
     late = cli(one, "receipt", "merged", "--task", "TASK-1", "--ref", "refs/heads/elsewhere")
     assert late.returncode == 1 and "does not count" in late.stdout
     ok(one, "check")
-    assert "Evidence: CLOSED" in ok(one, "show", "--task", "TASK-1")
+    assert "computed: CLOSED" in ok(one, "show", "--task", "TASK-1")
 
 
 def test_files_in_tasks_that_are_not_task_ids_are_ignored(local_repo):

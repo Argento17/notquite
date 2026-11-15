@@ -47,7 +47,7 @@ def test_reviewed_intended_change_accepts_ref_failure_for_each_worked_task(local
 def test_changed_test_lines_need_review_even_when_both_runs_pass(local_repo):
     root = local_repo
     probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n')
-    probe.write_text('def test_one():\n    assert True\n')
+    probe.write_text('def test_one():\n    assert 2 == 2\n')
     touch(root)
     denied = check(root, base)
     assert denied.returncode == 1 and 'lost or changed 1 lines' in denied.stdout
@@ -58,14 +58,14 @@ def test_changed_test_lines_need_review_even_when_both_runs_pass(local_repo):
 @pytest.mark.parametrize('change', ['deleted', 'skip', 'xfail', 'deselect'])
 def test_reviewer_accepts_reduced_pytest_outcomes(local_repo, change):
     root = local_repo
-    body = 'def test_one():\n    assert True\n\ndef test_two():\n    assert True\n'
+    body = 'def test_one():\n    assert 1 == 1\n\ndef test_two():\n    assert 1 == 1\n'
     probe, base = setup_tests(root, body)
     if change == 'deleted':
         probe.write_text(body.split('\ndef test_two')[0])
     elif change == 'skip':
         probe.write_text('import pytest\n' + body.replace('def test_two', '@pytest.mark.skip(reason="retired")\ndef test_two'))
     elif change == 'xfail':
-        probe.write_text('import pytest\n' + body.replace('def test_two():\n    assert True', '@pytest.mark.xfail(reason="known")\ndef test_two():\n    assert False'))
+        probe.write_text('import pytest\n' + body.replace('def test_two():\n    assert 1 == 1', '@pytest.mark.xfail(reason="known")\ndef test_two():\n    assert False'))
     else:
         path = root / 'tasks/TASK-1.md'
         path.write_text(path.read_text().replace('-q tests', '-q tests -k one'))
@@ -79,13 +79,13 @@ def test_reviewer_accepts_reduced_pytest_outcomes(local_repo, change):
 
 def test_reviewed_test_rename_runs_ref_command_on_restored_file(local_repo):
     root = local_repo
-    probe, base = setup_tests(root, 'def test_one():\n    assert True\n', f'{PYTHON} -m pytest -q tests/test_app.py')
+    probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n', f'{PYTHON} -m pytest -q tests/test_app.py')
     probe.rename(probe.with_name('test_renamed.py'))
     path = root / 'tasks/TASK-1.md'
     path.write_text(path.read_text().replace('test_app.py', 'test_renamed.py'))
     result = check(root, base, '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'ran 2 declared tests' in result.stdout
+    assert "ran 1 task's declared test" in result.stdout
 
 
 @pytest.mark.parametrize('status', ['IN_PROGRESS', 'DONE'])
@@ -125,7 +125,7 @@ def test_worked_task_runs_fresh_ref_tests_without_test_file_edits(local_repo):
     touch(root)
     result = check(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'ran 1 declared test' in result.stdout
+    assert "ran 1 task's declared test" in result.stdout
     assert 'cached' not in result.stdout
 
 
@@ -221,10 +221,10 @@ def test_skipped_ref_comparison_is_explained(local_repo, monkeypatch, reason):
 @pytest.mark.parametrize('kind', ['skip', 'config'])
 def test_additive_skip_and_config_need_review_without_running_tests(local_repo, kind):
     root = local_repo
-    probe, base = setup_tests(root, 'def test_one():\n    assert True\n')
+    probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n')
     touch(root)
     if kind == 'skip':
-        probe.write_text(probe.read_text() + '\nimport pytest\n@pytest.mark.skip(reason="later")\ndef test_extra():\n    assert True\n')
+        probe.write_text(probe.read_text() + '\nimport pytest\n@pytest.mark.skip(reason="later")\ndef test_extra():\n    assert 1 == 1\n')
     else:
         (root / 'conftest.py').write_text('# collection policy\n')
     result = cli(root, 'check', '--review', 'refuse', '--base', base)

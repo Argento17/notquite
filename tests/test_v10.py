@@ -31,7 +31,7 @@ def _power_repo(root, weaken):
     if weaken == 'return':
         probe.write_text(body.replace('def test_power():\n', 'def test_power():\n    return\n', 1))
     else:
-        probe.write_text(body + '\ndef test_power():\n    assert True\n')
+        probe.write_text(body + '\ndef test_power():\n    assert 1 == 1\n')
     commit_all(root)
     return base
 
@@ -241,13 +241,13 @@ def test_explicit_runs_stay_fresh_in_the_summary(local_repo):
     base = commit_all(root)
     first = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--all-tests')
     assert first.returncode == 0, first.stdout + first.stderr
-    assert 'ran 2 declared tests' in first.stdout
+    assert "ran 2 tasks' declared tests" in first.stdout
     second = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--all-tests')
     output = second.stdout + second.stderr
     assert second.returncode == 0, output
-    assert 'ran 2 declared tests' in output
+    assert "ran 2 tasks' declared tests" in output
     assert '(cached)' not in output
-    assert 'ran 0 declared tests' not in output
+    assert "ran 0 tasks' declared tests" not in output
     assert "2 tasks' tests passed when this check ran them" in output
 
 

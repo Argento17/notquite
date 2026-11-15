@@ -54,9 +54,9 @@ def test_passing_additions_are_free_but_edits_require_acceptance(local_repo, cha
     if change == 'rewrite':
         probe.write_text('def test_one():\n    assert 2 == 2\n')
     elif change == 'add':
-        probe.write_text(probe.read_text() + '\ndef test_two():\n    assert True\n')
+        probe.write_text(probe.read_text() + '\ndef test_two():\n    assert 1 == 1\n')
     else:
-        (probe.parent / 'test_added.py').write_text('def test_added():\n    assert True\n')
+        (probe.parent / 'test_added.py').write_text('def test_added():\n    assert 1 == 1\n')
     result = checked(root, base)
     assert result.returncode == (1 if change == 'rewrite' else 0), result.stdout + result.stderr
     if change == 'rewrite':
@@ -69,20 +69,20 @@ def test_passing_additions_are_free_but_edits_require_acceptance(local_repo, cha
 @pytest.mark.parametrize('allowed', [False, True])
 def test_fewer_passes_require_acceptance(local_repo, allowed):
     root = local_repo
-    probe, base = setup_tests(root, ''.join(f'def test_{i}():\n    assert True\n' for i in range(5)))
-    probe.write_text(''.join(f'def test_{i}():\n    assert True\n' for i in range(3)))
+    probe, base = setup_tests(root, ''.join(f'def test_{i}():\n    assert 1 == 1\n' for i in range(5)))
+    probe.write_text(''.join(f'def test_{i}():\n    assert 1 == 1\n' for i in range(3)))
     result = checked(root, base, *(['--allow', 'TASK-1'] if allowed else []))
     assert result.returncode == (0 if allowed else 1)
     assert f'TASK-1: fewer tests pass than at {base} (5 -> 3)' in result.stdout
 
 
 @pytest.mark.parametrize('outcome,body', [
-    ('skipped', 'import pytest\n@pytest.mark.skip(reason="later")\ndef test_extra():\n    assert True\n'),
+    ('skipped', 'import pytest\n@pytest.mark.skip(reason="later")\ndef test_extra():\n    assert 1 == 1\n'),
     ('xfailed', 'import pytest\n@pytest.mark.xfail(reason="later")\ndef test_extra():\n    assert False\n'),
 ])
 def test_new_nonpassing_pytest_counts_can_be_accepted(local_repo, outcome, body):
     root = local_repo
-    probe, base = setup_tests(root, 'def test_one():\n    assert True\n')
+    probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n')
     probe.write_text(probe.read_text() + body)
     result = checked(root, base, '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
@@ -91,8 +91,8 @@ def test_new_nonpassing_pytest_counts_can_be_accepted(local_repo, outcome, body)
 
 def test_new_deselected_count_can_be_accepted(local_repo):
     root = local_repo
-    probe, base = setup_tests(root, 'def test_one():\n    assert True\n')
-    probe.write_text(probe.read_text() + '\ndef test_extra():\n    assert True\n')
+    probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n')
+    probe.write_text(probe.read_text() + '\ndef test_extra():\n    assert 1 == 1\n')
     path = root / 'tasks/TASK-1.md'
     path.write_text(path.read_text().replace('-q tests', '-q tests -k one'))
     result = checked(root, base, '--allow', 'TASK-1')
@@ -107,7 +107,7 @@ def test_new_deselected_count_can_be_accepted(local_repo):
 ])
 def test_added_skip_xfail_or_skip_call_requires_acceptance(local_repo, addition):
     root = local_repo
-    probe, base = setup_tests(root, 'def test_one():\n    assert True\n')
+    probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n')
     probe.write_text(probe.read_text() + addition)
     result = checked(root, base)
     assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
@@ -135,11 +135,11 @@ def test_pytest_configuration_needs_acceptance_without_strict(local_repo, config
 @pytest.mark.parametrize('all_tests', [False, True])
 def test_finished_shared_test_users_need_acceptance_in_strict_mode(local_repo, status, all_tests):
     root = local_repo
-    probe, _ = setup_tests(root, 'def test_one():\n    assert True\n')
+    probe, _ = setup_tests(root, 'def test_one():\n    assert 1 == 1\n')
     for tid in ('TASK-1', 'TASK-2'):
         supported(root, tid=tid, status=status, test=f'{PYTHON} -m pytest -q tests')
     base = commit_all(root, 'Finished shared test users')
-    probe.write_text(probe.read_text() + '\ndef test_two():\n    assert True\n')
+    probe.write_text(probe.read_text() + '\ndef test_two():\n    assert 1 == 1\n')
     result = checked(root, base, '--strict-tests', *(['--all-tests'] if all_tests else []))
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'TASK-1, TASK-2:' in result.stdout
@@ -178,13 +178,13 @@ def test_touching_finished_task_restores_strict_acceptance_requirement(local_rep
 
 def test_pytest_default_discovery_compares_changed_tests(local_repo):
     root = local_repo
-    probe, base = setup_tests(root, 'def test_one():\n    assert True\n', f'{PYTHON} -m pytest -q')
-    probe.write_text('def test_one():\n    assert True\ndef test_two():\n    assert True\n')
+    probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n', f'{PYTHON} -m pytest -q')
+    probe.write_text('def test_one():\n    assert 1 == 1\ndef test_two():\n    assert 1 == 1\n')
     result = checked(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
     assert '2 passed' in result.stdout and '1 passed' not in result.stdout
     # The pathless command runs the new test. It does not own the file, so there is no REF replay.
-    assert 'ran 1 declared test' in result.stdout
+    assert "ran 1 task's declared test" in result.stdout
 
 
 @pytest.mark.parametrize('kind', ['script', 'binary'])
@@ -214,7 +214,7 @@ def test_deleted_test_files_are_restored_for_comparison(local_repo):
     root = local_repo
     probe, base = setup_tests(root, 'def test_old():\n    assert False\n')
     probe.unlink()
-    (probe.parent / 'test_new.py').write_text('def test_new():\n    assert True\n')
+    (probe.parent / 'test_new.py').write_text('def test_new():\n    assert 1 == 1\n')
     result = checked(root, base, '--allow', 'TASK-1')
     assert result.returncode == 0 and f'its tests already fail on {base} code' in result.stdout
     assert not probe.exists()
@@ -374,6 +374,8 @@ def test_malformed_base_task_definition_does_not_stop_other_tasks(local_repo):
 
 @pytest.mark.parametrize('config', ['.pytest.ini', 'pytest.toml', '.pytest.toml'])
 def test_alternate_standard_pytest_configs_cannot_hide_selection(local_repo, config):
+    if config.endswith('.toml') and pytest.version_tuple < (9,):
+        pytest.skip('pytest.toml and .pytest.toml are read by pytest 9 or newer')
     root = local_repo
     _, base = setup_tests(root, 'def test_one():\n    assert True\ndef test_two():\n    assert True\n',
                           f'{PYTHON} -m pytest -q')
@@ -386,6 +388,8 @@ def test_alternate_standard_pytest_configs_cannot_hide_selection(local_repo, con
 
 @pytest.mark.parametrize('config', ['.pytest.ini', 'pytest.toml', '.pytest.toml'])
 def test_alternate_pytest_configs_supply_custom_discovery_patterns(local_repo, config):
+    if config.endswith('.toml') and pytest.version_tuple < (9,):
+        pytest.skip('pytest.toml and .pytest.toml are read by pytest 9 or newer')
     root = local_repo
     _, _ = setup_tests(root, '', f'{PYTHON} -m pytest -q')
     body = '[pytest]\npython_files = ["check_*.py"]\n' if config.endswith('.toml') else '[pytest]\npython_files = check_*.py\n'
