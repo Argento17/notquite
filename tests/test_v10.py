@@ -31,7 +31,7 @@ def _power_repo(root, weaken):
     if weaken == 'return':
         probe.write_text(body.replace('def test_power():\n', 'def test_power():\n    return\n', 1))
     else:
-        probe.write_text(body + '\ndef test_power():\n    assert True\n')
+        probe.write_text(body + '\ndef test_power():\n    assert 1 == 1\n')
     commit_all(root)
     return base
 

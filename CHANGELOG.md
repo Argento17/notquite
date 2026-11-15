@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.14.0 (unreleased)
+
+- Add `done --refactor` for unchanged test files passing on merge-base and current
+  code. Record the optional declaration and show it to the pull-request reviewer.
+- Have `done --needs-review` write DONE with an optional pending review receipt.
+  Hooks note it; the pull request needs a task label or an approving review;
+  main accepts it after merge. `show` says when it is waiting for review.
+- Refuse new or changed Python test functions with no assertions or only
+  constant-true assertions, including tests whose only base failure is an import.
+- Accept a new task definition without a label when its test is proven to fail
+  on merge-base code and pass now, with no assertion-free functions found.
+- Add `new --code-paths`; ask agents to set scope and name changed code when a
+  task omits it.
+- Label base-branch test output, keep notes and receipts unchanged on refused
+  `done` runs, give useful zero-pass advice, and count distinct tasks in notes.
+  Explain fresh-clone setup and include the completion commit in the quick start.
+- Preserve existing task files and receipts without migration. New receipt
+  members are optional. Update the docs and version to 0.14.0.
+
 ## 0.13.0 (15 Nov 2026)
 
 - Refuse DONE when a run reports zero passed tests, without extra flags.

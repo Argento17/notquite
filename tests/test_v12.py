@@ -37,19 +37,18 @@ def test_review_refuses_by_default_but_warn_is_optional(local_repo):
     assert accepted.returncode == 0, accepted.stdout
 
 
-def test_needs_review_records_evidence_and_leaves_in_progress(local_repo):
+def test_needs_review_records_evidence_and_done(local_repo):
     root = local_repo
     base = reviewed_task(root)
     (root / 'test_app.py').write_text('assert True\n')
     commit_all(root)
     output = ok(root, 'done', '--task', 'TASK-1', '--needs-review')
-    assert store.record(root, 'TASK-1')['status'] == 'IN_PROGRESS', output
+    assert store.record(root, 'TASK-1')['status'] == 'DONE', output
     note = 'pending review: the pull request needs workorder-allow:TASK-1'
     assert note in output
-    assert note in (root / 'tasks/TASK-1.md').read_text()
+    assert store.entries(root, 'TASK-1')[-1]['pending_review'] is True
     assert [item['kind'] for item in store.entries(root, 'TASK-1')] == ['implemented', 'test']
-    # The reviewed PR carries the claim; the label accepts its changed tests.
-    store.set_task_field(root, 'TASK-1', 'status', 'DONE')
+    # The command writes the claim; the label accepts its changed tests.
     refused = cli(root, 'check', '--base', base, '--run-tests')
     assert refused.returncode == 1
     ok(root, 'check', '--base', base, '--run-tests', '--allow', 'TASK-1')
@@ -359,7 +358,8 @@ def test_needs_review_always_keeps_pending_status(local_repo, target):
     if target:
         git(root, 'update-ref', 'refs/remotes/origin/main', base)
     output = ok(root, 'done', '--task', 'TASK-1', '--no-code-change', '--needs-review')
-    assert store.record(root, 'TASK-1')['status'] == 'IN_PROGRESS', output
+    assert store.record(root, 'TASK-1')['status'] == 'DONE', output
+    assert store.entries(root, 'TASK-1')[-1]['pending_review'] is True
     assert 'pending review: the pull request needs workorder-allow:TASK-1' in output
 
 

@@ -102,7 +102,7 @@ def test_approval_names_accepted_findings(local_repo):
     (root / 'tests/test_calc.py').write_text('def test_calc():\n    assert 1 == 1\n')
     base = commit_all(root)
     fill_sections(task(root, 'TASK-3', ships='none', test=store.join_command([PYTHON, 'tests/test_calc.py'])))
-    (root / 'tests/test_calc.py').write_text('def test_calc():\n    assert True\n')
+    (root / 'tests/test_calc.py').write_text('def test_calc():\n    assert 2 == 2\n')
     commit_all(root)
     store.receipt(root, 'TASK-3', 'implemented')
     store.receipt(root, 'TASK-3', 'test', [PYTHON, 'tests/test_calc.py'])
@@ -110,7 +110,7 @@ def test_approval_names_accepted_findings(local_repo):
     output = ok(root, 'check', '--base', base, '--allow', 'TASK-3,tests,no-task', '--approving-review')
     assert 'accepted by an approving review: TASK-3 (new task), tests/test_calc.py (changed lines)' in output
     pending = ok(root, 'done', '--task', 'TASK-3', '--needs-review', '--no-code-change')
-    assert 'pending review: the pull request needs workorder-allow:TASK-3 (or an approving review)' in pending
+    assert 'pending review: the pull request needs workorder-allow:TASK-3 or an approving review' in pending
 
 
 def test_approval_cannot_accept_current_test_failure(local_repo):

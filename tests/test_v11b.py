@@ -28,8 +28,10 @@ def test_explicit_evidence_runs_fresh_after_environment_change(local_repo, monke
     result = cli(root, *arguments)
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'AssertionError' in result.stdout + result.stderr
-    if action != 'check':
+    if action == 'receipt':
         assert store.entries(root, 'TASK-1')[-1]['exit_code'] == 1
+    elif action == 'done':
+        assert len(store.entries(root, 'TASK-1')) == 2
 
 
 def test_implicit_check_reuse_names_original_time(local_repo):
@@ -201,8 +203,10 @@ def test_pytest_failure_summary_overrides_forced_zero_exit(local_repo, action, f
             'check': ['check', '--run-tests', '--all-tests']}[action]
     result = cli(root, *args)
     assert result.returncode == 1, result.stdout + result.stderr
-    if action != 'check':
+    if action == 'receipt':
         assert not store.entries(root, 'TASK-1')[-1]['valid']
+    elif action == 'done':
+        assert len(store.entries(root, 'TASK-1')) == 2
 
 
 @pytest.mark.parametrize('path', ['app/testing.py', 'app/math_testing.py', 'app/testing/helper.py',
@@ -419,13 +423,13 @@ def test_test_review_refuses_by_default_and_warns_on_request(local_repo, change,
     (root / 'app.py').write_text('value = 1\n')
     (root / 'tests').mkdir()
     body = ('import pytest\nfrom app import value\n\ndef test_value():\n    assert value == 1\n'
-            '\ndef test_other():\n    assert True\n')
+            '\ndef test_other():\n    assert 1 == 1\n')
     probe = root / 'tests/test_app.py'
     probe.write_text(body.replace('value == 1', 'value == 2') if change == 'base_failing' else body)
     definition = fill_sections(task(root, ships='none', test=f'{PYTHON} -m pytest -q tests'))
     base = commit_all(root)
     if change == 'edit':
-        probe.write_text(body.replace('value == 1', 'True'))
+        probe.write_text(body.replace('value == 1', 'value > 0'))
     elif change in {'remove', 'fewer'}:
         probe.write_text(body.split('\ndef test_other():')[0])
     elif change == 'ref_failure':
@@ -468,7 +472,7 @@ def test_opt_in_file_warning_has_github_location_and_allow_silences(local_repo, 
     probe = local_repo / 'test_unowned.py'
     probe.write_text('def test_value():\n    assert True\n')
     base = commit_all(local_repo)
-    probe.write_text('def test_value():\n    assert 1\n')
+    probe.write_text('def test_value():\n    assert 1 == 1\n')
     monkeypatch.setenv('GITHUB_ACTIONS', 'true')
     if staged:
         git(local_repo, 'add', 'test_unowned.py')

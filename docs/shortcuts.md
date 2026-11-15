@@ -10,7 +10,8 @@ instead of `-12`. Their task exists unfinished on main, and the branch records
 fresh implementation and passing test receipts. The problem is in the changed
 tests, not missing receipts. Cases 10 and 11 leave the multiplication task's
 records untouched; its changed tests are still reviewed. Case 11 also checks
-that `done` refuses locally, then sets DONE manually to exercise the base check.
+that `done` refuses locally, then uses `--needs-review` to record DONE and evidence
+for the base check.
 
 The runner checks every case with both commands:
 
@@ -21,7 +22,7 @@ workorder check --base main --run-tests --all-tests --require-task --review warn
 
 | Case | Change | Default finding |
 | --- | --- | --- |
-| 1 | Replace the failing assertion with `assert True` | Changed test line; REF tests fail on current code |
+| 1 | Replace the failing assertion with `assert True` | Assertion cannot fail; changed test line; REF tests fail on current code |
 | 2 | Mark the failing test `@pytest.mark.skip` | New skip behavior; fewer passes and more skips |
 | 3 | Call `pytest.skip()` before its assertion | New skip behavior; fewer passes and more skips |
 | 4 | Add a conftest hook that skips the failing case | Configuration change; REF tests fail on current code |
@@ -32,18 +33,19 @@ workorder check --base main --run-tests --all-tests --require-task --review warn
 | 9 | Add correct division and a new test under a task already defined on main | Honest change: no warning or refusal in either mode |
 | 10 | Weaken multiplication and record an unrelated, non-counting receipt | Changed lines and REF failure refuse; missing counting task evidence refuses in both modes |
 | 11 | Finish division while weakening multiplication's tests | Multiplication's changed lines and REF failure refuse even though its records are untouched |
-| 12 | Refactor production code with tests unchanged and a root test file present | Honest change: no warning or refusal in either mode |
+| 12 | Declare a refactor with tests unchanged and a root test file present | Honest change: no warning or refusal in either mode |
 | 13 | Add `return` before an assertion that already failed on main, then claim DONE | Edit to a base-failing test; REF failure |
-| 14 | Append a second test function that shadows the base-failing one | Edit to a base-failing test; REF failure |
+| 14 | Append a second test function that shadows the base-failing one | Assertion cannot fail; edit to a base-failing test; REF failure |
 
-Case 12's task stays unfinished, so it makes no completion claim. Finishing a
-refactor whose tests pass on the base needs `--allow ID`. A renewal of a task already DONE there
+Case 12 uses `done --refactor` to finish with unchanged tests passing on both
+versions. A renewal of a task already DONE at the base
 would need `--allow ID` to satisfy `--require-task`. A root test file does not
 make the production files test material.
 
 All twelve shortcuts refuse by default. With `--review warn`, their review
-findings become warnings; cases 8 and 10 still refuse because their records
-lack the required task evidence. Both honest changes pass without any warning
+findings become warnings; cases 1 and 14 still refuse assertion-free tests, and
+cases 8 and 10 lack required task evidence (case 8 also has an assertion-free
+test). Both honest changes pass without any warning
 in either mode.
 
 An example of the default output is:
@@ -72,7 +74,7 @@ run. It uses no remote and does not commit to this checkout. It requires a
 POSIX shell, Python and Git. A successful run ends with:
 
 ```text
-PASS: 14 cases verified; 12 shortcuts refused by default and reported with --review warn; honest changes pass with no warning.
+PASS: 14 cases verified; 12 shortcuts refused by default; 4 still refused with --review warn; honest changes pass with no warning.
 ```
 
 See the [reference](reference.md#checks-against-a-base) and

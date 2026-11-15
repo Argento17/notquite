@@ -69,7 +69,7 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
     pin = shlex.quote(bootstrap.workorder_install())
     generated = snapshot[3].decode()
     assert pin in generated
-    assert generated.strip().replace(pin, 'workorder==0.13.0') in reference.replace(
+    assert generated.strip().replace(pin, 'workorder==0.14.0') in reference.replace(
         example_dependencies, placeholder)
 
 
@@ -484,7 +484,7 @@ def test_strict_pytest_default_discovery_protects_added_tests(local_repo):
     task(root, ships='none', test=f'{PYTHON} -m pytest')
     base = commit_all(root)
     store.add_note(root, "TASK-1", "Working on these tests")
-    (root / 'test_new.py').write_text('def test_new(): assert True\n')
+    (root / 'test_new.py').write_text('def test_new(): assert 1 == 1\n')
     commit_all(root)
     result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
     # A pathless pytest command does not own a newly added test file.
@@ -515,7 +515,7 @@ def test_acceptance_summary_counts_only_supported_contractless_claims(local_repo
 def test_docs_state_review_rights_and_opt_in_policies():
     text = (PACKAGE / 'docs/reference.md').read_text()
     for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
-                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.13.0'):
+                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.14.0'):
         assert phrase in text
     readme = (PACKAGE / 'README.md').read_text()
     for target in ('docs/reference.md', 'docs/guarantees.md', 'docs/shortcuts.md'):
@@ -555,7 +555,7 @@ def test_strict_pytest_configuration_keeps_default_discovery(local_repo, config,
                                else '[pytest]\npython_files = test_*.py check_*.py\n')
     task(root, ships='none', test=f'{PYTHON} -m pytest {option}')
     probe = root / filename
-    probe.write_text('def test_app(): assert True\n')
+    probe.write_text('def test_app(): assert 1 == 1\n')
     base = commit_all(root)
     store.add_note(root, "TASK-1", "Working on these tests")
     probe.write_text('import sys; sys.exit(0)\n' + probe.read_text())
@@ -566,13 +566,14 @@ def test_strict_pytest_configuration_keeps_default_discovery(local_repo, config,
     ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'tests')
 
 
-def test_done_failed_test_keeps_handover_note(local_repo):
+def test_done_failed_test_keeps_record_unchanged(local_repo):
     root = local_repo
     fill_sections(task(root, status='BLOCKED', ships='none', test=f'{PYTHON} -c "raise SystemExit(3)"'))
     result = cli(root, 'done', '--task', 'TASK-1', '--note', 'Test failed; investigate next session')
     assert result.returncode == 1 and 'Missing:' in result.stdout
     assert store.record(root, 'TASK-1')['status'] == 'BLOCKED'
-    assert ': Test failed; investigate next session' in (root / 'tasks/TASK-1.md').read_text()
+    assert ': Test failed; investigate next session' not in (root / 'tasks/TASK-1.md').read_text()
+    assert not store.entries(root, 'TASK-1')
 
 
 @pytest.mark.parametrize('config,option', [('pyproject.toml', ''), ('custom.ini', '-c custom.ini'),
@@ -583,7 +584,7 @@ def test_strict_pytest_custom_config_and_globs(local_repo, config, option):
                                if config.endswith('toml') else '[pytest]\npython_files = check_[ab].py\n')
     task(root, ships='none', test=f'{PYTHON} -m pytest {option}')
     probe = root / 'check_a.py'
-    probe.write_text('def test_app(): assert True\n')
+    probe.write_text('def test_app(): assert 1 == 1\n')
     base = commit_all(root)
     store.add_note(root, "TASK-1", "Working on these tests")
     probe.write_text('import sys; sys.exit(0)\n' + probe.read_text())

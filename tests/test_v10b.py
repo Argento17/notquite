@@ -151,9 +151,8 @@ def test_needs_review_records_a_deliberate_test_change(local_repo, monkeypatch, 
     accepted = cli(root, 'done', '--task', 'TASK-6', '--needs-review')
     output = accepted.stdout + accepted.stderr
     assert accepted.returncode == 0, output
-    assert store.record(root, 'TASK-6')['status'] == 'IN_PROGRESS'
+    assert store.record(root, 'TASK-6')['status'] == 'DONE'
     assert 'pending review: the pull request needs workorder-allow:TASK-6' in output
-    store.set_task_field(root, 'TASK-6', 'status', 'DONE')  # Claim in the reviewed PR.
     git(root, 'add', 'tasks', '.workorder')
     hook = real_git(root, 'commit', '-qm', 'Record the review')
     hook_output = hook.stdout + hook.stderr

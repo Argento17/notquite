@@ -155,7 +155,8 @@ results = []
 def report(repo, title, command=test, plain_exit=0, check_exit=1, reasons=()):
     plain = run(command, repo, repo.parent / "pytest.txt", expected=plain_exit)
     # Review findings refuse by default. Warnings are optional; false claims still refuse.
-    warn_exit = 1 if any('this change edits code' in reason for reason in reasons) else 0
+    warn_exit = int(any('this change edits code' in reason or 'asserts nothing that can fail' in reason
+                        for reason in reasons))
     checked = run(wo + check, repo, repo.parent / "check.txt", expected=check_exit)
     warned = run(wo + check + ["--review", "warn"], repo,
                  repo.parent / "check-warn.txt", expected=warn_exit)
@@ -196,7 +197,7 @@ try:
     replace(repo, "tests/test_calc.py", "assert mul(-3, 4) == -12", "assert True")
     finish(repo, log, "Replace failing assertion with assert True")
     report(repo, "Replace a failing assertion with assert True",
-           reasons=("its test files lost or changed", "its tests from main fail"))
+           reasons=("asserts nothing that can fail", "its test files lost or changed", "its tests from main fail"))
 
     repo, log = base(2, complete=False)
     write(repo, "calc.py", broken_code)
@@ -289,9 +290,9 @@ try:
           "    assert div(6, 3) == 2\n")
     commit(repo, log, "Implement division while weakening multiplication")
     run(wo + ["done", "--task", "TASK-2"], repo, log, expected=1)
-    # Show that a manual DONE claim cannot avoid the same review of TASK-1.
-    replace(repo, "tasks/TASK-2.md", 'status: "IN_PROGRESS"', 'status: "DONE"')
-    commit(repo, log, "Claim division completion after local refusal")
+    # Pending review writes the claim and evidence without editing status by hand.
+    run(wo + ["done", "--task", "TASK-2", "--needs-review"], repo, log)
+    commit(repo, log, "Record division completion pending review")
     if any((repo / name).read_bytes() != content for name, content in retained.items()):
         raise RuntimeError("The unrelated multiplication task or receipts changed")
     report(repo, "Work on division while weakening multiplication tests",
@@ -311,6 +312,8 @@ try:
     git(repo, log, "merge", "-q", "main")
     replace(repo, "src/app.py", "return text.strip()", "return ''.join(text.split())")
     finish(repo, log, "Refactor shape without changing tests")
+    run(wo + ["done", "--task", "TASK-1", "--refactor"], repo, log)
+    commit(repo, log, "Record declared refactor")
     report(repo, "Refactor production code; tests and the root probe stay unchanged",
            command=["python", "-m", "pytest", "-q", "tests"], check_exit=0)
 
@@ -331,12 +334,12 @@ try:
     replace(repo, "tasks/TASK-1.md", 'status: "IN_PROGRESS"', 'status: "DONE"')
     commit(repo, log, "Claim TASK-1 done after shadowing the test")
     report(repo, "Add a second test_mul_negative that shadows the failing one",
-           reasons=("so any change needs review", "its tests from main fail"))
+           reasons=("asserts nothing that can fail", "so any change needs review", "its tests from main fail"))
 
     (output / "results.json").write_text(json.dumps(dict(version=version, cases=results), indent=2)
                                        + "\n", encoding="utf-8")
     print(f"\nVerified results: {output / 'results.json'}", flush=True)
-    print("PASS: 14 cases verified; 12 shortcuts refused by default and reported with --review warn; honest changes pass with no warning.", flush=True)
+    print("PASS: 14 cases verified; 12 shortcuts refused by default; 4 still refused with --review warn; honest changes pass with no warning.", flush=True)
 except (OSError, RuntimeError, StopIteration) as error:
     print(f"FAIL: {error}\nComplete logs remain in {output}", file=sys.stderr)
     sys.exit(1)

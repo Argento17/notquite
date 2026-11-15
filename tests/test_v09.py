@@ -61,9 +61,9 @@ def test_unowned_test_additions_pass_without_acceptance(local_repo):
     root = local_repo
     (root / 'tests').mkdir()
     probe = root / 'tests/test_one.py'
-    probe.write_text('def test_one():\n    assert True\n')
+    probe.write_text('def test_one():\n    assert 1 == 1\n')
     base = commit_all(root)
-    probe.write_text(probe.read_text() + '\ndef test_two():\n    assert True\n')
+    probe.write_text(probe.read_text() + '\ndef test_two():\n    assert 1 == 1\n')
     assert cli(root, 'check', '--base', base).returncode == 0
 
 

@@ -14,9 +14,9 @@ from . import store as s
 AGENT_BLOCK = r"""## Tasks
 - Start every session from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed, then run `workorder renew --task <id>` if the tested code changed. Use the repository's default branch name if it is not main. Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
 - Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
-- Land the task on main before starting its code, then work on a branch and open a pull request. If task and code must share a pull request, ask a reviewer to accept the new definition with `workorder-allow:<id>` or an approving review.
+- When creating a task, use `workorder new --code-paths <files or folders>` to set its code scope. Work on a branch and open a pull request. Land the task on main first, or include it with code whose test fails on the merge-base code and passes now; that new task needs no label. Otherwise a reviewer must accept the new definition with `workorder-allow:<id>` or an approving review.
 - After committing code and confirming every Acceptance item is met, fetch origin before `done` when there is an origin remote: `git fetch origin`. Then run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test on current and target code, checks affected finished tasks, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
-- If `done` refuses because you changed tests on purpose, rerun with `--needs-review`. It records evidence and leaves IN_PROGRESS with a pending review note. Set DONE in the reviewed pull request when Acceptance is met; test changes are refused unless a reviewer adds `workorder-allow:<id>` or approves the pull request. Report the pending review to the user.
+- For a refactor with unchanged test files that pass before and after, use `done --task <id> --refactor`. For intentional test changes, use `done --task <id> --needs-review`. It writes DONE with a pending review receipt; the pull request still needs `workorder-allow:<id>` or an approving review. Report the pending review to the user. A refused `done` writes no Progress note or receipts; use `workorder note` to leave a handover while fixing it.
 - Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
 - After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
 """
@@ -187,7 +187,10 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
     if not hook_exists and any(
             AGENT_BLOCK.strip() in s.git(root, 'show', f'HEAD:{name}', required=False).stdout
             for name in ('AGENTS.md', 'CLAUDE.md')):
-        print('Hooks are not cloned; run workorder init in every clone.')
+        if check:
+            print('Hooks are not cloned; run workorder init in every clone.')
+        else:
+            print('Hooks are not cloned; setting up the pre-commit hook in this clone.')
     missing = False
     for name in ('AGENTS.md', 'CLAUDE.md'):
         path = s.local_path(root, name)
