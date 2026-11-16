@@ -6,8 +6,8 @@ Labels below must come from someone other than the pull request author. An appro
 
 <!-- refusal-family records -->
 ## Record, configuration or dependency cannot be read
-**Meaning:** A malformed task, missing field, invalid value/path/command, unreadable configuration or receipt, missing dependency, dependency cycle, or contradictory `blocks` prevents checking the record. A missing Git ref or merge base also prevents a usable check.
-**Clear:** Correct the named file or value, restore missing dependencies, remove cycles, or fetch the target ref; rerun `workorder check ID` and the original check. Labels do not repair malformed records. Set wrappers' `test_paths` to the actual test files; a changed definition needs the acceptance below. `init --check` reports both pre-commit and pre-merge-commit; use `init --force` to preserve and chain a different hook. Build and cache files such as `__pycache__/` and `*.egg-info/` belong in .gitignore.
+**Meaning:** A malformed task, missing field, invalid value/path/command, unreadable configuration or receipt, missing dependency, dependency cycle, or contradictory `blocks` prevents checking the record. A missing Git ref or merge base, or an incomplete/unreadable Git blob, also prevents a usable check.
+**Clear:** Correct the named file or value, restore missing dependencies, remove cycles, or fetch the target ref; rerun `workorder check ID` and the original check. If Git cannot read a blob, restore the missing/corrupt Git data and retry; a cached read never supplies missing evidence. Labels do not repair malformed records. Set wrappers' `test_paths` to the actual test files; a changed definition needs the acceptance below. `init --check` reports both pre-commit and pre-merge-commit; use `init --force` to preserve and chain a different hook. Build and cache files such as `__pycache__/` and `*.egg-info/` belong in .gitignore.
 
 <!-- refusal-family evidence -->
 ## Finished claim lacks evidence
@@ -94,16 +94,17 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 
 <!-- refusal-inventory workorder/__init__.py c98fe59586516c5a002b3bd50cc92e0e258a1dd45a0f0eb5ed923b719d699afb records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
-<!-- refusal-inventory workorder/bootstrap.py 25131968fbbd8e21fe4bd06a97e2ce77a4f27d524b9bdbea3a117d38e199bc9c records,workflow,project-test -->
-<!-- refusal-inventory workorder/cli.py 810489a7c177f86f8526a54e96ad3c3be9626d56f917f97a9cad32a87239f1ac records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
-<!-- refusal-inventory workorder/gate.py cf6b5c77e135d1e7df3a78967f62c500a5defa44963895119101089f24cdb6e9 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
+<!-- refusal-inventory workorder/bootstrap.py 25131968fbbd8e21fe4bd06a97e2ce77a4f27d524b9bdbea3a117d38e199bc9c project-test,records,workflow -->
+<!-- refusal-inventory workorder/cli.py 810489a7c177f86f8526a54e96ad3c3be9626d56f917f97a9cad32a87239f1ac current-tests,definitions,evidence,pending,project-test,records,renewal,test-first,weak-tests -->
+<!-- refusal-inventory workorder/gate.py 8f940dc0c71331384577081aff2076e98687f9cd049e2cbf8ff28f85b0ad55e2 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 4c890e78327bd094ac6f84882d7e42640cb88130f5232d92f7f23bbea6502a79 evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
-<!-- refusal-inventory workorder/project_tests.py 61889b0b64e84644085569b9d8e1b565711dd34b5af40ada01792ae8aaab4f82 project-test,records -->
+<!-- refusal-inventory workorder/project_tests.py 09b2fd31037cb19f6db1f22dc22c15a36beaa8defe66df3cdda66ac1dc47b998 project-test,records -->
 <!-- refusal-inventory workorder/pytest_selection.py bcff8a23918c0320f921d46b229359bc41237be3055be093a6e746860395d35b weak-tests,imports -->
 <!-- refusal-inventory workorder/python_imports.py 5357504703660ec0af3dc0dc1a46317d3bc1aaf3f4b31578be0cd2b50d0f21a6 imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 08773fe5444886b3a76a4d65bd6d15dd420ed4c59e4e808fabf2174558e15cb8 code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py 48ca06f9aba0c40eadf461c8a94ec1e1b5fec4688fc4f3d7b98bd5124491da47 records,evidence,current-tests,removal -->
+<!-- refusal-inventory workorder/store.py c1929023d062f852501a75e0fa362139372d7304273507f20438aad1987a95bc records,evidence,current-tests,removal -->
+<!-- refusal-inventory workorder/git_reads.py d2cec454d44e3bc992ef23885f74981ac2fec658f876f04d2449b7b1c6f11e88 records,evidence -->

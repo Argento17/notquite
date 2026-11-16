@@ -1931,8 +1931,8 @@ def _run_test(root, command, timeout, counts, *, quiet=False, cache_root=None, l
         return 127, str(error)  # Windows and POSIX use different error text for the same missing tool.
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         return f'not started: {getattr(error, "strerror", None) or str(error)}', ''
-    finally:
-        s.invalidate_reads()  # a declared command may have changed files or refs
+    # cached_test/run_test invalidate at actual execution boundaries. A reused
+    # test result did not run a command and must not evict fresh Git reads.
 
 
 def test_result(run, counts, *, quiet=False, failures_only=False):
@@ -2035,8 +2035,7 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
 
 def _test_bytes(root, path, base=None, staged=False):
     if base is not None:
-        result = subprocess.run(['git', 'show', f'{base}:{path}'], cwd=root, capture_output=True, timeout=30)
-        return result.stdout if result.returncode == 0 else None
+        return s.blob_bytes(root, f'{base}:{path}')
     try:
         return s.read_bytes(root, path, staged)
     except (OSError, s.Refused):

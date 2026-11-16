@@ -214,6 +214,7 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
     print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
 
 
+@s.read_session()
 @s.test_output_session()
 @s.completion_transaction
 def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_change=False, refactor=False,
@@ -422,6 +423,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         return 1
 
 
+@s.read_session()
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     command = []
