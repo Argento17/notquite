@@ -14,6 +14,7 @@ Labels below must come from someone other than the pull request author. An appro
 **Meaning:** `NOT DONE`, `owes`, missing commits, stale receipts, a receipt ledger without a task, or contract evidence debt means DONE/CLOSED is unsupported. Contracts may require real artifacts; mock output cannot satisfy that requirement. Human dependencies and required merge/deploy/live evidence still matter.
 **Clear:** Finish the missing work and record the requested receipt. For changed committed code, run `workorder renew --task ID` and commit its receipts. Use the named deployment/read-back commands where required. If unfinished, return the task to IN_PROGRESS with its failed receipt. No label supplies evidence or a missing dependency.
 Protected test files retain their staleness checks, including doctests in Python docstrings and tests under docs/. Changing a task's test paths does not rewrite its old receipt's syntax map or by itself change another task's recorded code.
+Claims made on different code can report `is being marked DONE` before commit or `was marked DONE` afterward. Staged checks use the candidate's code and pending merge parents. A local target advances with the commit; `origin/main` does not. A squash message supplies no evidence. If refused, renew on the branch before pushing.
 
 <!-- refusal-family current-tests -->
 ## A task's current test fails or runs nothing
@@ -95,7 +96,7 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
 <!-- refusal-inventory workorder/bootstrap.py 25131968fbbd8e21fe4bd06a97e2ce77a4f27d524b9bdbea3a117d38e199bc9c records,workflow,project-test -->
 <!-- refusal-inventory workorder/cli.py 810489a7c177f86f8526a54e96ad3c3be9626d56f917f97a9cad32a87239f1ac records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
-<!-- refusal-inventory workorder/gate.py 91119e080ac999e078e02b39b35953ef467f5bc8009dd9c088ea1746fdec45dd code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
+<!-- refusal-inventory workorder/gate.py cf6b5c77e135d1e7df3a78967f62c500a5defa44963895119101089f24cdb6e9 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 4c890e78327bd094ac6f84882d7e42640cb88130f5232d92f7f23bbea6502a79 evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
 <!-- refusal-inventory workorder/project_tests.py 61889b0b64e84644085569b9d8e1b565711dd34b5af40ada01792ae8aaab4f82 project-test,records -->

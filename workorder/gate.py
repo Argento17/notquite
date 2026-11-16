@@ -603,21 +603,23 @@ def stale_claim(root, record, staged=False, base=None):
 
 def claim_matches(root, record, implemented, claim, tree=None, staged=False, receipt_rev=None):
     tree = tree or claim
-    # Squashing parallel branches adds other tasks' code beside this task's files.
-    # Git leaves SQUASH_MSG for the pending commit; check its index, never the worktree.
-    squash = root / s.git(root, 'rev-parse', '--git-path', 'SQUASH_MSG').stdout.strip() if staged else None
-    if staged and squash.is_file() and implemented.get('implementation_paths'):
-        before = {entry['hash'] for entry in s.entries(root, record['id'], rev='HEAD')}
-        if implemented['hash'] not in before:
-            contents = s.code_tree(root, tree)
-            if recorded_paths_match(root, contents, implemented):
-                return True
     # This concerns the claim's history, even when the task ships nothing.
     target = merge_target(root, record)
     merged = merge_match(root, implemented, target[1]) if target else None
     if merged and s.contains(root, merged["commit"], claim):
         return unchanged_implementation_paths(root, implemented, merged, tree, staged, receipt_rev)
-    if target and recorded_branch_code(root, implemented, target[1], claim, tree):
+    # A commit advances its checked-out local target, but never origin/main.
+    # Compare against that eventual target tree, independently of SQUASH_MSG.
+    target_tree = None
+    parents = []
+    if staged and target:
+        if target[0] == s.git(root, 'symbolic-ref', '-q', 'HEAD', required=False).stdout.strip():
+            target_tree = tree
+        merge_head = root / s.git(root, 'rev-parse', '--git-path', 'MERGE_HEAD').stdout.strip()
+        if merge_head.is_file():
+            parents = merge_head.read_text(encoding='ascii').split()
+    if target and recorded_branch_code(root, implemented, target[1], claim, tree,
+                                       base_tree=target_tree, parents=parents):
         return True
     if s.code_digest(root, tree) == implemented["code"] or same_source_code(root, implemented['commit'], tree):
         return True
@@ -3464,12 +3466,13 @@ def same_source_code(root, before, after):
     return source_tree(root, before, protected) == source_tree(root, after, protected)
 
 
-def recorded_branch_code(root, implemented, base, commit, tree=None):
+def recorded_branch_code(root, implemented, base, commit, tree=None, *, base_tree=None, parents=()):
     """A replay keeps recorded bytes and modes; everything else must be target code."""
     paths = implemented.get('implementation_paths')
-    if not paths or not s.contains(root, base, commit):
+    # The staged tree will also descend from its pending merge parents.
+    if not paths or not any(s.contains(root, base, parent) for parent in (commit, *parents)):
         return False
-    protected = test_material(root, base) | test_material(root, tree or commit)
+    protected = test_material(root, base_tree or base) | test_material(root, tree or commit)
     if s.has_commit(root, implemented['commit']):
         protected = protected | test_material(root, implemented['commit'])
     recorded = source.entries(root, paths, implemented.get('implementation_syntax'),
@@ -3477,7 +3480,7 @@ def recorded_branch_code(root, implemented, base, commit, tree=None):
     if not recorded:
         return False
     current = source_tree(root, tree or commit, protected)
-    target = source_tree(root, base, protected)
+    target = source_tree(root, base_tree or base, protected)
     return (all(current.get(path) == entry for path, entry in recorded.items())
             and all(current.get(path) == target.get(path)
                     for path in (current.keys() | target.keys()) - recorded.keys()))

@@ -2,6 +2,13 @@
 
 ## 0.17.0 (unreleased)
 
+- Give staged completion claims the same code comparison as their committed
+  result, including a local target advancing with the commit and pending merge
+  parents. A squash message no longer bypasses the comparison against the
+  target's other code.
+- Give process-startup-dependent timeout tests longer deadlines and longer-lived
+  child/base processes, while still checking process-group cleanup and a passing
+  current-code run before the base timeout.
 - Treat a task's declared code paths as code even inside its test folder, keeping
   them out of current-test overlays and including them in stub comparisons.
   Neighboring test helpers keep their existing treatment.
