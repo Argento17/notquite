@@ -16,7 +16,7 @@ from test_v07b_setup import local_claim, refuse_network, workflow_commands
 
 def local_change(root, kind):
     (root / 'app.py').write_text('value = 1\n')
-    body = 'from app import value\ndef test_one():\n    assert value == 1\n\ndef test_two():\n    assert 2 == 2\n'
+    body = 'from app import value\ndef test_one():\n    assert value == 1\n\ndef test_two():\n    assert int(2) == 2\n'
     probe, _ = setup_tests(root, body)
     path = root / 'tasks/TASK-1.md'
     path.write_text(path.read_text() + '\n## Scope\n\nCalculate.\n\n## Acceptance\n\n- Correct result.\n')
@@ -33,7 +33,7 @@ def local_change(root, kind):
     elif kind == 'config':
         (root / 'pytest.ini').write_text('[pytest]\naddopts = -q\n')
     else:
-        probe.write_text(body.replace('assert 2 == 2', 'assert 1 == 1'))
+        probe.write_text(body.replace('assert int(2) == 2', 'assert int(1) == 1'))
     commit_all(root)
     return path, base
 
@@ -164,9 +164,9 @@ def test_import_outside_test_roots_does_not_make_a_package_a_test_file(local_rep
 def test_wrapper_note_and_script_protection(local_repo, command, script):
     root = local_repo
     task(root, ships='none', test=command)
-    (root / script).write_text('# before\n')
+    (root / script).write_text('value = 1\n' if script.endswith('.py') else '# before\n')
     base = commit_all(root)
-    (root / script).write_text('# after\n')
+    (root / script).write_text('value = 2\n' if script.endswith('.py') else '# after\n')
     store.add_note(root, 'TASK-1', 'Working')
     result = cli(root, 'check', '--base', base)
     assert result.returncode == 1 and script in result.stdout
@@ -275,15 +275,15 @@ def test_check_groups_notes_and_verbose_expands_them(local_repo, verbose):
 
 def test_done_explains_passing_but_void_run(local_repo):
     root = local_repo
-    (root / 'runner.py').write_text('from pathlib import Path\nPath("__pycache__").mkdir(exist_ok=True)\n'
-                                  'Path("__pycache__/generated.pyc").write_bytes(b"cache")\n')
+    (root / 'runner.py').write_text('from pathlib import Path\nPath("generated").mkdir(exist_ok=True)\n'
+                                  'Path("generated/code.py").write_bytes(b"value = 1")\n')
     path = task(root, ships='none', test=f'{PYTHON} runner.py')
     path.write_text(path.read_text() + '\n## Scope\n\nCalculate.\n\n## Acceptance\n\n- Correct.\n')
     commit_all(root)
     result = cli(root, 'done', '--no-code-change', '--task', 'TASK-1')
     assert result.returncode == 1
     assert 'files changed while the command ran' in result.stdout
-    assert '__pycache__' in result.stdout and '.gitignore' in result.stdout
+    assert 'generated/code.py' in result.stdout and '.gitignore' in result.stdout
     assert store.record(root, 'TASK-1')['status'] == 'IN_PROGRESS'
 
 

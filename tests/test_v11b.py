@@ -128,7 +128,7 @@ def test_shared_test_edit_has_one_problem_and_any_owner_can_accept(local_repo):
     root = local_repo
     (root / 'tests').mkdir()
     probe = root / 'tests/test_f7.py'
-    probe.write_text('def test_value():\n    assert 7 > 0\n')
+    probe.write_text('def test_value():\n    assert int(7) > 0\n')
     command = [PYTHON, '-m', 'pytest', '-q', 'tests']
     for n in range(1, 41):
         task(root, f'TASK-{n}', ships='none', test=store.join_command(command))
@@ -139,7 +139,7 @@ def test_shared_test_edit_has_one_problem_and_any_owner_can_accept(local_repo):
                                            command=command, exit_code=0, valid=True))
         store.set_task_field(root, f'TASK-{n}', 'status', 'DONE')
     base = commit_all(root)
-    probe.write_text('def test_value():\n    assert 7 >= 0\n')
+    probe.write_text('def test_value():\n    assert int(7) >= 0\n')
     result = cli(root, 'check', '--base', base)
     lines = [line for line in result.stdout.splitlines() if 'lost or changed' in line]
     assert len(lines) == 1, result.stdout
@@ -423,7 +423,7 @@ def test_test_review_refuses_by_default_and_warns_on_request(local_repo, change,
     (root / 'app.py').write_text('value = 1\n')
     (root / 'tests').mkdir()
     body = ('import pytest\nfrom app import value\n\ndef test_value():\n    assert value == 1\n'
-            '\ndef test_other():\n    assert 1 == 1\n')
+            '\ndef test_other():\n    assert int(1) == 1\n')
     probe = root / 'tests/test_app.py'
     probe.write_text(body.replace('value == 1', 'value == 2') if change == 'base_failing' else body)
     definition = fill_sections(task(root, ships='none', test=f'{PYTHON} -m pytest -q tests'))
@@ -472,7 +472,7 @@ def test_opt_in_file_warning_has_github_location_and_allow_silences(local_repo, 
     probe = local_repo / 'test_unowned.py'
     probe.write_text('def test_value():\n    assert True\n')
     base = commit_all(local_repo)
-    probe.write_text('def test_value():\n    assert 1 == 1\n')
+    probe.write_text('def test_value():\n    assert int(1) == 1\n')
     monkeypatch.setenv('GITHUB_ACTIONS', 'true')
     if staged:
         git(local_repo, 'add', 'test_unowned.py')

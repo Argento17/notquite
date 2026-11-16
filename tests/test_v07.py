@@ -112,12 +112,12 @@ def test_agent_block_updates_origin_explicitly():
     assert 'if the repository has an origin remote, run `git fetch origin`' in bootstrap.AGENT_BLOCK
     assert 'On main, update with `git pull --rebase origin main`' in bootstrap.AGENT_BLOCK
     assert ('On a feature branch, merge or rebase main as needed, then run '
-            '`workorder renew --task <id>` if the tested code changed') in bootstrap.AGENT_BLOCK
+            '`workorder renew --task <id>` if the task\'s own code or test files changed') in bootstrap.AGENT_BLOCK
     assert '`git pull`' not in bootstrap.AGENT_BLOCK
     assert bootstrap.AGENT_BLOCK.strip() in (PACKAGE / 'README.md').read_text()
     readme = ' '.join((PACKAGE / 'README.md').read_text().split())
     assert len((PACKAGE / 'README.md').read_text().splitlines()) <= 250
-    assert 'If merged code differs, run `workorder renew --task <id>`.' in readme
+    assert "If the task's own code or test files changed, run `workorder renew --task <id>`." in readme
 
 
 @pytest.mark.parametrize('check', [False, True])
@@ -160,7 +160,7 @@ def test_conflicted_rebase_show_and_check_keep_same_evidence_verdict(local_repo,
     before = {p: p.read_bytes() for p in (root / '.workorder').rglob('*.json')}
     checked = cli(root, 'check', 'TASK-1')
     shown = ok(root, 'show', '--task', 'TASK-1')
-    expected = 'CLOSED' if ships == 'none' else 'DONE'
+    expected = 'claim not supported on this code' if ships == 'none' else 'DONE'
     assert checked.returncode == 1 and f'Evidence: {expected}' in checked.stdout
     assert f'Claimed:  DONE\n  Evidence: {expected}' in shown
     reason = 'the DONE claim is on code other than the tested code; run workorder renew --task TASK-1'
@@ -225,9 +225,9 @@ def test_skipped_only_rerun_does_not_also_say_passed(local_repo, all_tests):
 
 def test_release_versions_and_reference_pin():
     from workorder import __version__
-    assert __version__ == '0.14.0'
-    assert 'version = "0.14.0"' in (PACKAGE / 'pyproject.toml').read_text()
-    assert 'workorder==0.14.0' in (PACKAGE / 'docs/reference.md').read_text()
+    assert __version__ == '0.15.0'
+    assert 'version = "0.15.0"' in (PACKAGE / 'pyproject.toml').read_text()
+    assert 'workorder==0.15.0' in (PACKAGE / 'docs/reference.md').read_text()
 
 
 def test_init_workflow_uses_running_version(local_repo, monkeypatch):

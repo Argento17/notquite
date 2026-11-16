@@ -56,7 +56,7 @@ def test_done_reports_merge_debt_and_missing_clone_hook(local_repo):
     path.write_text(path.read_text().replace('ships: "none"', 'ships: "repo"'))
     commit_all(local_repo)
     unmerged_feature(local_repo)
-    output = ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
+    output = ok(local_repo, 'done', '--refactor', '--task', 'TASK-1')
     assert ('TASK-1 DONE: its declared test passed on this code; still owes: merge of the tested code') in output
     assert 'Warning: pre-commit hook is missing in this clone; run workorder init' in output
 

@@ -548,10 +548,11 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
     local = local_only or not has_origin(root)
     for _ in range(30):
         try:
-            refs = {} if local else remote_refs(root)
+            refs = (git(root, 'for-each-ref', '--format=%(refname)',
+                        NAMESPACE + 'ids/').stdout.splitlines() if local else remote_refs(root))
         except Refused as error:
             raise Refused(f"origin could not be reached ({error}); workorder new --local numbers the task"
-                          " from the task files without it") from None
+                          " from the task files and locally known reservations without it") from None
         stem = NAMESPACE + f"ids/{prefix}-"
         numbers = [int(ref[len(stem):]) for ref in refs
                    if ref.startswith(stem) and ref[len(stem):].isdigit()]
@@ -968,6 +969,10 @@ def verify_receipt(root, tid, value):
                 or not isinstance(item.get("command"), list) or not item["command"]
                 or any(not isinstance(a, str) for a in item["command"])):
             raise Refused(f"{tid}: command receipt needs its arguments, exit code and validity")
+    if 'no_code_change_base' in item:
+        if (item['kind'] != 'test' or item.get('no_code_change') is not True
+                or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', str(item['no_code_change_base']))):
+            raise Refused(f'{tid}: invalid no-code-change base')
     return {**item, "hash": checksum, "missing": not present}
 
 
@@ -1133,6 +1138,20 @@ def proposed_receipts(root, tid):
     return transaction[2] if transaction and transaction[:2] == (root, tid) else None
 
 
+def annotate_pending_review(root, tid, findings):
+    """Attach review details to the unpublished test receipt in a completion transaction."""
+    pending = proposed_receipts(root, tid)
+    if not pending or pending[-1]['kind'] != 'test' or not pending[-1].get('pending_review'):
+        raise Refused('pending findings need a proposed test receipt')
+    item = pending[-1]
+    item['pending_findings'] = [
+        {'message': str(line), 'label_only': '(or an approving review)' not in line}
+        for line in dict.fromkeys(findings)]
+    item.pop('hash')
+    item['hash'] = digest(packed(item).encode())
+    invalidate_reads()
+
+
 def completion_transaction(function):
     """Check proposed receipts in memory; publish them only with a supported DONE."""
     @wraps(function)
@@ -1269,6 +1288,12 @@ LEGACY_DIR = ".notquite/"
 CODE_PATHS = (".", ":(exclude)tasks", ":(exclude).workorder", ":(exclude).notquite")
 
 
+def generated_path(path):
+    """Build metadata and Python caches do not belong to a task's code scope."""
+    return (path.endswith('.pyc') or any(part in {'__pycache__', '.pytest_cache'}
+            or part.endswith(('.egg-info', '.dist-info')) for part in path.split('/')[:-1]))
+
+
 # Commits never change, so their fingerprints are worked out once per run.
 _DIGESTS = {}
 _PRESENT = {}
@@ -1380,7 +1405,9 @@ def index_code(root):
 
 def dirty_paths(root):
     """Uncommitted or untracked code files; task records and receipts do not count."""
-    status = git(root, "status", "--porcelain", "--untracked-files=all", "--", *CODE_PATHS).stdout
+    generated = [f':(exclude,glob)**/{pattern}' for pattern in
+                 ('*.egg-info/**', '*.dist-info/**', '__pycache__/**', '*.pyc', '.pytest_cache/**')]
+    status = git(root, "status", "--porcelain", "--untracked-files=all", "--", *CODE_PATHS, *generated).stdout
     return [line[3:] for line in status.splitlines()]
 
 
@@ -1410,34 +1437,41 @@ def test_timeout(record, override=None):
 
 def run_test(command, root, timeout=None, capture_output=True, *, isolated=False):
     """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
-    # Keep the ordinary subprocess path when there is no deadline. With a deadline,
-    # use a process group so child test runners cannot keep captured pipes open.
-    if timeout is None:
-        return subprocess.run(list(command), cwd=root, capture_output=capture_output,
-                              encoding="utf-8", errors="replace",
-                              env=copy_environment() if isolated else None)
-    with subprocess.Popen(list(command), cwd=root, stdout=subprocess.PIPE if capture_output else None,
-                          stderr=subprocess.PIPE if capture_output else None,
-                          encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
-                          env=copy_environment() if isolated else None) as process:
-        try:
-            output, errors = process.communicate(timeout=timeout)
-            return subprocess.CompletedProcess(command, process.returncode, output, errors)
-        except subprocess.TimeoutExpired:
-            if os.name != 'nt':
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            else:
-                process.kill()
-            output, errors = process.communicate()
-            message = f"test timed out after {timeout:g} seconds (exit 124)\n"
-            if capture_output:
-                errors = (errors or "") + message
-            else:
-                print(message, end='', file=sys.stderr, flush=True)
-            return subprocess.CompletedProcess(command, 124, output, errors)
+    from .python_imports import environment
+    # pytest parses this environment option with shlex even on Windows. Each
+    # subprocess owns its cache; it never becomes part of our result-cache key.
+    with tempfile.TemporaryDirectory(prefix="workorder-pytest-", ignore_cleanup_errors=True) as cache:
+        env = environment(root, copy_environment() if isolated else os.environ.copy())
+        env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "")
+                                 + " -o cache_dir=" + shlex.quote(cache))
+        # Keep the ordinary subprocess path when there is no deadline. With a deadline,
+        # use a process group so child test runners cannot keep captured pipes open.
+        if timeout is None:
+            return subprocess.run(list(command), cwd=root, capture_output=capture_output,
+                                  encoding="utf-8", errors="replace",
+                                  env=env)
+        with subprocess.Popen(list(command), cwd=root, stdout=subprocess.PIPE if capture_output else None,
+                              stderr=subprocess.PIPE if capture_output else None,
+                              encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
+                              env=env) as process:
+            try:
+                output, errors = process.communicate(timeout=timeout)
+                return subprocess.CompletedProcess(command, process.returncode, output, errors)
+            except subprocess.TimeoutExpired:
+                if os.name != 'nt':
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    process.kill()
+                output, errors = process.communicate()
+                message = f"test timed out after {timeout:g} seconds (exit 124)\n"
+                if capture_output:
+                    errors = (errors or "") + message
+                else:
+                    print(message, end='', file=sys.stderr, flush=True)
+                return subprocess.CompletedProcess(command, 124, output, errors)
 
 
 def _test_state(root, isolated=False):
@@ -1476,7 +1510,7 @@ def ci_environment():
 
 def test_cache_path(root, fingerprint, command, timeout):
     folder = root / git(root, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
-    key = digest(packed([2, fingerprint, list(command), timeout]).encode('ascii'))
+    key = digest(packed([3, fingerprint, list(command), timeout]).encode('ascii'))
     return folder / (key + '.json')
 
 
@@ -1556,6 +1590,13 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
     """
     owner = cache_root if cache_root is not None else root
     isolated = owner != root
+    if isolated:
+        from .python_imports import check, environment
+        failure = check(root, owner, command, environment(root, copy_environment()), timeout)
+        if failure:
+            run = subprocess.CompletedProcess(command, failure, '', '')
+            run.cached = False
+            return run
     logical = list(command if logical_command is None else logical_command)
     timeout = positive_seconds(timeout) if timeout is not None else None
     ci = ci_environment()
@@ -1644,7 +1685,13 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
                       + describe_dirty(dirty_paths(root)))
     data = {"kind": kind, "commit": commit, "code": code_digest(root, commit)}
     if kind == 'test' and no_code_change:
+        from . import gate
+        base, _ = gate.implementation_base(root, definition)
+        problem = gate.no_code_change_problem(root, definition, base)
+        if problem:
+            raise Refused(problem)
         data['no_code_change'] = True
+        data['no_code_change_base'] = base
     if kind == 'test' and refactor:
         data['refactor'] = True
     if kind == 'test' and pending_review:

@@ -50,13 +50,13 @@ def test_base_tests_run_on_dirty_current_code_even_for_unfinished_tasks(local_re
 @pytest.mark.parametrize('change', ['rewrite', 'add', 'add_file'])
 def test_passing_additions_are_free_but_edits_require_acceptance(local_repo, change):
     root = local_repo
-    probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n')
+    probe, base = setup_tests(root, 'def test_one():\n    assert int(1) == 1\n')
     if change == 'rewrite':
-        probe.write_text('def test_one():\n    assert 2 == 2\n')
+        probe.write_text('def test_one():\n    assert int(2) == 2\n')
     elif change == 'add':
-        probe.write_text(probe.read_text() + '\ndef test_two():\n    assert 1 == 1\n')
+        probe.write_text(probe.read_text() + '\ndef test_two():\n    assert int(1) == 1\n')
     else:
-        (probe.parent / 'test_added.py').write_text('def test_added():\n    assert 1 == 1\n')
+        (probe.parent / 'test_added.py').write_text('def test_added():\n    assert int(1) == 1\n')
     result = checked(root, base)
     assert result.returncode == (1 if change == 'rewrite' else 0), result.stdout + result.stderr
     if change == 'rewrite':
@@ -135,11 +135,11 @@ def test_pytest_configuration_needs_acceptance_without_strict(local_repo, config
 @pytest.mark.parametrize('all_tests', [False, True])
 def test_finished_shared_test_users_need_acceptance_in_strict_mode(local_repo, status, all_tests):
     root = local_repo
-    probe, _ = setup_tests(root, 'def test_one():\n    assert 1 == 1\n')
+    probe, _ = setup_tests(root, 'def test_one():\n    assert int(1) == 1\n')
     for tid in ('TASK-1', 'TASK-2'):
         supported(root, tid=tid, status=status, test=f'{PYTHON} -m pytest -q tests')
     base = commit_all(root, 'Finished shared test users')
-    probe.write_text(probe.read_text() + '\ndef test_two():\n    assert 1 == 1\n')
+    probe.write_text(probe.read_text() + '\ndef test_two():\n    assert int(1) == 1\n')
     result = checked(root, base, '--strict-tests', *(['--all-tests'] if all_tests else []))
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'TASK-1, TASK-2:' in result.stdout
@@ -178,8 +178,8 @@ def test_touching_finished_task_restores_strict_acceptance_requirement(local_rep
 
 def test_pytest_default_discovery_compares_changed_tests(local_repo):
     root = local_repo
-    probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n', f'{PYTHON} -m pytest -q')
-    probe.write_text('def test_one():\n    assert 1 == 1\ndef test_two():\n    assert 1 == 1\n')
+    probe, base = setup_tests(root, 'def test_one():\n    assert int(1) == 1\n', f'{PYTHON} -m pytest -q')
+    probe.write_text('def test_one():\n    assert int(1) == 1\ndef test_two():\n    assert int(1) == 1\n')
     result = checked(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
     assert '2 passed' in result.stdout and '1 passed' not in result.stdout
@@ -396,7 +396,7 @@ def test_alternate_pytest_configs_supply_custom_discovery_patterns(local_repo, c
     (root / config).write_text(body)
     (root / 'check_existing.py').write_text('def test_one():\n    assert True\n')
     base = commit_all(root)
-    (root / 'check_added.py').write_text('def test_new():\n    assert False\n')
+    (root / 'check_added.py').write_text('def test_new():\n    assert bool(0)\n')
     result = checked(root, base)
     assert result.returncode == 0 and 'its test failed' in result.stdout
     assert 'Note:' in result.stdout and 'not claimed finished' in result.stdout

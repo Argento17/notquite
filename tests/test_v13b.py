@@ -265,8 +265,8 @@ def test_optional_code_paths_require_task(local_repo, paths, changed, refused):
     assert result.returncode == int(refused), result.stdout + result.stderr
     if refused:
         assert f'{changed} is outside the code paths of TASK-2' in result.stdout
-        assert 'workorder-allow:TASK-2 (or an approving review)' in result.stdout
-        ok(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-2')
+        assert 'workorder-allow:scope:TASK-2 (or an approving review)' in result.stdout
+        ok(root, 'check', '--base', base, '--require-task', '--allow', 'scope:TASK-2')
         assert cli(root, 'check', '--base', base, '--require-task', '--allow', 'tests').returncode == 1
 
 

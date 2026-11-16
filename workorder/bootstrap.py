@@ -12,13 +12,13 @@ from . import store as s
 
 
 AGENT_BLOCK = r"""## Tasks
-- Start every session from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed, then run `workorder renew --task <id>` if the tested code changed. Use the repository's default branch name if it is not main. Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
-- Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
+- Start every session from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed, then run `workorder renew --task <id>` if the task's own code or test files changed. Use the repository's default branch name if it is not main. Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
+- When agents share one Git identity, set `WORKORDER_AGENT` so claims tell them apart. Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
 - When creating a task, use `workorder new --code-paths <files or folders>` to set its code scope. Work on a branch and open a pull request. Land the task on main first, or include it with code whose test fails on the merge-base code and passes now; that new task needs no label. Otherwise a reviewer must accept the new definition with `workorder-allow:<id>` or an approving review.
-- After committing code and confirming every Acceptance item is met, fetch origin before `done` when there is an origin remote: `git fetch origin`. Then run `workorder done --task <id> --note "<what was done; what is next>"`. It records implementation when needed, runs the declared test on current and target code, checks affected finished tasks, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
+- After committing code and confirming every Acceptance item is met, fetch origin before `done` when there is an origin remote: `git fetch origin`. Then run `workorder done --task <id> --note "<what was done>"`. It records implementation when needed, runs the declared test on current and target code, checks affected finished tasks, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
 - For a refactor with unchanged test files that pass before and after, use `done --task <id> --refactor`. For intentional test changes, use `done --task <id> --needs-review`. It writes DONE with a pending review receipt; the pull request still needs `workorder-allow:<id>` or an approving review. Report the pending review to the user. A refused `done` writes no Progress note or receipts; use `workorder note` to leave a handover while fixing it.
-- Before you stop, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`, then commit tasks/ and .workorder/ with your work and push.
-- After merge, run `workorder check <id>` on main; if the merged code differs, run `workorder renew --task <id>` there and test again.
+- For unfinished work, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`; `done` clears `next`. Before stopping, commit tasks/ and .workorder/ with your work and push.
+- After merge, run `workorder check <id>` on main; if the task's own code or test files changed, run `workorder renew --task <id>` there and test again.
 """
 
 HOOK = r"""#!/bin/sh
@@ -29,7 +29,7 @@ fi
 if command -v workorder >/dev/null 2>&1; then
     exec workorder check --staged
 fi
-echo "pre-commit: warning: workorder is not on PATH (pipx install workorder); skipping task check" >&2
+echo "pre-commit: warning: workorder is not on PATH (pipx install workorder, or put the virtualenv that has workorder on PATH); skipping task check" >&2
 exit 0
 """
 
@@ -63,6 +63,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+        # Optional: append --require-task-ignore GLOB for each code path exception, for example:
+        # --require-task-ignore 'docs/**' --require-task-ignore '*.md'
         run: |
           # Reviewed task ids, unowned tests, or the code-to-task requirement.
           gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/events" > "$RUNNER_TEMP/workorder-label-events.json"
@@ -112,7 +114,33 @@ def has_test_extra(path):
     return 'test' in project.get('optional-dependencies', {})
 
 
+def dependency_group(path):
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding='utf-8')
+    try:
+        import tomllib
+    except ImportError:
+        groups, section = set(), False
+        for line in text.splitlines():
+            if re.match(r'^\s*\[', line):
+                section = bool(re.match(r"^\s*\[\s*['\"]?dependency-groups['\"]?\s*\]", line))
+            elif section:
+                match = re.match(r"^\s*['\"]?(test|tests|dev)['\"]?\s*=\s*\[", line)
+                if match:
+                    groups.add(match[1])
+    else:
+        try:
+            groups = tomllib.loads(text).get('dependency-groups', {})
+        except ValueError as error:
+            raise s.Refused(f'pyproject.toml cannot be read: {error}') from None
+    return next((name for name in ('test', 'tests', 'dev') if name in groups), None)
+
+
 def project_install(root):
+    group = dependency_group(s.local_path(root, 'pyproject.toml'))
+    if group:
+        return f"python -m pip install --upgrade 'pip>=25.1' && python -m pip install --group {group} ."
     if has_test_extra(s.local_path(root, 'pyproject.toml')):
         return "python -m pip install -e '.[test]'"
     for name in ('requirements-dev.txt', 'requirements.txt'):
@@ -174,7 +202,12 @@ def claude_settings(root):
 
 def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
+    from .python_imports import installed_src
+    installed = installed_src(root)
+    if installed:
+        print('src layout: installed ' + ', '.join(installed) + '; comparison copies put src/ first and verify imports.')
     settings = claude_settings(root) if claude else None
+    written = []
     hook = root / s.git(root, 'rev-parse', '--git-path', 'hooks/pre-commit').stdout.strip()
     hook_name = '.git/hooks/pre-commit'
     hook_exists = hook.exists()
@@ -203,6 +236,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         else:
             path.write_text(original + ('\n\n' if original else '') + AGENT_BLOCK,
                             encoding='utf-8', newline='\n')
+            written.append(name)
             print(f'{name}: added agent block')
     # Git for Windows runs hooks without an executable bit; elsewhere the bit is required.
     runnable = hook_exists and (os.name == 'nt' or bool(hook.stat().st_mode & 0o111))
@@ -219,6 +253,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             print(f'{hook_name}: kept as {previous.name}; the new hook calls it first')
         hook.write_text(HOOK, encoding='utf-8', newline='\n')
         hook.chmod(hook.stat().st_mode | 0o111)
+        written.append(hook_name)
         print(f'{hook_name}: installed')
     path = s.local_path(root, '.github/workflows/workorder.yml')
     if path.exists() and not update_workflow:
@@ -253,6 +288,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(workflow, encoding='utf-8', newline='\n')
+            written.append('.github/workflows/workorder.yml')
             print('.github/workflows/workorder.yml: written')
         print('CI dependencies: ' + (dependencies or 'no project test dependencies detected'))
     if settings:
@@ -265,5 +301,13 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(updated, indent=2) + '\n', encoding='utf-8', newline='\n')
+            written.append('.claude/settings.json')
             print('.claude/settings.json: installed SessionStart and Stop hooks')
+    if not check:
+        print('Files written:' if written else 'No files written.')
+        for name in written:
+            print(f'  {name}')
+        tracked = [name for name in written if name != hook_name]
+        if tracked:
+            print('git add ' + shlex.join(tracked) + " && git commit -m 'Set up Workorder'")
     return int(missing)

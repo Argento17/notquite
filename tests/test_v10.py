@@ -31,7 +31,7 @@ def _power_repo(root, weaken):
     if weaken == 'return':
         probe.write_text(body.replace('def test_power():\n', 'def test_power():\n    return\n', 1))
     else:
-        probe.write_text(body + '\ndef test_power():\n    assert 1 == 1\n')
+        probe.write_text(body + '\ndef test_power():\n    assert power is not None\n')
     commit_all(root)
     return base
 
@@ -110,7 +110,7 @@ def test_named_file_does_not_own_the_rest_of_tests(local_repo):
         task(root, f'TASK-{number}', ships='none', test=f'{PYTHON} -m pytest -q')
     base = commit_all(root)
     probe = root / 'tests/test_one.py'
-    probe.write_text(probe.read_text().replace('assert True', 'assert 1 == 1'))
+    probe.write_text(probe.read_text().replace('assert True', 'assert int(1) == 1'))
     refused = cli(root, 'check', '--review', 'refuse', '--base', base)
     output = refused.stdout + refused.stderr
     assert refused.returncode == 1, output
@@ -148,7 +148,7 @@ def test_allow_tests_accepts_lines_owned_by_every_named_folder(local_repo):
     for number in range(1, 4):
         task(root, f'TASK-{number}', ships='none', test=f'{PYTHON} -m pytest -q tests')
     base = commit_all(root)
-    probe.write_text('def test_one():\n    assert 1 == 1\n')
+    probe.write_text('def test_one():\n    assert int(1) == 1\n')
     refused = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert refused.returncode == 1
     assert refused.stdout.count('lost or changed') == 1
@@ -241,11 +241,11 @@ def test_explicit_runs_stay_fresh_in_the_summary(local_repo):
     base = commit_all(root)
     first = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--all-tests')
     assert first.returncode == 0, first.stdout + first.stderr
-    assert "ran 2 tasks' declared tests" in first.stdout
+    assert "no task changed in this change; ran 2 finished tasks' declared tests" in first.stdout
     second = cli(root, 'check', '--review', 'refuse', '--base', base, '--run-tests', '--all-tests')
     output = second.stdout + second.stderr
     assert second.returncode == 0, output
-    assert "ran 2 tasks' declared tests" in output
+    assert "no task changed in this change; ran 2 finished tasks' declared tests" in output
     assert '(cached)' not in output
     assert "ran 0 tasks' declared tests" not in output
     assert "2 tasks' tests passed when this check ran them" in output

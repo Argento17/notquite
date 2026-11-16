@@ -142,7 +142,7 @@ def test_needs_review_records_a_deliberate_test_change(local_repo, monkeypatch, 
     commit_all(root, 'Task')
     with_origin(root)
     git(root, 'checkout', '-q', '-b', 'feature')
-    probe.write_text('def test_keep():\n    assert 1 == 1\n', encoding='utf-8')
+    probe.write_text('def test_keep():\n    assert int(1) == 1\n', encoding='utf-8')
     commit_all(root, 'Edit the test on purpose')
     refused = cli(root, 'done', '--task', 'TASK-6')
     assert refused.returncode == 1, refused.stdout + refused.stderr
@@ -392,7 +392,7 @@ def test_local_checks_ignore_tests_and_requirements_added_only_on_target(local_r
     (root / 'app.py').write_text('items = [1]\n', encoding='utf-8')
     commit_all(root, 'Implement')
     if action == 'done':
-        result = cli(root, 'done', '--no-code-change', '--task', 'TASK-1')
+        result = cli(root, 'done', '--refactor', '--task', 'TASK-1')
         code, output = result.returncode, result.stdout + result.stderr
     else:
         store.receipt(root, 'TASK-1', 'implemented')

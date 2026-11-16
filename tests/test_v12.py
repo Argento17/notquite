@@ -68,7 +68,7 @@ def test_new_task_receipts_get_one_precise_definition_request(local_repo, status
     (root / 'app.py').write_text('items = [1]\n')
     fill_sections(task(root, 'TASK-4', ships='none', test=store.join_command([PYTHON, '-c', 'pass'])))
     commit_all(root)
-    ok(root, 'done', '--no-code-change', '--task', 'TASK-4')
+    ok(root, 'done', '--needs-review', '--task', 'TASK-4')
     store.set_task_field(root, 'TASK-4', 'status', status)
     result = cli(root, 'check', '--base', base, '--require-task')
     assert result.returncode == 1, result.stdout
@@ -92,7 +92,7 @@ def test_unrelated_unfinished_wrapper_does_not_refuse_base_check(local_repo, all
     (root / 'README.md').write_text('A documentation change.\n')
     result = cli(root, 'check', '--base', base, *(['--run-tests', '--all-tests'] if all_tests else []))
     assert result.returncode == 0, result.stdout
-    assert 'checked 0 tasks' in result.stdout
+    assert 'no task changed in this change' in result.stdout
 
 
 def test_new_wrapper_requests_explicit_test_paths_before_writing(local_repo):
@@ -109,9 +109,10 @@ def test_new_wrapper_requests_explicit_test_paths_before_writing(local_repo):
 
 
 @pytest.mark.parametrize('action', ['done', 'staged', 'stop'])
-def test_changed_command_refuses_locally(local_repo, monkeypatch, capsys, action):
+def test_changed_command_refuses_done_but_finished_hooks_note(local_repo, monkeypatch, capsys, action):
     root = local_repo
     reviewed_task(root)
+    store.receipt(root, "TASK-1", "implemented")
     (root / 'app.py').write_text('items = [1]\n')
     definition = root / 'tasks/TASK-1.md'
     definition.write_text(definition.read_text().replace('test_app.py', '-c pass'))
@@ -127,14 +128,18 @@ def test_changed_command_refuses_locally(local_repo, monkeypatch, capsys, action
         if action == 'staged':
             git(root, 'add', 'tasks', '.workorder')
             result = cli(root, 'check', '--staged')
-            assert result.returncode == 1, result.stdout
+            assert result.returncode == 0, result.stdout
             output = result.stdout + result.stderr
         else:
             monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
-            assert hooks.run(root, 'stop') == 2
+            assert hooks.run(root, 'stop') == 0
             captured = capsys.readouterr()
             output = captured.out + captured.err
-    assert 'test changed:' in output
+    if action == 'done':
+        assert 'test changed:' in output
+    else:
+        assert output.count('test command changed and passes on this code') == 1
+        assert 'test changed:' not in output
     assert 'workorder-allow:TASK-1' in output
 
 
@@ -151,7 +156,7 @@ def test_done_prints_success_output_once(local_repo):
     reviewed_task(root)
     (root / 'test_app.py').write_text('assert 1 == 1\nprint("unique test output")\n')
     commit_all(root)
-    output = ok(root, 'done', '--no-code-change', '--task', 'TASK-1')
+    output = ok(root, 'done', '--needs-review', '--task', 'TASK-1')
     assert output.count('unique test output') == 1, output
 
 
@@ -200,7 +205,7 @@ def test_crlf_import_addition_and_assertion_review_on_every_platform(local_repo,
     assert cli(root, 'check', '--review', 'refuse', '--base', base).returncode == 1
 
 
-def test_staged_crlf_reuses_working_result_without_copy(local_repo, monkeypatch, capsys):
+def test_staged_crlf_reuses_working_result_after_import_probe(local_repo, monkeypatch, capsys):
     root = local_repo
     git(root, 'config', 'core.autocrlf', 'true')
     # Explicit CRLF bytes reproduce Windows checkout on all platforms.
@@ -210,9 +215,9 @@ def test_staged_crlf_reuses_working_result_without_copy(local_repo, monkeypatch,
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
     ok(root, 'done', '--task', 'TASK-1', '--no-code-change')
     git(root, 'add', 'tasks', '.workorder')
-    def no_copy(*args, **kwargs):
-        pytest.fail('cache hit copied the repository')
-    monkeypatch.setattr(gate, '_test_snapshot', no_copy)
+    def no_run(*args, **kwargs):
+        pytest.fail('cache hit reran the test')
+    monkeypatch.setattr(store, 'run_test', no_run)
     assert gate.check(root, staged=True) == []
     assert re.search(r'\(reused from \d{2}:\d{2} UTC\)', capsys.readouterr().out)
 
@@ -228,8 +233,6 @@ def test_all_tests_does_not_rerun_identical_current_and_ref_commands(local_repo)
         fill_sections(task(root, f'TASK-{n}', ships='none', test=store.join_command(command)))
     base = commit_all(root)
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
-    (root / 'app.py').write_text('items = [1]\n')
-    commit_all(root)
     for n in (1, 2):
         ok(root, 'done', '--no-code-change', '--task', f'TASK-{n}')
     counter.unlink()
@@ -239,10 +242,11 @@ def test_all_tests_does_not_rerun_identical_current_and_ref_commands(local_repo)
 
 
 @pytest.mark.parametrize('action', ['done', 'stop'])
-def test_command_edit_without_remote_is_refused_against_head(local_repo, monkeypatch, capsys, action):
+def test_command_edit_without_remote_refuses_done_but_finished_stop_notes(local_repo, monkeypatch, capsys, action):
     root = local_repo
     fill_sections(task(root, ships='none', test=store.join_command([PYTHON, '-c', 'print(1)'])))
     commit_all(root)
+    store.receipt(root, "TASK-1", "implemented")
     (root / 'tasks/TASK-1.md').write_text((root / 'tasks/TASK-1.md').read_text().replace('print(1)', 'pass'))
     if action == 'done':
         result = cli(root, 'done', '--task', 'TASK-1', '--no-code-change', '--needs-review')
@@ -253,25 +257,28 @@ def test_command_edit_without_remote_is_refused_against_head(local_repo, monkeyp
         store.receipt(root, 'TASK-1', 'test', [PYTHON, '-c', 'pass'])
         store.set_task_field(root, 'TASK-1', 'status', 'DONE')
         monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
-        assert hooks.run(root, 'stop') == 2
-        assert 'test changed:' in capsys.readouterr().err
+        assert hooks.run(root, 'stop') == 0
+        captured = capsys.readouterr()
+        assert not captured.err
+        assert captured.out.count('test command changed and passes on this code') == 1
+        assert 'workorder-allow:TASK-1' in captured.out
+        assert 'test changed:' not in captured.out
 
 
 @pytest.mark.parametrize('attributes', [False, True])
-def test_cached_changed_tests_do_not_copy_current_or_ref_code(local_repo, monkeypatch, attributes):
+def test_cached_changed_tests_reprobe_without_rerunning(local_repo, monkeypatch, attributes):
     root = local_repo
     if attributes:
         (root / '.gitattributes').write_text('* text=auto eol=lf\n')
     reviewed_task(root)
     (root / 'test_app.py').write_text('assert 1 == 1\nassert 2 == 2\n')
     commit_all(root)
-    ok(root, 'done', '--no-code-change', '--task', 'TASK-1')
+    ok(root, 'done', '--needs-review', '--task', 'TASK-1')
     git(root, 'add', 'tasks', '.workorder')
     assert gate.check(root, staged=True) == []
-    def no_copy(*args, **kwargs):
-        pytest.fail('cached test comparison copied a repository')
-    monkeypatch.setattr(gate, '_test_snapshot', no_copy)
-    monkeypatch.setattr(gate, '_ref_test_snapshot', no_copy)
+    def no_run(*args, **kwargs):
+        pytest.fail('cached test comparison reran a test')
+    monkeypatch.setattr(store, 'run_test', no_run)
     assert gate.check(root, staged=True) == []
 
 
@@ -310,7 +317,7 @@ def test_recorded_squash_paths_keep_deletions_modes_and_content(local_repo, tmp_
     if sys.platform != 'win32':
         (root / 'run.sh').chmod(0o755)
     commit_all(root)
-    ok(root, 'done', '--no-code-change', '--task', 'TASK-1')
+    ok(root, 'done', '--refactor', '--task', 'TASK-1')
     implementation = store.entries(root, 'TASK-1')[0]
     commit_all(root)
     git(root, 'checkout', '-q', 'main')
@@ -343,6 +350,7 @@ def test_recorded_squash_paths_keep_deletions_modes_and_content(local_repo, tmp_
 def test_stop_refuses_command_change_on_unfinished_task(local_repo, monkeypatch, capsys):
     root = local_repo
     reviewed_task(root)
+    store.receipt(root, "TASK-1", "implemented")
     definition = root / 'tasks/TASK-1.md'
     definition.write_text(definition.read_text().replace('test_app.py', '-c pass'))
     monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))

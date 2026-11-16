@@ -43,7 +43,7 @@ def test_test_first_requires_task_label_even_with_approval(local_repo, change):
         commit_all(root)
         git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
     (root / 'calc.py').write_text(CODE)
-    (root / 'tests/test_div.py').write_text(TEST + '# changed here\n')
+    (root / 'tests/test_div.py').write_text(TEST + '    assert div(8, 2) == 4\n')
     commit_all(root)
     claim(root)
     result = check(root, '--require-test-first', '--approving-review', '--allow', 'tests')

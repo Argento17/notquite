@@ -18,7 +18,12 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import sysconfig
+import venv
 
+
+python = sys.executable
+tool_site = Path(sysconfig.get_path('purelib'))
 
 parent = Path(sys.argv[1]).expanduser().resolve()
 parent.mkdir(parents=True, exist_ok=True)
@@ -30,7 +35,7 @@ print(f"Disposable repositories and complete logs: {output}", flush=True)
 bin_dir = output / "bin"
 bin_dir.mkdir()
 python_alias = bin_dir / "python"
-python_alias.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$@"\n', encoding="utf-8")
+python_alias.write_text("#!/bin/sh\nexec " + shlex.quote(python) + ' "$@"\n', encoding="utf-8")
 python_alias.chmod(0o755)
 env = os.environ.copy()
 for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
@@ -41,7 +46,7 @@ env.update(PATH=str(bin_dir) + os.pathsep + env.get("PATH", ""),
            PYTHONDONTWRITEBYTECODE="1", NO_COLOR="1", TERM="dumb")
 empty_hooks = output / "empty-hooks"
 empty_hooks.mkdir()
-wo = [sys.executable, "-m", "workorder"]
+wo = [python, "-m", "workorder"]
 test = ["python", "-m", "pytest", "-q", "tests/test_calc.py"]
 check = ["check", "--base", "main", "--run-tests", "--all-tests", "--require-task"]
 
@@ -336,10 +341,73 @@ try:
     report(repo, "Add a second test_mul_negative that shadows the failing one",
            reasons=("asserts nothing that can fail", "so any change needs review", "its tests from main fail"))
 
+    repo, log = base(15, honest=True)
+    git(repo, log, "checkout", "-q", "main")
+    (repo / "src/calc").mkdir(parents=True)
+    (repo / "calc.py").rename(repo / "src/calc/__init__.py")
+    write(repo, "pyproject.toml", '[build-system]\nrequires = []\nbuild-backend = "build_backend"\nbackend-path = ["."]\n')
+    write(repo, "build_backend.py", "import pathlib, zipfile\n\ndef build_editable(wheel_directory, config_settings=None, metadata_directory=None):\n    filename = 'wo_sample-1.0-py3-none-any.whl'\n    with zipfile.ZipFile(pathlib.Path(wheel_directory) / filename, 'w') as z:\n        z.writestr('wo_sample.pth', str(pathlib.Path('src').resolve()) + '\\n')\n        z.writestr('wo_sample-1.0.dist-info/METADATA', 'Metadata-Version: 2.1\\nName: wo-sample\\nVersion: 1.0\\n')\n        z.writestr('wo_sample-1.0.dist-info/WHEEL', 'Wheel-Version: 1.0\\nGenerator: local-test\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n')\n        z.writestr('wo_sample-1.0.dist-info/RECORD', '')\n    return filename\n")
+    commit(repo, log, "Move calc into an editable src package")
+    git(repo, log, "checkout", "-q", "change")
+    git(repo, log, "merge", "-q", "main")
+    environment = repo.parent / "venv"
+    venv.EnvBuilder(with_pip=True).create(environment)
+    executable = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    site = subprocess.check_output([str(executable), "-c", 'import sysconfig; print(sysconfig.get_path("purelib"))'], text=True).strip()
+    (Path(site) / "test_tools.pth").write_text(str(tool_site) + "\n")
+    run([str(executable), "-m", "pip", "install", "--no-index", "--no-build-isolation", "--no-deps", "-e", "."], repo, log)
+    command = [str(executable), "-m", "pytest", "-q", "tests/test_calc.py"]
+    # Set the interpreter in the task before implementation, on main.
+    git(repo, log, "checkout", "-q", "main")
+    for tid in ("TASK-1", "TASK-2"):
+        path = repo / f"tasks/{tid}.md"
+        path.write_text(re.sub(r"(?m)^test: .*", lambda _: "test: " + json.dumps(shlex.join(command)), path.read_text()))
+    commit(repo, log, "Use the editable environment for tests")
+    run(wo + ["renew", "--task", "TASK-1"], repo, log)
+    commit(repo, log, "Renew the existing task in its editable environment")
+    git(repo, log, "checkout", "-q", "change")
+    git(repo, log, "merge", "-q", "main")
+    write(repo, "src/calc/__init__.py", good_code + "\n\ndef div(a, b):\n    return a / b\n")
+    write(repo, "tests/test_calc.py", test_code + "\n\ndef test_div():\n    from calc import div\n    assert div(6, 3) == 2\n")
+    commit(repo, log, "Implement division in the installed src package")
+    run(wo + ["done", "--task", "TASK-2"], repo, log)
+    commit(repo, log, "Record editable src completion")
+    report(repo, "Honest src-layout feature with an editable install", command=command, check_exit=0)
+
+    repo, log = base(16, complete=False, code="")
+    definition = repo / "tasks/TASK-1.md"
+    definition.write_text(re.sub(r'(?m)^contract: .*',
+        lambda match: match[0] + '\ncode_paths: ["calc.py"]', definition.read_text()))
+    write(repo, "calc.py", good_code)
+    commit(repo, log, "Implement multiplication on its branch")
+    run(wo + ["done", "--task", "TASK-1"], repo, log)
+    commit(repo, log, "Record multiplication completion")
+    git(repo, log, "checkout", "-q", "main")
+    git(repo, log, "merge", "--ff-only", "change")
+    division = ["python", "-m", "pytest", "-q", "tests/test_div.py"]
+    task(repo, log, "Divide in the same file", "Add div in calc.py; preserve mul.",
+         "div(6, 3) returns 2.", "TASK-2", command=division)
+    definition = repo / "tasks/TASK-2.md"
+    definition.write_text(re.sub(r'(?m)^contract: .*',
+        lambda match: match[0] + '\ncode_paths: ["calc.py"]', definition.read_text()))
+    commit(repo, log, "Land the second task before its implementation")
+    git(repo, log, "checkout", "-qb", "second-task")
+    write(repo, "calc.py", good_code + "\n\ndef div(a, b):\n    return a / b\n")
+    write(repo, "tests/test_div.py", "from calc import div\n\ndef test_div():\n    assert div(6, 3) == 2\n")
+    commit(repo, log, "Implement division alongside finished multiplication")
+    done = run(wo + ["done", "--task", "TASK-2"], repo, repo.parent / "done.txt")
+    if "Other:" in done or "TASK-2 DONE:" not in done:
+        raise RuntimeError("The second honest task did not finish cleanly:\n" + done)
+    commit(repo, log, "Record the second task completion")
+    report(repo, "Second honest task in a finished task's file", command=division, check_exit=0)
+    checked = (repo.parent / "check.txt").read_text()
+    if "workorder-allow:TASK-1" in checked:
+        raise RuntimeError("The unchanged finished task was blamed for division:\n" + checked)
+
     (output / "results.json").write_text(json.dumps(dict(version=version, cases=results), indent=2)
                                        + "\n", encoding="utf-8")
     print(f"\nVerified results: {output / 'results.json'}", flush=True)
-    print("PASS: 14 cases verified; 12 shortcuts refused by default; 4 still refused with --review warn; honest changes pass with no warning.", flush=True)
+    print("PASS: 16 cases verified; 12 shortcuts refused by default; 4 still refused with --review warn; honest changes pass with no warning.", flush=True)
 except (OSError, RuntimeError, StopIteration) as error:
     print(f"FAIL: {error}\nComplete logs remain in {output}", file=sys.stderr)
     sys.exit(1)

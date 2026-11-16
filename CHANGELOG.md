@@ -1,5 +1,152 @@
 # Changelog
 
+## 0.15.0 (15 Nov 2026)
+
+- Limit --no-code-change to the task's declared code paths and test files.
+  Without declared paths, exclude changes covered by another task's new
+  implementation or test receipts, while keeping the task's own tests protected.
+  Use the same scope for done and receipt checks. A task label can accept a
+  false exemption in the pull-request check, including existing receipts.
+- Let done finish alongside another task's own pending-review completion
+  recorded in this change, when its receipts cover its current test files.
+  Only that task's own test edits and recorded pending findings stop blocking.
+  Other findings still block and appear once in Other; --needs-review remains
+  the route for intentional changes. Current failures and pull-request review
+  requirements keep their protections.
+
+- Let finished declared refactors commit passing test edits. Local hooks advise
+  renew --no-refactor or done --needs-review after committing; failing edits
+  still refuse, and the pull request still needs the task label.
+- Let done --needs-review record assertion, stub and unavailable-comparison
+  findings as DONE pending review. Store the pending findings in the test
+  receipt and list them under review. Label-only findings still need the task
+  label; failures, missing evidence, command and dependency changes still refuse.
+- Treat Python tests with unchanged syntax trees as unchanged throughout hooks,
+  done, renew and base checks, including comment and blank-line edits.
+- Exclude egg-info, dist-info, Python bytecode and pytest cache output from task
+  and scope requirements and new implementation path maps. Keep existing
+  receipts readable, including those that recorded generated files.
+- Describe unchanged task files after unrelated work lands. Tell agents to
+  renew only for their task's own code or test changes. Omit renewal advice
+  when receipts already cover the commit, pluralize missing-test notes, and
+  use “no task changed in this change” for empty base checks with --run-tests.
+
+- Limit each task's stub check to changed functions in its declared code paths.
+  Without a declaration, exclude other tasks' declared paths. If none belong
+  to the task, omit the check and its note in done, hooks and base checks.
+- Treat tests absent at the base as written in the change, including new helpers
+  and fixtures. A new conftest needs configuration review only for existing
+  tests below its folder; edits to an existing conftest keep their review rule.
+- Make done's Next line name a working review route for findings requiring a
+  task label. Assertion, stub and unavailable-comparison findings can use
+  --needs-review; the pull request still requires the label. Mixed findings
+  retain the general next step.
+- Say that a test-first failure is required, and omit the skipped-base-test
+  comparison note when the selected tests were written in the change.
+- Apply stub and target-code proof checks only to completion claims new in the
+  change, or renewed claims with changed code. Keep running affected finished
+  tasks' tests; their failures still refuse. A second task in the same file or
+  another module within the old task's scope no longer blames the old claim.
+  Stop also checks affected code and renewed receipts. Done omits successful
+  old-test runs from Other and names an old task's failing test on refusal.
+- Keep passing test renames to one repair finding in local hooks. Hide test
+  output for unfinished tasks in pre-commit; a missing declared test gets one
+  note saying the unfinished task may land.
+- Say "no task changed in this change" for bare check --base too. Add the
+  second honest task flow to the offline examples, now 16 cases.
+- Let finished tasks with test receipts commit passing command repairs even
+  when completion was recorded on the branch. Pre-commit and Stop print one
+  repair note, without a command-change refusal beside it. Failing commands
+  still refuse; renewal and pull-request review remain required.
+- During a pending merge, omit the test-change note for staged test content
+  identical to the incoming parent's content. Branch test edits still count.
+- Use singular words for one other task's findings, and explain unchanged-task
+  runs of --all-tests plainly. Point missing-hook users to their virtualenv as
+  well as pipx. Add task-first advice when done finds no code change, and say
+  that --run-tests with a task name refuses without running tests.
+- Explain the expected missing-test warning and computed CLOSED in the quick
+  start. Keep note --next for unfinished work and tell agents sharing a Git
+  identity to set WORKORDER_AGENT in the generated instructions and README.
+- Put each test checkout's src/ and root first on PYTHONPATH. Probe project
+  imports with the test interpreter before using a comparison, including a
+  cached or parallel run. Outside imports are unavailable comparisons accepted
+  only by the task label, never evidence of weak tests or a passing refactor.
+  Check repository packages and top-level names of installed distributions
+  matching the project's pyproject.toml or setup.cfg name (PEP 503 normalised),
+  using top-level names, RECORD and finder mappings, including .pth source roots.
+  Allow unrelated dependencies wherever installed, including editable siblings
+  and Workorder itself. Give source-layout advice only for src/ and root packages.
+  Init notices installed src packages. Add real offline editable-install tests,
+  including remapped package folders and second clones sharing an install.
+- Give each test subprocess a temporary pytest cache through PYTEST_ADDOPTS,
+  preserving user options and quoting Windows paths. Clean it up after the run;
+  parallel commands no longer race on the checkout's .pytest_cache. Workorder's
+  own result-cache keys are unchanged.
+- Count pytest.warns, deprecated_call, raises and fail, plus unittest assertion
+  context managers. Scan only added or changed test functions against the base
+  syntax tree; leave unchanged functions and comment-only edits alone.
+- Warn about missing paths named by new --test. Permit local command repairs on
+  unfinished tasks without receipts. Renew preserves a refactor declaration
+  after later commits and rebases, rechecks its conditions, and accepts
+  --refactor explicitly. Use renew --no-refactor to drop it on purpose.
+- Require workorder-allow:scope:ID or an approving review for code outside a
+  task's scope; a test-change label cannot accept it. Print shared assertion
+  findings once. Done lists its task's findings, one summary for other tasks,
+  and one next step. Unsupported claims no longer display Evidence: CLOSED.
+- Detect PEP 735 test, tests or dev dependency groups. Generated workflows
+  upgrade pip to 25.1 or newer and install the selected group and project.
+- During a merge commit, include MERGE_HEAD when finding the target merge base,
+  so target-owned test changes are not attributed to the branch's refactor.
+- Add an editable src case to shortcuts.sh and a Linux/Python 3.12 job for
+  real-projects.sh, exercising Click and attrs with three honest changes and
+  three shortcuts each. Network setup must be verified on a connected host.
+
+- Count assertion helpers in the test file, path conftest files and imported
+  test material, following up to four calls. Recognise assert, verify, check,
+  expect and ensure names. A task label can accept unusual assertion syntax;
+  an approving review alone or warning mode cannot.
+- Treat literal-only comparisons, other constant expressions, and equality or
+  identity of the same name, attribute or subscript like assert True, so a
+  missing module at the base cannot supply their only failure.
+- Run each task's test once in a temporary copy where all changed or added
+  Python function bodies raise NotImplementedError. Refuse tests that still
+  pass; only the task's explicit reviewer label accepts the finding in a base
+  check. Declared refactors and valid no-code-change runs are exempt.
+- Refuse --no-code-change when code changed since the merge base or task
+  creation. Validate receipt exemptions too, and retain the comparison base
+  in an optional test receipt member. Existing files need no migration.
+- Let pre-commit and Stop note a repaired command for an already finished task
+  when the new command passes. Pre-commit runs the staged code. The note names
+  the review label; done still refuses changed commands. A passing finished-task
+  test rename or edit can be committed before renewal; the note says to run
+  renew after committing. The pre-commit hook notes test changes, including
+  branch test edits made while merging main. The pull-request check refuses them
+  without the reviewer label (or an approving review where allowed).
+- Keep failures as local progress notes when finished tasks are reopened, but
+  require the task's explicit reviewer label when its current test fails in a
+  pull-request base check. Approval and warning mode do not accept the failure.
+- Keep no-code-change, refactor, pending-review and new-test-origin notes
+  separate for each task. Missing base task or test evidence no longer implies
+  that a test landed earlier.
+- Report each shared configuration edit once with all its owners, without
+  duplicate per-task notes. Done always groups other tasks into one Other line.
+  Explain new --local in words instead of printing the flag as its reason. Run the
+  red-before-green comparison only when the task's own code or tests changed.
+- Exclude lockfiles from the code-to-task requirement and add repeatable
+  `check --require-task-ignore GLOB` path exceptions, with a workflow example.
+- Add positive `check/done --jobs N`, defaulting to the CPU count. Distinct
+  current test commands run concurrently with stable task output order;
+  identical commands still share a run. Local checks select affected finished
+  tasks by their recorded implementation paths and selected test paths.
+- Require the explicit `workorder-allow:workflow` reviewer label for changes
+  to the default or renamed generated Workorder workflow. Author-added labels
+  remain ignored.
+- End init with its written-file list and exact add/commit command, including
+  Claude settings when written and listing the local hook without staging it.
+  Local task IDs now account for reservation tags already present in the clone.
+- Give the test CLI helper 120 seconds for slower Windows runs. Update the
+  documentation and version to 0.15.0.
+
 ## 0.14.0 (15 Nov 2026)
 
 - Show whether a finished task's tests landed before the change. Add

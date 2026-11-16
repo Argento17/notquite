@@ -61,9 +61,9 @@ def test_unowned_test_additions_pass_without_acceptance(local_repo):
     root = local_repo
     (root / 'tests').mkdir()
     probe = root / 'tests/test_one.py'
-    probe.write_text('def test_one():\n    assert 1 == 1\n')
+    probe.write_text('def test_one():\n    assert int(1) == 1\n')
     base = commit_all(root)
-    probe.write_text(probe.read_text() + '\ndef test_two():\n    assert 1 == 1\n')
+    probe.write_text(probe.read_text() + '\ndef test_two():\n    assert int(1) == 1\n')
     assert cli(root, 'check', '--base', base).returncode == 0
 
 
@@ -77,7 +77,10 @@ def test_work_on_division_cannot_hide_changed_multiplication_tests(local_repo):
     (root / 'tests/div').mkdir()
     (root / 'tests/div/test_div.py').write_text('def test_div():\n    assert True\n')
     task(root, 'TASK-2', ships='none', test=f'{PYTHON} -m pytest -q tests/div')
-    supported(root, test=f'{PYTHON} -m pytest -q tests/mul')
+    commit_all(root)
+    store.receipt(root, 'TASK-1', 'implemented')
+    store.receipt(root, 'TASK-1', 'test', [PYTHON, '-m', 'pytest', '-q', 'tests/mul'])
+    store.set_task_field(root, 'TASK-1', 'status', 'DONE')
     base = commit_all(root)
     git(root, 'checkout', '-qb', 'feature')
     (root / 'calc.py').write_text('def mul(a, b):\n    return a + b if a < 0 else a * b\n')
@@ -124,7 +127,11 @@ def test_unfinished_failing_or_missing_tests_are_notes_in_base_and_hook(local_re
     for flags in [('--base', base, '--run-tests', '--allow', 'TASK-1'), ('--staged',)]:
         result = cli(root, 'check', *flags)
         assert result.returncode == 0, result.stdout + result.stderr
-        assert 'Note:' in result.stdout and ('failed' in result.stdout or 'no tests ran' in result.stdout)
+        if missing and flags == ('--staged',):
+            assert 'Note: TASK-1: its test file is not there yet; an unfinished task may land' in result.stdout
+            assert 'Failure:' not in result.stdout
+        else:
+            assert 'Note:' in result.stdout and ('failed' in result.stdout or 'no tests ran' in result.stdout)
 
 
 def test_failed_finished_receipt_can_be_committed_with_reopening(local_repo):

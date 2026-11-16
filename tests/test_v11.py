@@ -51,7 +51,8 @@ def test_new_test_file_passes_generated_pull_request_command(local_repo, tmp_pat
     arguments = execute(command, root, tmp_path, [])
     result = cli(root, *arguments)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'no selected test files at REF' in result.stdout
+    assert "TASK-1's test was written in this change" in result.stdout
+    assert 'no selected test files at REF' not in result.stdout
     assert 'check: OK' in result.stdout
 
 
@@ -171,7 +172,7 @@ def test_unowned_import_additions_pass_and_changed_assertions_refuse(local_repo,
 ])
 def test_import_additions_keep_existing_aliases(local_repo, statement, extended):
     probe = local_repo / 'test_calc.py'
-    probe.write_text(statement + '\n\ndef test_one():\n    assert 1 == 1\n')
+    probe.write_text(statement + '\n\ndef test_one():\n    assert int(1) == 1\n')
     base = commit_all(local_repo)
     probe.write_text(probe.read_text().replace(statement, extended))
     checked = cli(local_repo, 'check', '--base', base)
