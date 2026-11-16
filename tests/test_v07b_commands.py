@@ -211,17 +211,19 @@ def test_invalid_timeout_option_explains_seconds(local_repo, action):
 def test_timeout_kills_child_test_processes(local_repo):
     root = local_repo
     script = root / 'slow.py'
+    # Allow a loaded runner to start both processes. The child keeps the captured
+    # pipes open longer than the outer deadline unless Workorder kills its group.
     script.write_text('import subprocess, sys, time\n'
-                      'subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)" ])\n'
+                      'subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)" ])\n'
                       'print("started child", flush=True)\n'
-                      'time.sleep(10)\n')
+                      'time.sleep(120)\n')
     path = filled_task(root)
     path.write_text(path.read_text().replace(PASS, f'{PYTHON} slow.py'))
     commit_all(root)
     result = subprocess.run([PYTHON, '-m', 'workorder', 'receipt', 'test', '--task', 'TASK-1',
-                             '--timeout', '0.3'], cwd=root,
+                             '--timeout', '10'], cwd=root,
                             env={**os.environ, 'PYTHONPATH': str(__import__('pathlib').Path(__file__).resolve().parents[1])},
-                            capture_output=True, text=True, timeout=3)
+                            capture_output=True, text=True, timeout=60)
     assert result.returncode == 1
     assert 'started child' in result.stdout and 'exit 124' in result.stdout + result.stderr
     assert store.entries(root, 'TASK-1')[-1]['exit_code'] == 124

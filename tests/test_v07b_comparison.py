@@ -244,14 +244,16 @@ def test_failed_current_tests_do_not_stop_other_scoped_tasks(local_repo):
     assert result.returncode == 1 and 'SECOND TASK RAN' in result.stdout
 
 
-def test_base_test_timeout_refuses_and_preserves_files(local_repo):
+def test_base_test_timeout_refuses_and_preserves_files(local_repo, capsys):
     root = local_repo
-    probe, base = setup_tests(root, 'import time\ntime.sleep(10)\n', f'{PYTHON} tests/test_app.py')
+    probe, base = setup_tests(root, 'import time\ntime.sleep(120)\n', f'{PYTHON} tests/test_app.py')
     probe.write_text('print("current completed")\n')
     store.add_note(root, 'TASK-1', 'Working on these tests')
     notes = []
-    problems = gate.check(root, base=base, run_tests=True, allow={'TASK-1'}, timeout=0.2, notes=notes)
+    # Current code must have time to start and pass; only the base should time out.
+    problems = gate.check(root, base=base, run_tests=True, allow={'TASK-1'}, timeout=10, notes=notes)
     assert not problems
+    assert 'current completed' in capsys.readouterr().out
     assert any(f'its tests already fail on {base} code' in line for line in notes)
     assert probe.read_text() == 'print("current completed")\n'
 
