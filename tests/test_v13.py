@@ -177,6 +177,12 @@ def test_staged_files_use_bounded_git_processes(local_repo, tmp_path, monkeypatc
     for number in range(2000):
         (root / f'file{number}.py').write_text(f'value = {number}\n')
     commit_all(root)
+    # Make the working tree exactly what a checkout writes (core.autocrlf on
+    # Windows runners), so the staged and working fingerprints describe the same bytes.
+    # Git skips stat-clean files even with -f, so remove them first.
+    for path in git(root, 'ls-files').splitlines():
+        (root / path).unlink()
+    git(root, 'checkout-index', '-a')
     calls = []
     original = subprocess.Popen
 

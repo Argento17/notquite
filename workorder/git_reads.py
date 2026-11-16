@@ -597,8 +597,11 @@ class Batch:
     def close(self):
         try:
             self.process.stdin.close()
-        except BrokenPipeError:
-            pass  # The failed request still needs its process and stdout reaped.
+        except OSError:
+            # A dead pipe can report EINVAL on Windows, including when close
+            # flushes buffered input. The failed read is still refused by the
+            # caller; cleanup must finish reaping the process and stdout.
+            pass
         try:
             self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:

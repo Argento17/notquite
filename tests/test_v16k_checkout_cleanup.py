@@ -105,12 +105,16 @@ def test_checkout_cleanup_reaps_nested_batches_and_preserves_source(local_repo, 
         expected = pytest.raises(RuntimeError, match='snapshot failed') if outcome == 'error' else nullcontext()
         with expected:
             with store.temporary_checkout(prefix='workorder-cleanup-test-') as temporary:
-                directory = Path(temporary)
+                # Popen observations above are resolved too. Windows TEMP can
+                # use an 8.3 alias, just as POSIX TMPDIR can use a symlink.
+                directory = Path(temporary).resolve()
                 for name in ('code', 'nested/ref'):
                     destination = directory / name
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     gate._ref_test_snapshot(root, destination, 'HEAD')
                     assert store.blob_bytes(destination, 'HEAD:app.py') == b'items = []\n'
+                    assert batches[-1][0] == destination.resolve()
+                    assert batches[-1][1].poll() is None
                 if outcome == 'error':
                     raise RuntimeError('snapshot failed')
                 if outcome == 'timeout':

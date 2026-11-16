@@ -40,6 +40,10 @@ def test_implicit_check_reuse_names_original_time(local_repo):
     fill_sections(task(root, ships='none', test=command))
     base = commit_all(root)
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
+    # Reuse requires identical executable bytes. Match the staged checkout
+    # even when core.autocrlf converts this fixture's explicitly LF app.py.
+    (root / 'app.py').unlink()
+    git(root, 'checkout-index', 'app.py')
     ok(root, 'done', '--task', 'TASK-1', '--no-code-change')
     git(root, 'add', 'tasks', '.workorder')
     result = cli(root, 'check', '--staged')
