@@ -91,6 +91,8 @@ Passing pytest project tests print one note with pytest's counts. Failures show 
 **Meaning:** `pending review` records an intentional exception from `done --needs-review`; local DONE does not mean the pull request has been accepted. The printed findings may name other affected tasks or shared tests too.
 **Clear:** Review every recorded finding. Add `workorder-allow:ID` for each required task, or approve the current head where those findings permit approval; explicit-label findings keep that rule. Renewing does not clear an unmerged review request. After the tested implementation lands on the target, the pending request no longer blocks it.
 
+Diagnostics escape characters the console cannot encode, preserving test IDs and paths. Brief import-report sharing locks are retried, including the final read; missing, persistently unreadable or invalid evidence still refuses.
+
 The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and records a hash of each Python module's executable messages, conditions and returned findings. A new or changed refusal requires guide review before updating those hashes. The check also catches some unrelated code edits; comments and docstrings are ignored. It detects changes, but cannot judge whether an explanation is correct.
 
 <!-- refusal-inventory workorder/__init__.py e40c386dfd6e2fdf2c7d161d61b6a08b82cd5fd784f38ea4195132fa8e56932e records -->
@@ -102,10 +104,11 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
 <!-- refusal-inventory workorder/project_tests.py 09b2fd31037cb19f6db1f22dc22c15a36beaa8defe66df3cdda66ac1dc47b998 project-test,records -->
 <!-- refusal-inventory workorder/pytest_selection.py bcff8a23918c0320f921d46b229359bc41237be3055be093a6e746860395d35b weak-tests,imports -->
-<!-- refusal-inventory workorder/python_imports.py d7a13be0f74e64675bac4ff8a01afa1020ec4720dd27caa2f5dcd31218577db3 imports -->
+<!-- refusal-inventory workorder/python_imports.py 9b47c30379751b48c6047481cd84eccfabeec9bc9ecbf710177db56100eda89d imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py 8492fc277cc906e5a7171d4accf9bb38a573cc727d483b5a27532202e84dd271 records,evidence,current-tests,removal -->
-<!-- refusal-inventory workorder/git_reads.py a60c61e46355b3d7456123f7e3496b5797b797a61704007256b373fa77939425 records,evidence -->
+<!-- refusal-inventory workorder/store.py e4aef26df9ff14c59d79571aa0042b8bcf366a0a8d159e974b266e05ce16aba8 records,evidence,current-tests,removal -->
+<!-- refusal-inventory workorder/git_reads.py 1109092ea60df17a2a98b8f8a5ee1189b6becf871095d2fe50479a9ad7daa321 records,evidence -->
+<!-- refusal-inventory workorder/console.py 6634087244aa3cbf3741281f4b740117043f662e24e309c6c5af10d7c543b681 records,current-tests -->
