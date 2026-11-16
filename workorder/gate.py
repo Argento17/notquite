@@ -145,6 +145,7 @@ def recognise_squashed(root, tid, history, staged=False):
 MERGE_SEARCH_LIMIT = 1000
 
 
+@s.cached_read
 def merge_target(root, record):
     # The pushed branch first: a commit only on local main is not merged for anyone else yet.
     override = record.get("merge_ref")
@@ -397,7 +398,12 @@ def finished(tid, all_records, views, seen=frozenset()):
 @s.cached_read
 def fields_at(root, tid, rev="HEAD"):
     """The front matter of tasks/<tid>.md at a revision, or None if it has no readable record there."""
-    text = s.metadata_texts(root, rev, tid if rev != "HEAD" else None, False).get(f"tasks/{tid}.md")
+    if s.metadata_scope(tid) is not None:
+        raw = s.blob_bytes(root, f'{rev or "HEAD"}:tasks/{tid}.md')
+        text = (raw.decode('utf-8', errors='surrogateescape').removeprefix('\ufeff').replace('\r\n', '\n')
+                if raw is not None else None)
+    else:
+        text = s.metadata_texts(root, rev, tid if rev != "HEAD" else None, False).get(f"tasks/{tid}.md")
     if text is None:
         return None
     lines = text.splitlines()
@@ -507,6 +513,7 @@ def task_history(root, base=None):
     return result
 
 
+@s.cached_read
 def inherited_claim(root, record, staged=False, rev=None):
     """An unchanged task and its receipts imported from a target or merge parent add no claim."""
     tid = record['id']
@@ -555,7 +562,9 @@ def stale_claim(root, record, staged=False, base=None):
     tid, status = record["id"], record["status"]
     if status not in FINISHED:
         return None
-    current = newest_implementation(s.entries(root, tid, staged))
+    history = s.entries(root, tid, staged)
+    recognise_squashed(root, tid, history, staged)
+    current = newest_implementation(history)
     if current is None or current["missing"]:
         return None  # the verdict already reports these
     short = current["commit"][:7]
@@ -567,7 +576,7 @@ def stale_claim(root, record, staged=False, base=None):
             return (f"NOT DONE  {tid} is being marked {status} with uncommitted code changes; "
                     + s.describe_dirty(dirty) + f". Commit, record workorder receipt implemented --task {tid}"
                     " and test again.")
-        tree = s.git(root, "write-tree").stdout.strip() if staged else s.head(root)
+        tree = s.index_tree(root) if staged else s.head(root)
         if claim_matches(root, record, current, s.head(root), tree, staged):
             return None
         where = "in this commit" if staged else "now"
@@ -759,6 +768,7 @@ def raw_changed_paths(root, reference, staged=False):
     return paths
 
 
+@s.cached_read
 def changed_paths(root, reference, staged=False):
     paths = raw_changed_paths(root, reference, staged)
     return source.changed(root, paths, reference, staged=staged) if reference else paths
@@ -852,6 +862,7 @@ def default_pytest_files(root, record, base, staged=False):
     return {path for path in found if posixpath.basename(path) not in PYTEST_CONFIG_NAMES | {'conftest.py'}}
 
 
+@s.cached_read
 def test_files(root, record, base, staged=False):
     """Expand current and base definitions, so deleting a test or changing its path cannot hide it."""
     before = fields_at(root, record["id"], base)
@@ -1196,6 +1207,7 @@ def implicit_test_files(root, record, base, staged, candidates, configs):
     return found
 
 
+@s.cached_read
 def strict_test_files(root, record, base, staged=False):
     paths = test_files(root, record, base, staged)
     definitions = (record, fields_at(root, record['id'], base) or {})
@@ -1267,6 +1279,7 @@ def _test_functions(tree, prefix=()):
     return found
 
 
+@s.cached_read
 def refactor_test_files(root, record, base, staged=False):
     """Include tests selected by the command even without explicit ownership."""
     inferred = {key: value for key, value in record.items() if key != 'test_paths'}
@@ -1306,7 +1319,7 @@ def changed_existing_test_paths(root, base, paths, staged=False):
     from .python_tests import preserves_existing
     changed = changed_test_paths(root, base, paths, staged)
     old_tree = s.code_tree(root, base)
-    current_tree = s.code_tree(root, s.git(root, 'write-tree').stdout.strip()) if staged else None
+    current_tree = s.code_tree(root, s.index_tree(root)) if staged else None
     for path in list(changed):
         if not path.endswith('.py') or posixpath.basename(path) == 'conftest.py':
             continue
@@ -1325,6 +1338,7 @@ def changed_existing_test_paths(root, base, paths, staged=False):
     return changed
 
 
+@s.cached_read
 def selected_test_files(root, record, base, staged=False):
     """Select tests themselves, without mistaking configuration or helpers for old tests."""
     paths = refactor_test_files(root, record, base, staged)
@@ -1737,6 +1751,7 @@ def test_file_changes(root, base, record, staged=False, strict=False, protected=
     return None
 
 
+@s.cached_read
 def repository_test_files(root, base, all_records, staged=False):
     """Repository-wide review also covers tests with no task and their supporting files."""
     candidates = repository_files(root, base) | repository_files(root) | raw_changed_paths(root, base, staged)
@@ -1957,19 +1972,26 @@ def prefetch_tests(root, records, results, counts=None, timeout=None, staged=Fal
     if not pending:
         return
 
+    parent = s._READS.get()
+    seeds = {key: parent.fork() if parent is not None else None for key in pending}
+
     def run(key):
-        # Context variables carry the reuse policy, but workers must not mutate
-        # the main thread's read cache while another worker is using it.
+        # Keep the reuse policy, but give each worker its own Git reads and
+        # cat-file process instead of sharing the main thread's cache.
         token = s._READS.set(None)
         command, deadline = key
         try:
             if staged or snapshot:
-                with tempfile.TemporaryDirectory(prefix='workorder-parallel-') as temporary:
+                # Close comparison Git processes before removing their cwd,
+                # which remains locked while a process uses it on Windows.
+                with tempfile.TemporaryDirectory(prefix='workorder-parallel-') as temporary, \
+                        s.read_session(seed=seeds[key]):
                     destination = Path(temporary) / 'code'
                     _test_snapshot(root, destination, staged=staged, protected=protected)
                     return s.cached_test(_snapshot_command(command, root, destination), destination, deadline,
                                          cache_root=root, logical_command=command, fresh=not s._REUSE_TESTS.get())
-            return s.cached_test(command, root, deadline, fresh=not s._REUSE_TESTS.get())
+            with s.read_session(seed=seeds[key]):
+                return s.cached_test(command, root, deadline, fresh=not s._REUSE_TESTS.get())
         except (OSError, ValueError, s.Refused, subprocess.SubprocessError) as error:
             run = subprocess.CompletedProcess(command, 127, '', str(error))
             run.not_started = True
@@ -2397,6 +2419,7 @@ def local_test_base(root, record=None):
     return None
 
 
+@s.cached_read
 def comparison_base(root, ref):
     """Resolve a target once, retaining its name for explanations."""
     if s.git(root, 'rev-parse', '--verify', '--quiet', f'{ref}^{{commit}}', required=False).returncode:
@@ -2815,6 +2838,7 @@ def task_change_touched(root, base, record, staged=False):
                 changed_test_paths(root, base, task_test_paths(root, record, base, staged), staged))
 
 
+@s.cached_read
 def completion_changed(root, base, record, staged=False):
     """A new or reopened claim owes implementation proof; a landed renewal does not."""
     tid, status = record['id'], record['status']
@@ -2834,6 +2858,7 @@ def completion_changed(root, base, record, staged=False):
     return False
 
 
+@s.cached_read
 def finished_code_change(root, base, record, staged=False):
     """New completion evidence must describe the code a squash would retain."""
     if not completion_changed(root, base, record, staged):
@@ -3428,6 +3453,7 @@ def needs_task_receipt(path):
             and not posixpath.basename(path).startswith('LICENSE'))
 
 
+@s.cached_read
 def source_tree(root, revision, protected=None):
     """Compare source without changing the historical fingerprint stored in receipts."""
     return source.entries(root, s.code_tree(root, revision), protected=protected)
@@ -3447,6 +3473,7 @@ def recorded_paths_match(root, tree, implemented):
     return all(current.get(path) == entry for path, entry in recorded.items())
 
 
+@s.cached_read
 def same_source_code(root, before, after):
     if not s.has_commit(root, before):
         return False
@@ -3454,6 +3481,7 @@ def same_source_code(root, before, after):
     return source_tree(root, before, protected) == source_tree(root, after, protected)
 
 
+@s.cached_read
 def recorded_branch_code(root, implemented, base, commit, tree=None):
     """A replay keeps recorded bytes and modes; everything else must be target code."""
     paths = implemented.get('implementation_paths')
@@ -3483,7 +3511,7 @@ def receipt_covers_change(root, implemented, base, staged=False):
     if implemented['code'] == code:
         return True
     original = implemented['commit']
-    tree = s.git(root, 'write-tree').stdout.strip() if staged else s.head(root)
+    tree = s.index_tree(root) if staged else s.head(root)
     if not implemented['missing'] and same_source_code(root, original, tree):
         return True
     if recorded_branch_code(root, implemented, base, s.head(root), tree):

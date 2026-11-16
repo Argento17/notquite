@@ -10,6 +10,13 @@ from test_v05 import commit_all
 from test_v06b import fill_sections
 
 
+@pytest.fixture(autouse=True)
+def enable_read_cache(monkeypatch):
+    # These tests exercise reuse itself, including during the full fresh-read
+    # suite. Functional tests outside this module keep the caller's setting.
+    monkeypatch.delenv('WORKORDER_GIT_CACHE', raising=False)
+
+
 @pytest.fixture
 def git_spawns(monkeypatch):
     calls = []
@@ -217,7 +224,11 @@ def test_head_and_blob_share_batch(local_repo, git_spawns):
     with store.read_session():
         assert store.head(local_repo) == expected
         assert store.blob_bytes(local_repo, 'HEAD:app.py') == b'items = []\n'
-    assert len(git_spawns) == 1, git_spawns
+    discovery = {('config', '--null', '--list', '--show-origin', '--includes'),
+                 ('var', '-l'),
+                 ('ls-files', '--stage', '-z')}
+    assert [call for call in git_spawns if call not in discovery] == [('cat-file', '--batch')]
+    assert all(git_spawns.count(call) <= 1 for call in discovery), git_spawns
 
 
 def test_dead_batch_is_reaped_and_can_be_retried(local_repo):

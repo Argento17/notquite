@@ -544,13 +544,18 @@ def test_reference_extended_example_is_a_valid_task(clones):
 
 
 def test_workflow_installs_kit_runs_tests_and_checker():
-    steps = [line.strip() for line in
-             (PACKAGE / ".github/workflows/check.yml").read_text().splitlines()
-             if line.strip().startswith("- run:")]
+    text = (PACKAGE / ".github/workflows/check.yml").read_text()
+    steps = [line.strip() for line in text.splitlines() if line.strip().startswith("- run:")]
     assert steps == ["- run: python -m pip install -e '.[test]'",
-                     "- run: python -m pytest -n auto", "- run: workorder check",
+                     "- run: workorder check",
                      "- run: python -m pip install -e '.[test]'",
                      "- run: sh examples/real-projects.sh python"]
+    # The test step runs pytest on one of three shards; together the shards cover every test file once.
+    assert "shard: [1, 2, 3]" in text and "python -m pytest -n auto $files" in text
+    files = sorted(path.relative_to(PACKAGE).as_posix() for path in (PACKAGE / "tests").glob("test_*.py"))
+    shards = [[x for i, x in enumerate(files) if i % 3 == shard - 1] for shard in (1, 2, 3)]
+    assert sorted(sum(shards, [])) == files and all(shards)
+    assert "i % 3 == ${{ matrix.shard }} - 1" in text
 
 
 def test_test_before_implementation_does_not_complete_task(clones):
@@ -839,6 +844,10 @@ def local_repo(tmp_path):
     git(root, "init", "-q", "-b", "main")
     git(root, "config", "user.name", "solo")
     git(root, "config", "user.email", "solo@example.com")
+    # Read-cache contracts need stable metadata after a fixture commit returns.
+    # Explicit maintenance/repack tests remain free to run those commands.
+    git(root, "config", "maintenance.auto", "false")
+    git(root, "config", "gc.auto", "0")
     (root / "app.py").write_text("items = []\n", encoding="utf-8")
     git(root, "add", "app.py")
     git(root, "commit", "-qm", "Start")

@@ -2,6 +2,23 @@
 
 ## 0.16.0 (16 Nov 2026)
 
+- Keep Git reads reusable with ordinary LFS registrations, included configuration,
+  and external ignore and attributes files; track their dependencies and use fresh
+  reads for active helpers whose inputs cannot be inspected. Recognize squashed
+  receipts independently in stale-claim checks, including with the read cache
+  disabled. Cached task and receipt values no longer share caller mutations.
+  Avoid rereading unchanged files during POSIX state checks, and support Git's
+  hook environment. Give parallel test workers their own read sessions and reuse
+  unchanged queries across external commands after validating their inputs.
+  Validate compound completion and merge-base reads once per call.
+  Share staged-tree reads without rewriting the caller's index.
+  Keep fresh metadata reads task-specific and batch each group of blobs without
+  retaining a connection between fresh calls. Classify protected test material
+  only when a path might otherwise be omitted as documentation or unchanged syntax.
+  Verify comparison imports during pytest startup before loading conftests or
+  tests, avoiding a second interpreter for fresh runs; cached results still get
+  a fresh import probe. Split each OS/Python CI combination across three test shards.
+
 - Reuse read-only Git queries throughout each command, including `done`, while
   checking repository contents, HEAD, refs and the index before reuse. Invalidate
   reads after writes and external commands; fall back to fresh reads when state

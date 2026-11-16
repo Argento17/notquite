@@ -295,7 +295,7 @@ def bytecode_cache(command, root, env, *, cache_root=None):
 
 def pytest_arguments(command):
     """Recognize direct pytest invocations without mistaking Python -c text for a runner."""
-    if Path(command[0]).name in {'pytest', 'py.test', 'pytest.exe', 'py.test.exe'}:
+    if Path(command[0]).name.lower() in {'pytest', 'py.test', 'pytest.exe', 'py.test.exe'}:
         return list(command[1:])
     for index, word in enumerate(command[1:], 1):
         if word == '-m':
@@ -306,13 +306,75 @@ def pytest_arguments(command):
     return None
 
 
-PROBE = r'''
+_IMPORT_REPORT = r'''
 import ast, csv, importlib.metadata, importlib.util, json, pathlib, re, sys
-names = set(json.loads(sys.argv[1]))
-normalize = lambda name: re.sub(r'[-_.]+', '-', name).lower()
-projects = {normalize(name) for name in json.loads(sys.argv[2]) if name}
+
+def import_locations(names, projects):
+    names = set(names)
+    normalize = lambda name: re.sub(r'[-_.]+', '-', name).lower()
+    projects = {normalize(name) for name in projects if name}
+    for distribution in importlib.metadata.distributions():
+        # Other distributions are dependencies, wherever and however installed.
+        # Matching by name also covers a second clone using the first one's install.
+        if normalize(distribution.metadata.get('Name', '')) not in projects:
+            continue
+        names.update((distribution.read_text('top_level.txt') or '').split())
+        # Some Python versions filter missing files from Distribution.files. An
+        # editable RECORD may still name sources provided by its finder or .pth.
+        entries = [row[0] for row in csv.reader((distribution.read_text('RECORD') or '').splitlines()) if row]
+        for entry in entries:
+            path = pathlib.PurePosixPath(str(entry))
+            if path.suffix == '.pth':
+                pth = pathlib.Path(distribution.locate_file(entry))
+                for line in pth.read_text(encoding='utf-8').splitlines():
+                    if not line.strip() or line.startswith(('#', 'import ' , 'import\t')):
+                        continue
+                    source = pth.parent / line.strip()
+                    if source.is_dir():
+                        for child in source.iterdir():
+                            if child.suffix == '.py' or child.is_dir() and any(child.rglob('*.py')):
+                                if child.stem.isidentifier():
+                                    names.add(child.stem)
+            if path.suffix not in ('.py', '.so', '.pyd') or not path.parts:
+                continue
+            name = path.parts[0].split('.')[0]
+            if name.isidentifier() and not name.startswith('__editable__'):
+                names.add(name)
+            if path.name.startswith('__editable__') and path.suffix == '.py':
+                # Read the installed finder without importing additional modules or
+                # evaluating its mapping expressions. Setuptools emits literal maps.
+                tree = ast.parse(pathlib.Path(distribution.locate_file(entry)).read_text(encoding='utf-8'))
+                for node in tree.body:
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+                    if any(isinstance(target, ast.Name) and target.id in ('MAPPING', 'NAMESPACES') for target in targets):
+                        mapping = ast.literal_eval(node.value)
+                        names.update(name.split('.')[0] for name in mapping)
+    locations = {}
+    for name in sorted(names):
+        if not name.isidentifier():
+            continue
+        spec = importlib.util.find_spec(name)
+        if spec is not None:
+            paths = list(spec.submodule_search_locations or [])
+            if spec.origin and spec.origin not in ('built-in', 'frozen'):
+                paths.append(spec.origin)
+            locations[name] = paths
+    return locations
+'''
+
+
+PROBE_TIMEOUT = 10
+
+
+PROBE = _IMPORT_REPORT + r'''
+names = json.loads(sys.argv[1])
+projects = json.loads(sys.argv[2])
 pytest_args = json.loads(sys.argv[3])
-if pytest_args is not None and importlib.util.find_spec('pytest') is not None:
+pytest_available = pytest_args is not None and importlib.util.find_spec('pytest') is not None
+# Emit this before loading pytest plugins; flush so even direct plugin writes
+# cannot precede the interpreter's own availability result.
+print('WORKORDER_PYTEST_AVAILABLE=' + json.dumps(pytest_available), flush=True)
+if pytest_available:
     import pytest
     from _pytest.config import get_config
     # Let the test interpreter's pytest select and parse its own config. Its
@@ -342,53 +404,7 @@ if pytest_args is not None and importlib.util.find_spec('pytest') is not None:
         config.parse(pytest_args)
     except PathsReady:
         pass
-for distribution in importlib.metadata.distributions():
-    # Other distributions are dependencies, wherever and however installed.
-    # Matching by name also covers a second clone using the first one's install.
-    if normalize(distribution.metadata.get('Name', '')) not in projects:
-        continue
-    names.update((distribution.read_text('top_level.txt') or '').split())
-    # Some Python versions filter missing files from Distribution.files. An
-    # editable RECORD may still name sources provided by its finder or .pth.
-    entries = [row[0] for row in csv.reader((distribution.read_text('RECORD') or '').splitlines()) if row]
-    for entry in entries:
-        path = pathlib.PurePosixPath(str(entry))
-        if path.suffix == '.pth':
-            pth = pathlib.Path(distribution.locate_file(entry))
-            for line in pth.read_text(encoding='utf-8').splitlines():
-                if not line.strip() or line.startswith(('#', 'import ' , 'import\t')):
-                    continue
-                source = pth.parent / line.strip()
-                if source.is_dir():
-                    for child in source.iterdir():
-                        if child.suffix == '.py' or child.is_dir() and any(child.rglob('*.py')):
-                            if child.stem.isidentifier():
-                                names.add(child.stem)
-        if path.suffix not in ('.py', '.so', '.pyd') or not path.parts:
-            continue
-        name = path.parts[0].split('.')[0]
-        if name.isidentifier() and not name.startswith('__editable__'):
-            names.add(name)
-        if path.name.startswith('__editable__') and path.suffix == '.py':
-            # Read the installed finder without importing additional modules or
-            # evaluating its mapping expressions. Setuptools emits literal maps.
-            tree = ast.parse(pathlib.Path(distribution.locate_file(entry)).read_text(encoding='utf-8'))
-            for node in tree.body:
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
-                if any(isinstance(target, ast.Name) and target.id in ('MAPPING', 'NAMESPACES') for target in targets):
-                    mapping = ast.literal_eval(node.value)
-                    names.update(name.split('.')[0] for name in mapping)
-locations = {}
-for name in sorted(names):
-    if not name.isidentifier():
-        continue
-    spec = importlib.util.find_spec(name)
-    if spec is not None:
-        paths = list(spec.submodule_search_locations or [])
-        if spec.origin and spec.origin not in ('built-in', 'frozen'):
-            paths.append(spec.origin)
-        locations[name] = paths
-print('WORKORDER_IMPORTS=' + json.dumps(locations))
+print('WORKORDER_IMPORTS=' + json.dumps(import_locations(names, projects)))
 '''
 
 
@@ -403,7 +419,195 @@ def import_advice(name, root, source):
     return "install the project non-editable or run the tests so they import this checkout's code"
 
 
-def check(root, source, command, env, timeout=None):
+def _import_failure(report, root, source):
+    for name, paths in report.items():
+        for path in paths:
+            if not Path(path).resolve().is_relative_to(root.resolve()):
+                return ImportFailure(f'the tests import {name} from {path}, outside the comparison copy; '
+                                     + import_advice(name, root, source))
+    return None
+
+
+def integrated_pytest(command, root, env):
+    """Only pytest invocations whose interpreter and entry point are understood."""
+    python = interpreter(command, root, env)
+    if python is None:
+        return False
+    if Path(command[0]).name.lower() in {'pytest', 'py.test', 'pytest.exe', 'py.test.exe'}:
+        return True
+    if _PYTHON_COMMAND.fullmatch(Path(command[0]).name.lower()):
+        from .pytest_selection import ISOLATED_RUNNER
+        entry = list(command[len(python):len(python) + 2])
+        return entry in (['-m', 'pytest'], ['-c', ISOLATED_RUNNER])
+    return False
+
+
+_GUARD = r'''
+import os, pytest
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_load_initial_conftests(early_config):
+    previous = sys.path[:]
+    try:
+        # Pytest 8 applies pythonpath in another early hook; pytest 9 already
+        # applied it. Restore our temporary additions before pytest continues.
+        for path in reversed(early_config.getini('pythonpath')):
+            sys.path.insert(0, str(path))
+        locations = import_locations(_DATA['names'], _DATA['projects'])
+        root = pathlib.Path(_DATA['root']).resolve()
+        valid = all(pathlib.Path(path).resolve().is_relative_to(root)
+                    for paths in locations.values() for path in paths)
+        report = {'ok': valid, 'imports': locations}
+    except Exception as error:
+        report = {'ok': False, 'error': str(error) or type(error).__name__}
+    finally:
+        sys.path[:] = previous
+    destination = pathlib.Path(_DATA['report'])
+    temporary = destination.with_suffix('.tmp')
+    temporary.write_text(json.dumps(report), encoding='utf-8')
+    os.replace(temporary, destination)
+    if not report['ok']:
+        raise SystemExit(4)
+'''
+
+
+_GUARDED_RUNNER = r'''
+import importlib.util, json, os, pathlib, runpy, sys
+data = json.loads(sys.argv[1])
+arguments = sys.argv[2:]
+spec = importlib.util.spec_from_file_location(data['module'], data['plugin'])
+plugin = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(plugin)
+from _pytest import config as pytest_config
+original = pytest_config.get_config
+def get_config(*args, **kwargs):
+    config = original(*args, **kwargs)
+    config.pluginmanager.register(plugin, data['module'])
+    return config
+pytest_config.get_config = get_config
+if data['kind'] == 'selection':
+    sys.argv = ['-c', *arguments]
+    exec(data['selection'], {'__name__': '__main__'})
+elif data['kind'] == 'console':
+    if not getattr(sys.flags, 'safe_path', sys.flags.isolated):
+        sys.path[0] = data['path0']
+    sys.argv = [data['console'], *arguments]
+    runpy.run_path(data['console'], run_name='__main__')
+else:
+    if not getattr(sys.flags, 'safe_path', sys.flags.isolated):
+        sys.path[0] = os.getcwd()
+    sys.argv = ['pytest', *arguments]
+    runpy.run_module('pytest', run_name='__main__', alter_sys=True)
+'''
+
+
+class _ImportGuard:
+    def __init__(self, command, root, source, env, directory):
+        from .pytest_selection import ISOLATED_RUNNER
+        self.root, self.source = root, source
+        self.directory = directory
+        self.report = directory / 'report.json'
+        self.pycache_prefix = None
+        self.timeout = PROBE_TIMEOUT
+        module = '__workorder_import_guard_' + os.urandom(8).hex()
+        plugin = directory / (module + '.py')
+        data = dict(names=sorted(set(packages(root, modules=True)) | set(packages(source, modules=True))),
+                    projects=sorted({project_name(root), project_name(source)} - {''}),
+                    root=str(root), report=str(self.report))
+        plugin.write_text(_IMPORT_REPORT + '\n_DATA = ' + repr(data) + '\n' + _GUARD, encoding='utf-8')
+        python = interpreter(command, root, env)
+        flags = iter(python[1:])
+        ignore_environment = False
+        for flag in flags:
+            if flag in {'-W', '-X', '--check-hash-based-pycs'}:
+                next(flags, None)
+            elif flag.startswith('-') and not flag.startswith('--') and set(flag[1:]) & {'I', 'E'}:
+                ignore_environment = True
+        self.command, self.env = list(command), dict(env)
+        if ignore_environment or ISOLATED_RUNNER in command:
+            kind = ('selection' if ISOLATED_RUNNER in command else
+                    'module' if _PYTHON_COMMAND.fullmatch(Path(command[0]).name.lower()) else 'console')
+            runner = dict(module=module, plugin=str(plugin), kind=kind, selection=ISOLATED_RUNNER)
+            if kind == 'console':
+                runner['console'] = (command[0] if '/' in command[0] or '\\' in command[0]
+                                     else shutil.which(command[0], path=env.get('PATH')))
+                runner['path0'] = str((root / runner['console']).resolve().parent)
+            bootstrap = ''
+            if kind != 'selection':
+                first = runner['path0'] if kind == 'console' else str(root.resolve())
+                # Restore script/-m startup before even importing the guard's
+                # standard-library dependencies; -E keeps that path, -I/-P do not.
+                bootstrap = ('import sys\nif not getattr(sys.flags, "safe_path", sys.flags.isolated):\n'
+                             f'    sys.path[0] = {first!r}\n')
+            self.command = [*python, '-c', bootstrap + _GUARDED_RUNNER, json.dumps(runner),
+                            *pytest_arguments(command)]
+        else:
+            # Keep the real console/module entry point and all its arguments.
+            # A trailing private search path cannot shadow checkout/dependencies.
+            self.env['PYTHONPATH'] = os.pathsep.join(filter(None, (env.get('PYTHONPATH'), str(directory))))
+            end = self.command.index('--') if '--' in self.command else len(self.command)
+            self.command[end:end] = ['-p', module]
+
+    def status(self):
+        try:
+            value = json.loads(self.report.read_text(encoding='utf-8'))
+            return value if isinstance(value, dict) else {'error': 'invalid import guard report'}
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            return {'error': 'unreadable import guard report'}
+
+    def finish(self, run):
+        if run.returncode == 124:
+            return run
+        report = self.status()
+        if (report is None and run.returncode and
+                re.search(r"No module named ['\"]?_?pytest['\"]?(?:\r?\n|$)", run.stderr or '')):
+            # The original interpreter may lack pytest entirely. Preserve its
+            # exit only after a separate probe verifies that fact and project
+            # imports, outside this guard's temporary environment and lease.
+            run.import_guard_missing_pytest = run.returncode
+        try:
+            failure = (_import_failure(report['imports'], self.root, self.source)
+                       if report and 'imports' in report else
+                       ImportFailure('could not verify project imports: '
+                                     + (report.get('error', 'invalid import guard report') if report
+                                        else 'the import guard did not complete')))
+        except (OSError, ValueError, TypeError, AttributeError):
+            failure = ImportFailure('could not verify project imports: invalid import guard report')
+        if failure:
+            run.returncode = failure
+        elif not report.get('ok'):
+            run.returncode = ImportFailure('could not verify project imports: the import guard refused the run')
+        return run
+
+    def close(self):
+        if self.pycache_prefix:
+            for source in (self.directory.absolute(), self.directory.resolve()):
+                name = source.as_posix()
+                if len(name) > 1 and name[1] == ':' and name[0] != '/':
+                    name = name[2:]
+                path = Path(self.pycache_prefix).joinpath(*name.lstrip('/').split('/'))
+                try:
+                    _clear_checkout_bytecode(path, source)
+                except OSError:
+                    pass
+
+
+@contextmanager
+def pytest_guard(command, root, source, env):
+    if source is None:
+        yield None
+        return
+    with tempfile.TemporaryDirectory(prefix='workorder-imports-', ignore_cleanup_errors=True) as temporary:
+        guard = _ImportGuard(command, root, source, env, Path(temporary))
+        try:
+            yield guard
+        finally:
+            guard.close()
+
+
+def check(root, source, command, env, timeout=None, *, require_missing_pytest=False):
     python = interpreter(command, root, env)
     # Flat utility scripts alone must not turn a native test command into a
     # Python comparison. Identifiable Python commands also check flat modules.
@@ -419,16 +623,18 @@ def check(root, source, command, env, timeout=None):
         from . import store as s
         with s.changing_repository(), bytecode_cache(probe, root, env, cache_root=source) as (words, probe_env):
             run = subprocess.run(words, cwd=root, env=probe_env,
-                                 capture_output=True, text=True, errors='replace', timeout=10)
+                                 capture_output=True, text=True, errors='replace', timeout=PROBE_TIMEOUT)
         line = next(line for line in run.stdout.splitlines() if line.startswith('WORKORDER_IMPORTS='))
         report = json.loads(line.split('=', 1)[1])
         if run.returncode:
             raise ValueError(run.stderr.strip())
-        for name, paths in report.items():
-            for path in paths:
-                if not Path(path).resolve().is_relative_to(root.resolve()):
-                    return ImportFailure(f'the tests import {name} from {path}, outside the comparison copy; '
-                                         + import_advice(name, root, source))
+        if require_missing_pytest:
+            available = [line for line in run.stdout.splitlines()
+                         if line.startswith('WORKORDER_PYTEST_AVAILABLE=')]
+            if (len(available) != 1
+                    or json.loads(available[0].split('=', 1)[1]) is not False):
+                return ImportFailure('could not verify project imports: the import guard did not complete')
+        return _import_failure(report, root, source)
     except (OSError, ValueError, configparser.Error, StopIteration, subprocess.SubprocessError) as error:
         return ImportFailure(f'could not verify project imports: {error or "the import probe failed"}')
     return None

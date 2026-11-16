@@ -80,33 +80,28 @@ def changed(root, paths, before, *, after=None, staged=False):
     """Keep task metadata and real code edits, omitting documentation-only changes."""
     from . import store as s
     from .gate import _test_bytes, test_material
-    protected = test_material(root, before, staged)
-    paths = {path for path in paths if path.startswith(('tasks/', '.workorder/', '.notquite/'))
-             or path in protected or not documentation(path)}
-    if not any(path.endswith('.py') for path in paths):
-        return paths
-    old_tree = s.code_tree(root, before)
+    paths = set(paths)
+    metadata = {path for path in paths if path.startswith(('tasks/', '.workorder/', '.notquite/'))}
+    omissions = {path for path in paths - metadata if documentation(path)}
+    python = {path for path in paths - metadata - omissions if path.endswith('.py')}
+    old_tree = s.code_tree(root, before) if python else {}
     # Working-tree comparisons must also work while receipt conflicts remain
     # in the index. Read that index only when it is the requested snapshot.
-    new_tree = s.code_tree(root, after or s.index_tree(root)) if after or staged else {}
-    result = set()
-    for path in paths:
-        if path in protected or path.startswith(('tasks/', '.workorder/', '.notquite/')):
-            result.add(path)
-            continue
-        if documentation(path):
-            continue
-        if path.endswith('.py'):
-            old = old_tree.get(path, '').split(' ', 1)[0]
-            new = new_tree.get(path, '').split(' ', 1)[0]
-            if not after and not staged:
-                try:
-                    new = '100755' if (root / path).stat().st_mode & 0o111 else '100644'
-                except OSError:
-                    new = ''
-            if (old in {'100644', '100755'} and old == new
-                    and same_python(_test_bytes(root, path, before),
-                                    _test_bytes(root, path, after, staged))):
-                continue
-        result.add(path)
-    return result
+    new_tree = s.code_tree(root, after or s.index_tree(root)) if python and (after or staged) else {}
+    for path in python:
+        old = old_tree.get(path, '').split(' ', 1)[0]
+        new = new_tree.get(path, '').split(' ', 1)[0]
+        if not after and not staged:
+            try:
+                new = '100755' if (root / path).stat().st_mode & 0o111 else '100644'
+            except OSError:
+                new = ''
+        if (old in {'100644', '100755'} and old == new
+                and same_python(_test_bytes(root, path, before),
+                                _test_bytes(root, path, after, staged))):
+            omissions.add(path)
+    # Classification only matters for paths we might omit. A real code change
+    # remains significant whether it is a test or production code; computing all
+    # tasks' test material for each such comparison adds work without evidence.
+    protected = test_material(root, before, staged) if omissions else set()
+    return paths - (omissions - protected)

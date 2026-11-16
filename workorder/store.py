@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
+from copy import deepcopy
 from functools import partial, wraps
 import hashlib
 import hmac
@@ -87,12 +88,12 @@ _READS = ContextVar("workorder_reads", default=None)
 
 
 @contextmanager
-def read_session():
+def read_session(*, seed=None):
     """Share reads within one command, never across commands in an embedding process."""
     if _READS.get() is not None:
         yield
         return
-    cache = ReadCache()
+    cache = seed if seed is not None else ReadCache()
     token = _READS.set(cache)
     try:
         yield
@@ -106,7 +107,11 @@ def read_session():
 def invalidate_reads(*, metadata_only=False):
     cache = _READS.get()
     if cache is not None:
-        cache.clear(queries=not metadata_only)
+        # Virtual receipts and other derived values always need rebuilding.
+        # Git queries can survive an external command that changed no observed
+        # input: checking validates state before reuse, even in a nested read
+        # when this generation changes. Unobservable helpers never reuse reads.
+        cache.clear(queries=False)
 
 
 @contextmanager
@@ -119,24 +124,38 @@ def changing_repository():
         invalidate_reads()
 
 
+def _read_key(value):
+    """Key compound read inputs by value, including a task's nested fields."""
+    if isinstance(value, dict):
+        return (dict, frozenset((key, _read_key(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return (type(value), tuple(_read_key(item) for item in value))
+    if isinstance(value, (set, frozenset)):
+        return (type(value), frozenset(_read_key(item) for item in value))
+    return value
+
+
 def cached_read(function, *, git_query=False):
     @wraps(function)
     def read(*args, **kwargs):
         cache = _READS.get()
-        if cache is None:
+        if cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0':
             return function(*args, **kwargs)
         with cache.checking(args[0], isolated=kwargs.get('isolated', False)) as reusable:
             if not reusable:
                 return function(*args, **kwargs)
             entries = cache.queries if git_query else cache
-            key = (function, args, tuple(sorted(kwargs.items())))
+            key = (function, tuple(_read_key(arg) for arg in args),
+                   tuple((key, _read_key(value)) for key, value in sorted(kwargs.items())))
             if key not in entries:
                 generation = cache.generation
                 result = function(*args, **kwargs)
                 if generation == cache.generation:
-                    entries[key] = result
+                    entries[key] = result if git_query else deepcopy(result)
                 return result
-            return entries[key]
+            # A caller may annotate a receipt or task. Reuse must have the same
+            # value semantics as a fresh read, including nested mutable fields.
+            return entries[key] if git_query else deepcopy(entries[key])
     return read
 
 
@@ -259,7 +278,14 @@ def read_bytes(root, relative, staged=False):
 def read_text(root, relative, staged=False):
     # Git on Windows may check text files out with CRLF; the content is the same.
     if staged and (receipt_task(relative) or relative.startswith("tasks/")):
-        text = metadata_texts(root, None, None, True).get(relative)
+        if metadata_scope(relative) is None:
+            text = metadata_texts(root, None, None, True).get(relative)
+        else:
+            # Read the index without resolving a possibly different worktree
+            # symlink, exactly as the shared metadata inventory does.
+            raw = blob_bytes(root, f':{relative}')
+            text = (raw.decode('utf-8', errors='surrogateescape').removeprefix('\ufeff').replace('\r\n', '\n')
+                    if raw is not None else None)
         if text is None:
             raise Refused(f"missing staged file: {relative}")
         return checked_text(text, relative)
@@ -894,6 +920,14 @@ def receipt_task(path):
     return None
 
 
+def metadata_scope(tid):
+    """Share a full metadata inventory only when subsequent reads can reuse it."""
+    cache = _READS.get()
+    fresh = (cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0'
+             or cache.stack and not cache.stack[-1][1])
+    return tid if fresh else None
+
+
 @cached_read
 def metadata_texts(root, rev=None, tid=None, staged=False):
     """Read task and receipt blobs in two Git calls, preserving byte-sized batch framing.
@@ -926,9 +960,6 @@ def metadata_texts(root, rev=None, tid=None, staged=False):
 @partial(cached_read, git_query=True)
 def blob_bytes(root, spec):
     """Read a blob by object ID or revision:path, preserving its exact bytes."""
-    if _READS.get() is None:
-        with read_session():
-            return blob_bytes(root, spec)
     # The batch protocol is line delimited. Unusual Git paths still use argv.
     if '\n' in spec or '\r' in spec:
         result = subprocess.run(['git', 'show', spec], cwd=root, capture_output=True, timeout=30)
@@ -939,6 +970,15 @@ def blob_bytes(root, spec):
 
 def _batch_object(root, spec):
     cache = _READS.get()
+    if (cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0'
+            or cache.stack and not cache.stack[-1][1]):
+        batch = Batch(root)
+        try:
+            return batch.read(spec)
+        except (ValueError, OSError) as error:
+            raise Refused(str(error)) from error
+        finally:
+            batch.close()
     key = (root, tuple(sorted(os.environ.items())))
     if key not in cache.batches:
         cache.batches[key] = Batch(root)
@@ -950,15 +990,33 @@ def _batch_object(root, spec):
 
 
 def read_blobs(root, oids):
-    if _READS.get() is None:
-        with read_session():
-            return read_blobs(root, oids)
+    if _READS.get() is None or os.environ.get('WORKORDER_GIT_CACHE') == '0':
+        return _read_blobs(root, oids, fresh=True)
+    with _READS.get().checking(root) as reusable:
+        return _read_blobs(root, oids, fresh=not reusable)
+
+
+def _read_blobs(root, oids, *, fresh):
+    # One Git invocation can read a group of immutable IDs without retaining
+    # its replacement-ref/index snapshot across separate fresh read calls.
+    oids = set(oids)
+    batch = Batch(root) if fresh and oids else None
     blobs = {}
-    for oid in set(oids):
-        raw = blob_bytes(root, oid)
-        if raw is None:
-            raise Refused("Git could not read a task or receipt blob")
-        blobs[oid] = raw.decode("utf-8", errors="surrogateescape").removeprefix("\ufeff").replace("\r\n", "\n")
+    try:
+        for oid in oids:
+            if batch is not None and '\n' not in oid and '\r' not in oid:
+                item = batch.read(oid)
+                raw = item[2] if item is not None and item[1] == b'blob' else None
+            else:
+                raw = blob_bytes(root, oid)
+            if raw is None:
+                raise Refused("Git could not read a task or receipt blob")
+            blobs[oid] = raw.decode("utf-8", errors="surrogateescape").removeprefix("\ufeff").replace("\r\n", "\n")
+    except (OSError, ValueError) as error:
+        raise Refused(str(error)) from error
+    finally:
+        if batch is not None:
+            batch.close()
     return blobs
 
 
@@ -968,10 +1026,10 @@ def receipt_paths(root, staged=False, rev=None, tid=None):
     scopes = ([f"{d}/{tid}.jsonl" for d in RECEIPT_DIRS] + [f"{d}/{tid}" for d in RECEIPT_DIRS]
               if tid else list(RECEIPT_DIRS))
     if rev:
-        return sorted(p for p in metadata_texts(root, rev, tid if rev != "HEAD" else None, False)
+        return sorted(p for p in metadata_texts(root, rev, tid if rev != "HEAD" else metadata_scope(tid), False)
                       if receipt_task(p) and (tid is None or receipt_task(p) == tid))
     if staged:
-        return sorted(p for p in metadata_texts(root, None, None, True)
+        return sorted(p for p in metadata_texts(root, None, metadata_scope(tid), True)
                       if receipt_task(p) and (tid is None or receipt_task(p) == tid))
     found = []
     for scope in scopes:
@@ -987,7 +1045,7 @@ def receipt_paths(root, staged=False, rev=None, tid=None):
 def receipt_texts(root, tid, staged=False, rev=None):
     if rev or staged:
         return {p: checked_text(text, p) for p, text in metadata_texts(
-            root, rev, tid if rev and rev != "HEAD" else None, staged).items() if receipt_task(p) == tid}
+            root, rev, tid if rev and rev != "HEAD" else metadata_scope(tid), staged).items() if receipt_task(p) == tid}
     texts = {p: read_text(root, p)
              for p in receipt_paths(root, staged, rev, tid) if receipt_task(p) == tid}
     pending = proposed_receipts(root, tid)
@@ -1477,7 +1535,7 @@ def code_tree(root, revision):
 
 def index_code(root):
     """The code fingerprint of what the next commit would contain (the index)."""
-    return code_digest(root, git(root, "write-tree").stdout.strip())
+    return code_digest(root, index_tree(root))
 
 
 def dirty_paths(root):
@@ -1518,45 +1576,76 @@ def test_timeout(record, override=None):
 
 
 @changing_repository()
-def run_test(command, root, timeout=None, capture_output=True, *, isolated=False, cache_root=None):
+def run_test(command, root, timeout=None, capture_output=True, *, isolated=False, cache_root=None,
+             verify_imports=None):
     """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
-    from .python_imports import bytecode_cache, environment
+    from .python_imports import ImportFailure, bytecode_cache, environment, pytest_guard
     # pytest parses this environment option with shlex even on Windows. Each
     # subprocess owns its pytest cache; neither cache affects our result key.
     env = environment(root, copy_environment() if isolated else os.environ.copy())
-    with tempfile.TemporaryDirectory(prefix="workorder-pytest-", ignore_cleanup_errors=True) as cache, \
-            bytecode_cache(command, root, env, cache_root=cache_root) as (execution, env):
+    with tempfile.TemporaryDirectory(prefix="workorder-pytest-", ignore_cleanup_errors=True) as cache:
         env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "")
                                  + " -o cache_dir=" + shlex.quote(cache))
-        # Keep the ordinary subprocess path when there is no deadline. With a deadline,
-        # use a process group so child test runners cannot keep captured pipes open.
-        if timeout is None:
-            run = subprocess.run(execution, cwd=root, capture_output=capture_output,
-                                 encoding="utf-8", errors="replace", env=env)
-            run.args = command
-            return run
-        with subprocess.Popen(execution, cwd=root, stdout=subprocess.PIPE if capture_output else None,
-                              stderr=subprocess.PIPE if capture_output else None,
-                              encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
-                              env=env) as process:
-            try:
-                output, errors = process.communicate(timeout=timeout)
-                return subprocess.CompletedProcess(command, process.returncode, output, errors)
-            except subprocess.TimeoutExpired:
-                if os.name != 'nt':
+        with pytest_guard(command, root, verify_imports, env) as guard, \
+                bytecode_cache(guard.command if guard else command, root, guard.env if guard else env,
+                               cache_root=cache_root) as (execution, env):
+            if guard:
+                guard.pycache_prefix = env.get('PYTHONPYCACHEPREFIX')
+            # A guarded pytest startup retains the standalone probe's deadline,
+            # even when the declared test itself has no timeout.
+            if timeout is None and guard is None:
+                run = subprocess.run(execution, cwd=root, capture_output=capture_output,
+                                     encoding="utf-8", errors="replace", env=env)
+                run.args = command
+                return run
+            started = time.monotonic()
+            deadline = started + timeout if timeout is not None else None
+            probe_deadline = started + guard.timeout if guard else None
+            with subprocess.Popen(execution, cwd=root, stdout=subprocess.PIPE if capture_output else None,
+                                  stderr=subprocess.PIPE if capture_output else None,
+                                  encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
+                                  env=env) as process:
+                def stop():
+                    if os.name != 'nt':
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    else:
+                        process.kill()
+                    return process.communicate()
+
+                while True:
+                    now = time.monotonic()
+                    if deadline is not None and now >= deadline:
+                        output, errors = stop()
+                        message = f"test timed out after {timeout:g} seconds (exit 124)\n"
+                        if capture_output:
+                            errors = (errors or "") + message
+                        else:
+                            print(message, end='', file=sys.stderr, flush=True)
+                        return subprocess.CompletedProcess(command, 124, output, errors)
+                    if probe_deadline is not None:
+                        report = guard.status()
+                        if report is not None:
+                            if not report.get('ok'):
+                                output, errors = stop()
+                                return guard.finish(subprocess.CompletedProcess(command, 4, output, errors))
+                            probe_deadline = None
+                        elif now >= probe_deadline:
+                            output, errors = stop()
+                            failure = ImportFailure('could not verify project imports: '
+                                                    f'import probe timed out after {guard.timeout:g} seconds')
+                            return subprocess.CompletedProcess(command, failure, output, errors)
+                    wait = max(0, deadline - now) if deadline is not None else None
+                    if probe_deadline is not None:
+                        wait = min(wait if wait is not None else 0.05, 0.05, max(0, probe_deadline - now))
                     try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                else:
-                    process.kill()
-                output, errors = process.communicate()
-                message = f"test timed out after {timeout:g} seconds (exit 124)\n"
-                if capture_output:
-                    errors = (errors or "") + message
-                else:
-                    print(message, end='', file=sys.stderr, flush=True)
-                return subprocess.CompletedProcess(command, 124, output, errors)
+                        output, errors = process.communicate(timeout=wait)
+                    except subprocess.TimeoutExpired:
+                        continue
+                    run = subprocess.CompletedProcess(command, process.returncode, output, errors)
+                    return guard.finish(run) if guard else run
 
 
 def _test_state(root, isolated=False):
@@ -1648,7 +1737,7 @@ def checkout_contents(root, entries):
             yield path, mode, (destination / path).read_bytes()
 
 
-@cached_read
+@partial(cached_read, git_query=True)
 def index_tree(root):
     # write-tree updates the index's tree cache. Preserve the caller's index,
     # including an alternate index supplied by Git while running a hook.
@@ -1657,7 +1746,12 @@ def index_tree(root):
         source = root / source
     with tempfile.TemporaryDirectory(prefix='workorder-index-') as temporary:
         index = Path(temporary) / 'index'
-        index.write_bytes(source.read_bytes())
+        try:
+            raw = source.read_bytes()
+        except FileNotFoundError:
+            pass  # Git interprets an absent index as an empty staged tree.
+        else:
+            index.write_bytes(raw)
         result = subprocess.run(['git', 'write-tree'], cwd=root, capture_output=True,
                                 encoding='utf-8', errors='surrogateescape', timeout=30,
                                 env={**os.environ, 'GIT_INDEX_FILE': str(index)})
@@ -1675,13 +1769,16 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
     """
     owner = cache_root if cache_root is not None else root
     isolated = owner != root
+    integrate = False
     if isolated:
-        from .python_imports import check, environment
-        failure = check(root, owner, command, environment(root, copy_environment()), timeout)
-        if failure:
-            run = subprocess.CompletedProcess(command, failure, '', '')
-            run.cached = False
-            return run
+        from .python_imports import ImportFailure, check, environment, integrated_pytest
+        integrate = integrated_pytest(command, root, environment(root, copy_environment()))
+        if not integrate:
+            failure = check(root, owner, command, environment(root, copy_environment()), timeout)
+            if failure:
+                run = subprocess.CompletedProcess(command, failure, '', '')
+                run.cached = False
+                return run
     logical = list(command if logical_command is None else logical_command)
     timeout = positive_seconds(timeout) if timeout is not None else None
     ci = ci_environment()
@@ -1696,6 +1793,21 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
                 cached_path = test_cache_path(owner, before[1], logical, timeout)
                 if not fresh:
                     run = read_test_cache(cached_path, command)
+                    if run is not None and integrate:
+                        # Cache hits still verify the interpreter's external
+                        # installations. A probe can itself change the checkout,
+                        # so choose the cache again from its resulting state.
+                        failure = check(root, owner, command, environment(root, copy_environment()), timeout)
+                        if failure:
+                            run = subprocess.CompletedProcess(command, failure, '', '')
+                            run.cached = False
+                            return run
+                        cached_path = None
+                        before = _test_state(root, isolated)
+                        owner_head = _git_run(owner, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
+                        if before:
+                            cached_path = test_cache_path(owner, before[1], logical, timeout)
+                        run = read_test_cache(cached_path, command) if cached_path is not None else None
                     if run is not None:
                         return run
         except (OSError, Refused, ValueError):
@@ -1706,7 +1818,19 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
         except OSError:
             pass
     try:
-        run = run_test(command, root, timeout, capture_output=True, isolated=isolated, cache_root=owner)
+        run = run_test(command, root, timeout, capture_output=True, isolated=isolated, cache_root=owner,
+                       verify_imports=owner if integrate else None)
+        if integrate and getattr(run, 'import_guard_missing_pytest', None) is not None:
+            failure = check(root, owner, command, environment(root, copy_environment()), timeout,
+                            require_missing_pytest=True)
+            if failure:
+                run.returncode = failure
+            else:
+                run.returncode = run.import_guard_missing_pytest
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        if not integrate:
+            raise
+        run = subprocess.CompletedProcess(command, ImportFailure(f'could not verify project imports: {error}'), '', '')
     finally:
         invalidate_reads()
     # Pytest can report a failure even when application shutdown code forces exit 0.
@@ -1715,7 +1839,7 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
     if run.returncode == 0 and any(outcomes.get(name, 0) for name in ('failed', 'error', 'errors')):
         run.returncode = 1
     run.cached = False
-    if cached_path is not None:
+    if cached_path is not None and isinstance(run.returncode, int):
         temporary = cached_path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
         try:
             if (_test_state(root, isolated) == before

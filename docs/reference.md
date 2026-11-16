@@ -542,6 +542,11 @@ by immutable commit IDs. The cache is local and can be removed. Each command
 also shares receipt and Git reads in memory, then discards those reads.
 Committed metadata blobs are read in batches. Linear task histories share one
 history walk; merge histories retain Git's per-task history rules.
+Git read reuse accounts for included configuration and external ignore and
+attributes files. Registered filters such as Git LFS do not disable reuse unless
+attributes select them. Active external helpers with unobservable inputs use
+fresh reads. Set `WORKORDER_GIT_CACHE=0` to diagnose behavior with command-local
+Git read reuse disabled; the evidence rules are the same in either mode.
 
 Patch checks need the original implementation history. If it is absent,
 Workorder can still recognise exactly matching code or a landing that matches

@@ -14,6 +14,7 @@ Labels below must come from someone other than the pull request author. An appro
 **Meaning:** `NOT DONE`, `owes`, missing commits, stale receipts, a receipt ledger without a task, or contract evidence debt means DONE/CLOSED is unsupported. Contracts may require real artifacts; mock output cannot satisfy that requirement. Human dependencies and required merge/deploy/live evidence still matter.
 **Clear:** Finish the missing work and record the requested receipt. For changed committed code, run `workorder renew --task ID` and commit its receipts. Use the named deployment/read-back commands where required. If unfinished, return the task to IN_PROGRESS with its failed receipt. No label supplies evidence or a missing dependency.
 Protected test files retain their staleness checks, including doctests in Python docstrings and tests under docs/. Changing a task's test paths does not rewrite its old receipt's syntax map or by itself change another task's recorded code.
+After a squash removes original commits, a renewed DONE/CLOSED claim still checks the recorded paths, deletions, modes and content. This rule also applies with Git read reuse disabled (`WORKORDER_GIT_CACHE=0`).
 
 <!-- refusal-family current-tests -->
 ## A task's current test fails or runs nothing
@@ -62,6 +63,7 @@ Test material is classified first: declared paths, recognized test-command files
 ## The test could not run against the intended copy
 **Meaning:** `could not compare` can name an external project import, an unidentified interpreter, an unavailable dependency, an invalid pytest setup or a failed temporary-copy operation. It proves neither weakness nor a passing refactor.
 **Clear:** Install dependencies and make the tests import this checkout's project, using a suitable pytest `pythonpath` or non-editable install; fetch missing refs and fix the named command/setup error. Recheck isolated Python commands too. An unavailable project-import check requires `workorder-allow:ID`; approval and warning mode do not suffice. Other execution/setup failures need correction, not a claimed passing test.
+Fresh pytest comparisons verify imports in the test interpreter before loading conftests or tests, using pytest's selected configuration and plugins. Cached test results still require a fresh standalone import probe. Missing or timed-out verification cannot establish a passing comparison. A missing-pytest warning requires a separate import probe to confirm absence; duplicate availability markers are refused.
 
 <!-- refusal-family workflow -->
 ## Workorder workflow changed
@@ -95,15 +97,15 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
 <!-- refusal-inventory workorder/bootstrap.py a0d707075dd646d1dff075a0b77d19d23aa6642b581f0898a7205e07eb873afa records,workflow,project-test -->
 <!-- refusal-inventory workorder/cli.py 8df5a614a95a749215bfd128fe745033bb2bb9ca84139459f648ff5d4d297d40 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
-<!-- refusal-inventory workorder/gate.py 5752e41c67b9066136c81b03583f80af55b32fc32640bbcaa7d410d18c22205a code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
+<!-- refusal-inventory workorder/gate.py 537f712e0435d1986feff02921427afd1cce509ca36e265f4c7052ea7122c8f6 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 4c890e78327bd094ac6f84882d7e42640cb88130f5232d92f7f23bbea6502a79 evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
 <!-- refusal-inventory workorder/project_tests.py 09b2fd31037cb19f6db1f22dc22c15a36beaa8defe66df3cdda66ac1dc47b998 project-test,records -->
 <!-- refusal-inventory workorder/pytest_selection.py bcff8a23918c0320f921d46b229359bc41237be3055be093a6e746860395d35b weak-tests,imports -->
-<!-- refusal-inventory workorder/python_imports.py 7c23cdd30e97d11faac363844eaa7a8c7748d82f4b38fbddbc6ff4eacf3427f7 imports -->
+<!-- refusal-inventory workorder/python_imports.py d7a13be0f74e64675bac4ff8a01afa1020ec4720dd27caa2f5dcd31218577db3 imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
-<!-- refusal-inventory workorder/source.py 08773fe5444886b3a76a4d65bd6d15dd420ed4c59e4e808fabf2174558e15cb8 code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py c1929023d062f852501a75e0fa362139372d7304273507f20438aad1987a95bc records,evidence,current-tests,removal -->
-<!-- refusal-inventory workorder/git_reads.py d2cec454d44e3bc992ef23885f74981ac2fec658f876f04d2449b7b1c6f11e88 records,evidence -->
+<!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
+<!-- refusal-inventory workorder/store.py 8492fc277cc906e5a7171d4accf9bb38a573cc727d483b5a27532202e84dd271 records,evidence,current-tests,removal -->
+<!-- refusal-inventory workorder/git_reads.py a60c61e46355b3d7456123f7e3496b5797b797a61704007256b373fa77939425 records,evidence -->
