@@ -964,6 +964,18 @@ def verify_receipt(root, tid, value):
             tree = code_tree(root, item['commit'])
             if any(tree.get(path) != entry for path, entry in paths.items()):
                 raise Refused(f'{tid}: implementation paths do not match its commit')
+    if 'implementation_syntax' in item:
+        syntax = item['implementation_syntax']
+        paths = item.get('implementation_paths', {})
+        if (item['kind'] != 'implemented' or not isinstance(syntax, dict)
+                or any(path not in paths or not path.endswith('.py') or not isinstance(entry, str)
+                       or not re.fullmatch(r'100(?:644|755) blob [0-9a-f]{64}', entry)
+                       for path, entry in syntax.items())):
+            raise Refused(f'{tid}: invalid implementation syntax')
+        if present:
+            from . import source
+            if source.syntax_map(root, paths) != syntax:
+                raise Refused(f'{tid}: implementation syntax does not match its commit')
     if item["kind"] in {"test", "deployed", "live"}:
         if (type(item.get("exit_code")) is not int or type(item.get("valid")) is not bool
                 or not isinstance(item.get("command"), list) or not item["command"]
@@ -1408,7 +1420,12 @@ def dirty_paths(root):
     generated = [f':(exclude,glob)**/{pattern}' for pattern in
                  ('*.egg-info/**', '*.dist-info/**', '__pycache__/**', '*.pyc', '.pytest_cache/**')]
     status = git(root, "status", "--porcelain", "--untracked-files=all", "--", *CODE_PATHS, *generated).stdout
-    return [line[3:] for line in status.splitlines()]
+    paths = [line[3:] for line in status.splitlines()]
+    from . import source
+    if not paths:
+        return []
+    meaningful = source.changed(root, paths, 'HEAD') | source.changed(root, paths, 'HEAD', staged=True)
+    return [path for path in paths if path in meaningful]
 
 
 def clean_code(root):
@@ -1703,6 +1720,8 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         tree = code_tree(root, commit)
         data.update(implementation_base=base,
                     implementation_paths={path: tree.get(path) for path in sorted(paths)})
+        from . import source
+        data['implementation_syntax'] = source.syntax_map(root, data['implementation_paths'])
     if kind == "merged":
         if not ref.startswith("refs/heads/"):
             raise Refused("merge ref must be a full branch ref")

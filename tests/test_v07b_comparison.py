@@ -105,15 +105,13 @@ def test_new_deselected_count_can_be_accepted(local_repo):
     'import pytest\n@pytest.mark.xfail(reason="unused")\ndef helper():\n    pass\n',
     'import pytest\ndef helper():\n    pytest.skip("unused")\n',
 ])
-def test_added_skip_xfail_or_skip_call_requires_acceptance(local_repo, addition):
+def test_unused_skip_xfail_or_skip_call_needs_no_acceptance(local_repo, addition):
     root = local_repo
     probe, base = setup_tests(root, 'def test_one():\n    assert 1 == 1\n')
     probe.write_text(probe.read_text() + addition)
     result = checked(root, base)
-    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
-    assert 'skip' in result.stdout or 'xfail' in result.stdout
-    accepted = checked(root, base, '--allow', 'TASK-1')
-    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'new skip or xfail' not in result.stdout
 
 
 @pytest.mark.parametrize('config,body', [
@@ -290,12 +288,13 @@ def test_comparison_discovers_absolute_internal_command_paths(local_repo):
     assert f'its tests already fail on {base} code' in result.stdout
 
 
-def test_pytest_markers_in_custom_test_commands_still_need_acceptance(local_repo):
+def test_unused_pytest_marker_in_custom_command_needs_no_acceptance(local_repo):
     root = local_repo
     probe, base = setup_tests(root, 'assert True\n', f'{PYTHON} tests/test_app.py')
     probe.write_text('import pytest as pt\n@pt.mark.skipif(True, reason="later")\ndef helper():\n    pass\nassert True\n')
     result = checked(root, base)
-    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'new skip or xfail' not in result.stdout
 
 
 @pytest.mark.parametrize('staged', [False, True])

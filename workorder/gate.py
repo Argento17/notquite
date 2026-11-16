@@ -28,6 +28,7 @@ import uuid
 
 from . import store as s
 from . import pytest_selection
+from . import source
 
 
 def contract_debt(root, record, history, implemented, staged=False):
@@ -211,7 +212,7 @@ def _merge_match(root, implemented, target):
             if not any(implemented['hash'] in text for path, text in texts.items() if s.receipt_task(path) == tid):
                 continue
             tree = s.code_tree(root, commit)
-            if all(tree.get(path) == entry for path, entry in implemented['implementation_paths'].items()):
+            if recorded_paths_match(root, tree, implemented):
                 method = 'same code' if s.code_digest(root, commit) == implemented['code'] else 'recorded paths'
                 return {'method': method, 'commit': commit}
     if present and s.contains(root, original, target):
@@ -609,7 +610,7 @@ def claim_matches(root, record, implemented, claim, tree=None, staged=False, rec
         before = {entry['hash'] for entry in s.entries(root, record['id'], rev='HEAD')}
         if implemented['hash'] not in before:
             contents = s.code_tree(root, tree)
-            if all(contents.get(path) == entry for path, entry in implemented['implementation_paths'].items()):
+            if recorded_paths_match(root, contents, implemented):
                 return True
     # This concerns the claim's history, even when the task ships nothing.
     target = merge_target(root, record)
@@ -635,6 +636,7 @@ def implementation_paths(root, implemented, base, staged=False, receipt_rev=None
     paths = set(s.git(root, "diff", "--name-only", "-z", "--no-renames", base, original,
                       "--", *s.CODE_PATHS).stdout.split("\0")) - {""}
     paths = {path for path in paths if not s.generated_path(path)}
+    paths = source.changed(root, paths, base, after=original)
     # A committed claim keeps the task boundaries recorded when it was made.
     history = s.entries(root, tid, staged, rev=receipt_rev)
     index = next((i for i, item in enumerate(history) if item["hash"] == implemented["hash"]), len(history))
@@ -705,7 +707,8 @@ def unchanged_implementation_paths(root, implemented, merged, claim, staged=Fals
         paths += s.git(root, "diff-tree", "--root", "--no-commit-id", "-r", "--name-only", "-z",
                        "--no-renames", landing, "--", *s.CODE_PATHS).stdout
         paths = set(paths.split("\0")) - {""}
-    return not ({path for path in paths if not s.generated_path(path)} & (set(changed.split("\0")) - {""}))
+    meaningful = source.changed(root, set(changed.split('\0')) - {''}, landing, after=claim)
+    return not ({path for path in paths if not s.generated_path(path)} & meaningful)
 
 
 def equivalent_claim(root, record, implemented, claim, target_commit=None):
@@ -743,7 +746,8 @@ def unpushed_target(root, record):
     return None
 
 
-def changed_paths(root, reference, staged=False):
+@s.cached_read
+def raw_changed_paths(root, reference, staged=False):
     """Paths that differ between reference and what is being checked (the index under --staged, the
     working tree otherwise, which in CI is the commit being checked), untracked task files included."""
     if reference is None:
@@ -752,6 +756,21 @@ def changed_paths(root, reference, staged=False):
     paths = set(s.git(root, *args).stdout.split("\0")) - {""}
     if not staged:
         paths |= set(s.git(root, "ls-files", "-z", "--others", "--exclude-standard").stdout.split("\0")) - {""}
+    return paths
+
+
+def changed_paths(root, reference, staged=False):
+    paths = raw_changed_paths(root, reference, staged)
+    return source.changed(root, paths, reference, staged=staged) if reference else paths
+
+
+@s.cached_read
+def test_material(root, base, staged=False):
+    """Classify tests before excluding documentation or normalizing source code."""
+    all_records = records(root, staged, errors={})
+    paths = repository_test_files(root, base, all_records, staged)
+    for record in all_records.values():
+        paths |= strict_test_files(root, record, base, staged)
     return paths
 
 
@@ -821,7 +840,7 @@ def default_pytest_files(root, record, base, staged=False):
         base = None
     configs = tuple(sorted(pytest_configs(root, record)))
     paths = pytest_patterns(root, base, staged, configs, 'testpaths')
-    candidates = repository_files(root, base) | repository_files(root) | changed_paths(root, base, staged)
+    candidates = repository_files(root, base) | repository_files(root) | raw_changed_paths(root, base, staged)
     candidates = {path for path in candidates if not s.generated_path(path)
                   and not path.startswith(('tasks/', '.workorder/', '.notquite/'))}
     patterns = pytest_patterns(root, base, staged, configs)
@@ -837,7 +856,7 @@ def test_files(root, record, base, staged=False):
     """Expand current and base definitions, so deleting a test or changing its path cannot hide it."""
     before = fields_at(root, record["id"], base)
     candidates = repository_files(root, base) | repository_files(root)
-    candidates |= changed_paths(root, base, staged)
+    candidates |= raw_changed_paths(root, base, staged)
     candidates = {path for path in candidates if not s.generated_path(path)}
     found = set()
     for definition in (before, record):
@@ -968,7 +987,7 @@ def pytest_sections(text, native=False):
 def pytest_patterns(root, base, staged=False, configs=(), option='python_files'):
     """Conservatively include configured discovery patterns from both snapshots."""
     patterns = {'test_*.py', '*_test.py'} if option == 'python_files' else set()
-    candidates = repository_files(root, base) | repository_files(root) | changed_paths(root, base, staged) | set(configs)
+    candidates = repository_files(root, base) | repository_files(root) | raw_changed_paths(root, base, staged) | set(configs)
     for path in sorted(candidates):
         name = posixpath.basename(path)
         if name not in PYTEST_CONFIG_NAMES and path not in configs:
@@ -1180,7 +1199,7 @@ def implicit_test_files(root, record, base, staged, candidates, configs):
 def strict_test_files(root, record, base, staged=False):
     paths = test_files(root, record, base, staged)
     definitions = (record, fields_at(root, record['id'], base) or {})
-    candidates = repository_files(root, base) | repository_files(root) | changed_paths(root, base, staged)
+    candidates = repository_files(root, base) | repository_files(root) | raw_changed_paths(root, base, staged)
     candidates = {path for path in candidates if not s.generated_path(path)}
     configs = set().union(*(pytest_configs(root, definition) for definition in definitions if uses_pytest(definition)))
     on_path = set()
@@ -1378,6 +1397,10 @@ def test_origin(root, record, base, label, staged=False):
     tid = record['id']
     if unchanged:
         return True, f"{tid}'s test landed on {label} before this change and is unchanged"
+    additions = [test for test in changed_pytest_tests(root, record, base, staged)
+                 if test.split('::', 1)[0] in existing]
+    if additions and not changed_existing_test_paths(root, base, existing, staged):
+        return False, f"{tid}'s new tests were written in this change ({test_names(additions)})"
     return False, f"{tid}'s test was written in this change"
 
 
@@ -1716,7 +1739,7 @@ def test_file_changes(root, base, record, staged=False, strict=False, protected=
 
 def repository_test_files(root, base, all_records, staged=False):
     """Repository-wide review also covers tests with no task and their supporting files."""
-    candidates = repository_files(root, base) | repository_files(root) | changed_paths(root, base, staged)
+    candidates = repository_files(root, base) | repository_files(root) | raw_changed_paths(root, base, staged)
     candidates = {p for p in candidates if not s.generated_path(p)
                   and not p.startswith(('tasks/', '.workorder/', '.notquite/'))}
     configs = set()
@@ -2074,10 +2097,6 @@ def _pytest_policy_changes(root, base, record, paths, staged, *, existing_tests=
                 continue
             if not new_conftest or _conftest_existing_tests(path, selected):
                 found.append(f'pytest configuration changed since {base} ({path})')
-        if path.endswith('.py'):
-            added = _pytest_disabling(new) - _pytest_disabling(old)
-            if added:
-                found.append(f'new skip or xfail behavior since {base} ({path}: {", ".join(sorted(added))})')
     old_command, command = declared_test(before) or [], declared_test(record) or []
 
     def filters(words):
@@ -2088,6 +2107,29 @@ def _pytest_policy_changes(root, base, record, paths, staged, *, existing_tests=
     if pytest_command and Counter(filters(command)) - Counter(filters(old_command)):
         found.append(f'pytest selection changed with -k or --deselect since {base}')
     return [f"{record['id']}: {line}" for line in found]
+
+
+def pytest_skip_problems(root, base, record, paths, staged=False, *, timeout=None, counts=None):
+    """An added marker matters only when the changed tests actually skip or xfail."""
+    if not uses_pytest(record):
+        return []
+    added = {path: _pytest_disabling(_test_bytes(root, path, staged=staged) or b'')
+                   - _pytest_disabling(_test_bytes(root, path, base) or b'')
+             for path in paths if path.endswith('.py')}
+    added = {path: markers for path, markers in added.items() if markers}
+    if not added:
+        return []
+    tests = changed_pytest_tests(root, record, base, staged)
+    command = selected_pytest_command(record, tests)
+    with tempfile.TemporaryDirectory(prefix='workorder-skips-') as temporary:
+        code, output = run_snapshot_test(root, Path(temporary) / 'code', command,
+            s.test_timeout(record, timeout), counts, staged=staged,
+            protected=repository_files(root, base), overlays=pytest_selection.overlay(tests), quiet=True)
+    outcomes = pytest_counts(output) if isinstance(code, int) else None
+    if outcomes is None or not (outcomes['skipped'] or outcomes['xfailed']):
+        return []  # Execution failures have their own diagnostic.
+    return [f"{record['id']}: new skip or xfail behavior since {base} ({path}: {', '.join(sorted(markers))})"
+            for path, markers in sorted(added.items())]
 
 
 def _internal_link_relative(link, root):
@@ -2775,7 +2817,7 @@ def task_change_touched(root, base, record, staged=False):
 
 
 def completion_changed(root, base, record, staged=False):
-    """Only a new claim or renewed evidence for changed code owes proof of this change."""
+    """A new or reopened claim owes implementation proof; a landed renewal does not."""
     tid, status = record['id'], record['status']
     if status not in FINISHED:
         return False
@@ -2790,14 +2832,7 @@ def completion_changed(root, base, record, staged=False):
         statuses = [value for _, value in histories.get(tid, [])]
     if any(value != status for value in statuses):
         return True  # reopening and restoring the status makes a fresh claim
-    run = latest_test_run(root, record, staged)
-    carried = {entry['hash'] for entry in s.entries(root, tid, rev=base)}
-    if not run or {run.get('hash'), run.get('legacy', {}).get('hash')} & carried:
-        return False
-    previous = implementation_at(root, base, tid) or {}
-    material = repository_test_files(root, base, records(root, staged, errors={}), staged)
-    code = task_code_paths(root, record, base, staged) - material
-    return run.get('code') != previous.get('code') and bool(code & changed_paths(root, base, staged))
+    return False
 
 
 def finished_code_change(root, base, record, staged=False):
@@ -2908,6 +2943,9 @@ def local_regression_problems(root, base, *, exclude=(), staged=False, timeout=N
         if tid in exclude or record['status'] not in FINISHED:
             continue
         try:
+            advice = finished_code_change(root, revision, record, staged)
+            if advice and notes is not None and advice not in notes:
+                notes.append(advice)
             protected = strict_test_files(root, record, revision, staged)
             protected |= task_code_paths(root, record, revision, staged)
             if protected & changed:
@@ -2979,8 +3017,13 @@ def run_ref_test(root, destination, revision, command, timeout, counts, overlays
     _ref_test_snapshot(root, destination, revision)
     for path, (content, mode) in (overlays or {}).items():
         _snapshot_write(destination, path, content, mode, root)
+    from .python_imports import missing_base_import
+    copied_command = _snapshot_command(command, root, destination)
+    missing = missing_base_import(destination, root, copied_command)
+    if missing:
+        return 2, f"ModuleNotFoundError: No module named '{missing}' (absent from comparison code)\n"
     before = s._test_state(destination, isolated=True) if alias else None
-    result = _run_test(destination, _snapshot_command(command, root, destination), timeout, counts,
+    result = _run_test(destination, copied_command, timeout, counts,
                        quiet=True, cache_root=root, logical_command=command)
     if before and s._test_state(destination, isolated=True) == before:
         cached = s.test_cache_path(root, before[1], command, timeout)
@@ -3030,7 +3073,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
     paths = sorted(changed_test_paths(root, base, protected, staged))
     before = fields_at(root, tid, base)
     wrapper = wrapper_note(record)
-    candidates = repository_files(root, base) | repository_files(root) | changed_paths(root, base, staged)
+    candidates = repository_files(root, base) | repository_files(root) | raw_changed_paths(root, base, staged)
     for definition in (before, record):
         if definition is None:
             continue
@@ -3137,6 +3180,8 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                                        regression=finishing and not new_completion)
             if failed:
                 test_failure(failed)
+            for line in pytest_skip_problems(root, base, record, paths, staged, timeout=timeout, counts=counts):
+                review(line, lines=True)
             base_command = declared_test(before) if before else None
 
             def ref_code_result(ref_command, overlays=None):
@@ -3377,30 +3422,53 @@ LOCKFILES = {'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 
 
 
 def needs_task_receipt(path):
-    return (not s.generated_path(path) and posixpath.basename(path) not in LOCKFILES
+    return (not s.generated_path(path) and not source.documentation(path) and posixpath.basename(path) not in LOCKFILES
             and not path.startswith(('tasks/', '.workorder/', '.notquite/', 'docs/', '.github/'))
             and not path.endswith(('.md', '.rst', '.txt', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf'))
             and posixpath.basename(path) not in {'.gitignore', '.gitattributes', '.gitmodules', '.editorconfig'}
             and not posixpath.basename(path).startswith('LICENSE'))
 
 
-def source_tree(root, revision):
+def source_tree(root, revision, protected=None):
     """Compare source without changing the historical fingerprint stored in receipts."""
-    return {path: entry for path, entry in s.code_tree(root, revision).items() if not s.generated_path(path)}
+    return source.entries(root, s.code_tree(root, revision), protected=protected)
+
+
+def recorded_paths_match(root, tree, implemented):
+    paths = implemented['implementation_paths']
+    protected = test_material(root, 'HEAD')
+    if s.has_commit(root, implemented['commit']):
+        protected = protected | test_material(root, implemented['commit'])
+    if all(tree.get(path) == entry for path, entry in paths.items()
+           if path in protected or not source.documentation(path)):
+        return True
+    current = source.entries(root, tree, protected=protected)
+    recorded = source.entries(root, paths, implemented.get('implementation_syntax'),
+                              missing_ok=True, protected=protected)
+    return all(current.get(path) == entry for path, entry in recorded.items())
 
 
 def same_source_code(root, before, after):
-    return s.has_commit(root, before) and source_tree(root, before) == source_tree(root, after)
+    if not s.has_commit(root, before):
+        return False
+    protected = test_material(root, before) | test_material(root, after)
+    return source_tree(root, before, protected) == source_tree(root, after, protected)
 
 
 def recorded_branch_code(root, implemented, base, commit, tree=None):
     """A replay keeps recorded bytes and modes; everything else must be target code."""
     paths = implemented.get('implementation_paths')
-    recorded = {path: entry for path, entry in paths.items() if not s.generated_path(path)} if paths else None
-    if not recorded or not s.contains(root, base, commit):
+    if not paths or not s.contains(root, base, commit):
         return False
-    current = source_tree(root, tree or commit)
-    target = source_tree(root, base)
+    protected = test_material(root, base) | test_material(root, tree or commit)
+    if s.has_commit(root, implemented['commit']):
+        protected = protected | test_material(root, implemented['commit'])
+    recorded = source.entries(root, paths, implemented.get('implementation_syntax'),
+                              missing_ok=True, protected=protected)
+    if not recorded:
+        return False
+    current = source_tree(root, tree or commit, protected)
+    target = source_tree(root, base, protected)
     return (all(current.get(path) == entry for path, entry in recorded.items())
             and all(current.get(path) == target.get(path)
                     for path in (current.keys() | target.keys()) - recorded.keys()))
@@ -3589,6 +3657,10 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
             existing_tests.update(test for tests in selected.values() for test in tests)
         config_lines = _pytest_policy_changes(root, base, tests_record, [path], staged,
                                               existing_tests=existing_tests)
+        if run_tests and not named:
+            unowned = {**tests_record, 'test': s.join_command([sys.executable, '-m', 'pytest', '-q', path])}
+            config_lines += pytest_skip_problems(root, base, unowned, [path], staged,
+                                                 timeout=timeout, counts=counts)
         if config_only and not any('pytest configuration changed' in line for line in config_lines):
             continue
         labels = set(allow if explicit_allow is None else explicit_allow)
@@ -3934,13 +4006,23 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                                                  counts=counts, notes=notes, results=results, review_files=False,
                                                  proven=proven, prove_change=tid in new_tasks, base_label=base_label,
                                                  allow_failure=tid in explicit_allow)
-            if fields_at(root, tid, base) is None and (record["status"] in FINISHED or tid in new_tasks):
+            if fields_at(root, tid, base) is None and record["status"] in FINISHED:
+                line = (f'{tid} was written and finished in this pull request; a reviewer reads its definition '
+                        f'and accepts it with an approving review or workorder-allow:{tid}')
+                if tid in allow:
+                    notes.append(line + " (definition allowed)")
+                    notes.append(f'accepted: {tid} (new task)')
+                else:
+                    problems.append(line)
+            elif fields_at(root, tid, base) is None and tid in new_tasks:
+                # Keep the existing receipt rule for unfinished tasks. Only a
+                # new finished claim always needs definition acceptance.
                 line = (f'{tid} is new in this pull request: a reviewer accepts its definition with the label '
                         f'workorder-allow:{tid} (or an approving review)')
                 if tid in proven:
                     notes.append(f'{tid} is new in this pull request; its test fails on {base} and passes now')
                 elif tid in allow:
-                    notes.append(line + " (definition allowed)")
+                    notes.append(line + ' (definition allowed)')
                     notes.append(f'accepted: {tid} (new task)')
                 else:
                     problems.append(line)
@@ -4029,6 +4111,13 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 notes.append(f'{tid} is a declared refactor')
             if pending_review(root, record, base, staged):
                 notes.append(f'{tid} DONE pending review')
+    if not staged:
+        from . import project_tests
+        if run_tests:
+            problems += project_tests.run(root, base=base, label=base_label, notes=notes, counts=counts,
+                                           allow=allow, timeout=timeout)
+        elif base and project_tests.command(root) is None:
+            notes.append(project_tests.UNSET)
     refused = set(re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', '\n'.join(problems)))
     counts['_supported'] = supported
     counts['tests_only'] = len(supported - refused)

@@ -12,13 +12,13 @@ from . import store as s
 
 
 AGENT_BLOCK = r"""## Tasks
-- Start every session from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed, then run `workorder renew --task <id>` if the task's own code or test files changed. Use the repository's default branch name if it is not main. Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
-- When agents share one Git identity, set `WORKORDER_AGENT` so claims tell them apart. Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
-- When creating a task, use `workorder new --code-paths <files or folders>` to set its code scope. Work on a branch and open a pull request. Land the task on main first, or include it with code whose test fails on the merge-base code and passes now; that new task needs no label. Otherwise a reviewer must accept the new definition with `workorder-allow:<id>` or an approving review.
-- After committing code and confirming every Acceptance item is met, fetch origin before `done` when there is an origin remote: `git fetch origin`. Then run `workorder done --task <id> --note "<what was done>"`. It records implementation when needed, runs the declared test on current and target code, checks affected finished tasks, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
-- For a refactor with unchanged test files that pass before and after, use `done --task <id> --refactor`. For intentional test changes, use `done --task <id> --needs-review`. It writes DONE with a pending review receipt; the pull request still needs `workorder-allow:<id>` or an approving review. Report the pending review to the user. A refused `done` writes no Progress note or receipts; use `workorder note` to leave a handover while fixing it.
-- For unfinished work, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`; `done` clears `next`. Before stopping, commit tasks/ and .workorder/ with your work and push.
-- After merge, run `workorder check <id>` on main; if the task's own code or test files changed, run `workorder renew --task <id>` there and test again.
+- Start from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed. Use the default branch's name. Run `workorder show --task <id>`; follow its mission, Scope, Acceptance, test, history and progress.
+- Set `WORKORDER_AGENT` when sharing a Git identity. Run `workorder claim --task <id>` before work (needs a writable origin), and `workorder release --task <id>` when stopping, finished or not.
+- Create tasks with `workorder new --code-paths <files or folders>`. Land the task first, then implement on a branch and open a pull request. A task written and finished in one pull request needs an approving review or `workorder-allow:<id>`.
+- Confirm every Acceptance item, commit code, fetch origin if present, then run `workorder done --task <id> --note "<what was done>"`. Workorder checks test evidence, not Acceptance. Report refusals and warnings; do not claim completion after them.
+- Use `done --task <id> --refactor` for unchanged tests passing before and after; use `done --task <id> --needs-review` for intended test edits. Report pending review: the pull request needs the task's label or approval. Refused done writes no notes or receipts; use `workorder note` for handover.
+- Keep unfinished progress with `workorder note --task <id> --next "<next step>" "<progress>"`; done clears next. Before stopping, commit tasks/ and .workorder/ with the work and push.
+- Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`. Commit its receipts. After merge, run `workorder check <id>` on main; renew and test again if needed.
 """
 
 HOOK = r"""#!/bin/sh
@@ -55,7 +55,9 @@ jobs:
 @DEPENDENCIES@      - run: python -m pip install @WORKORDER@
       - name: Check tasks after merge
         if: github.event_name == 'push'
-        run: workorder check --run-tests --all-tests
+        run: |
+          trap 'status=$?; if [ "$status" -ne 0 ]; then echo "Reviewer guide: https://github.com/Argento17/workorder/blob/main/docs/reviewer-guide.md" >&2; fi; exit "$status"' 0
+          workorder check --run-tests --all-tests
       - name: Check tasks and run their tests
         if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review'
         env:
@@ -66,6 +68,7 @@ jobs:
         # Optional: append --require-task-ignore GLOB for each code path exception, for example:
         # --require-task-ignore 'docs/**' --require-task-ignore '*.md'
         run: |
+          trap 'status=$?; if [ "$status" -ne 0 ]; then echo "Reviewer guide: https://github.com/Argento17/workorder/blob/main/docs/reviewer-guide.md" >&2; fi; exit "$status"' 0
           # Reviewed task ids, unowned tests, or the code-to-task requirement.
           gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/events" > "$RUNNER_TEMP/workorder-label-events.json"
           gh api --paginate --slurp "repos/$GH_REPO/pulls/$PR_NUMBER/reviews" > "$RUNNER_TEMP/workorder-reviews.json"
@@ -200,9 +203,12 @@ def claude_settings(root):
     return path, updated, changed
 
 
-def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False):
+def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False,
+               project_test=None):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
     from .python_imports import installed_src
+    from . import project_tests
+    project_matches = project_tests.configure(root, project_test, check=True) if project_test is not None else True
     installed = installed_src(root)
     if installed:
         print('src layout: installed ' + ', '.join(installed) + '; comparison copies put src/ first and verify imports.')
@@ -303,6 +309,14 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             path.write_text(json.dumps(updated, indent=2) + '\n', encoding='utf-8', newline='\n')
             written.append('.claude/settings.json')
             print('.claude/settings.json: installed SessionStart and Stop hooks')
+    if project_test is not None and not project_matches:
+        if check:
+            missing = True
+            print('.workorder/config.json: project test needs update')
+        else:
+            project_tests.configure(root, project_test)
+            written.append(project_tests.CONFIG)
+            print('.workorder/config.json: project test set')
     if not check:
         print('Files written:' if written else 'No files written.')
         for name in written:

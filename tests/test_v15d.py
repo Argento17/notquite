@@ -115,11 +115,11 @@ def test_changed_finished_test_uses_staged_code_and_refuses_failure(local_repo, 
 def test_renew_refactor_after_later_commit(local_repo, mode):
     root = local_repo
     branch(root, test_text=TEST)
-    (root / 'calc.py').write_text(CODE.replace('a / b', '(a) / b'))
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-2', '--refactor')
     commit_all(root)
-    (root / 'calc.py').write_text(CODE.replace('a / b', '(a) / (b)'))
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / (b + 0)'))
     commit_all(root)
     # A separately recorded implementation must not discard the prior declaration.
     ok(root, 'receipt', 'implemented', '--task', 'TASK-2')
@@ -136,7 +136,7 @@ def test_renew_refactor_after_later_commit(local_repo, mode):
 def test_renew_rechecks_refactor_conditions(local_repo, explicit, change):
     root = local_repo
     branch(root, test_text=TEST)
-    (root / 'calc.py').write_text(CODE.replace('a / b', '(a) / b'))
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-2', '--refactor')
     commit_all(root)
@@ -212,7 +212,7 @@ def test_passing_test_edit_cannot_hide_prior_stale_claim(local_repo):
     finished_pytest(root)
     store.set_task_field(root, 'TASK-1', 'status', 'IN_PROGRESS')
     commit_all(root)
-    (root / 'calc.py').write_text(CODE + '# later code\n')
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     store.set_task_field(root, 'TASK-1', 'status', 'DONE')
     commit_all(root)
     store.set_task_field(root, 'TASK-1', 'next', 'Verify')

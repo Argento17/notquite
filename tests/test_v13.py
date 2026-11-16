@@ -41,7 +41,7 @@ def test_vacuous_test_refuses_completion(local_repo, existing, action, target):
     subtraction_task(root, existing)
     if target == 'main':
         git(root, 'update-ref', '-d', 'refs/remotes/origin/main')
-    (root / 'calc.py').write_text(MUL + SUB + '# TODO pow\n')
+    (root / 'calc.py').write_text(MUL + SUB + 'pass\n')
     (root / 'test_sub.py').write_text('from calc import sub\nassert sub is not None\n')
     commit_all(root)
     if action == 'done':

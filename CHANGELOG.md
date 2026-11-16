@@ -2,6 +2,31 @@
 
 ## 0.16.0 (unreleased)
 
+- Require an approving review or the task's reviewer label when a task is
+  written and finished in the same pull request. Recommend landing its
+  definition first; done explains the review needed before merging.
+- Add `init --project-test CMD`, stored in `.workorder/config.json`. Done and
+  explicit test checks run it once, compare only failing pytest tests on the
+  base, and distinguish old failures from new ones. A reviewer can accept a
+  project failure with approval or `workorder-allow:tests`. Hooks do not run
+  it. Without a configured command, print the limits of the declared tests.
+- Apply pytest's selected pythonpath configuration in import probes, including
+  isolated Python commands. Recognize mandatory imports of packages absent
+  from the base without mistaking an editable install for old-code evidence.
+- Exclude documentation and Python changes with unchanged syntax apart from
+  docstrings from code scope, new implementation path maps and staleness
+  checks. Classify test material first and preserve its review and staleness
+  protection regardless of suffix. Preserve the fingerprints in existing receipts.
+- Name newly added tests in shared files. Judge skip and xfail additions by
+  their outcomes when run. Keep the ancestry check on advice that main moved.
+- Add a reviewer guide checked against executable diagnostics and linked from
+  generated workflow failures. Shorten the generated agent instructions.
+- Add offline-defined Click examples using its shared test files; preserve
+  the pinned revisions for the separate real-project run.
+- Show renewal advice during done for another task as well as in commit
+  hooks. Check renewals of already landed finished tasks as regressions,
+  without asking them to prove another task's new functions.
+
 - For pytest commands, check new or changed test functions together against
   stubbed functions and base code. Older tests in a shared file cannot supply
   their failure. Name the selected tests in refusals and list tests that still
@@ -23,7 +48,7 @@
 - Keep existing task files and receipts readable. Set the package and current
   installation examples to 0.16.0.
 
-## 0.15.0 (15 Nov 2026)
+## 0.15.0 (16 Nov 2026)
 
 - Limit --no-code-change to the task's declared code paths and test files.
   Without declared paths, exclude changes covered by another task's new

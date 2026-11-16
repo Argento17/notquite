@@ -44,6 +44,7 @@ def parser():
     init.add_argument("--update-workflow", action="store_true", help="rewrite the workflow and show its diff; --check previews only")
     init.add_argument("--light", action="store_true", help="write a trial workflow with review warnings and no task requirement")
     init.add_argument('--test-first', action='store_true', help='require tests to land before implementation in the workflow')
+    init.add_argument('--project-test', metavar='CMD', help="set the project's test command in .workorder/config.json")
     hook = commands.add_parser("hook", help="run a local agent session or stop check")
     hook.add_argument("event", choices=["session-start", "stop"])
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
@@ -297,6 +298,15 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 lines.append('  Next:     fix the code or the test, then run workorder done again')
             done_refusal(tid, status, lines, needs_review=needs_review)
             return 1
+        from . import project_tests
+        project_notes = []
+        project_problems = project_tests.run(root, base=revision if base else None, label=base,
+                                             notes=project_notes, timeout=timeout)
+        for project_note in project_notes:
+            print(f'Note: {project_note}')
+        if project_problems:
+            done_refusal(tid, status, [f'  Missing:  {problem}' for problem in project_problems])
+            return 1
         print("Acceptance:")
         print(filled["Acceptance"])
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
@@ -351,7 +361,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 if review_note in problems:
                     continue
                 if owners and tid not in owners:
-                    if not review_note.endswith(': its test passed when this check ran it'):
+                    if 'its code changed after it was finished' in review_note:
+                        print(f'Note: {review_note}')
+                    elif not review_note.endswith(': its test passed when this check ran it'):
                         other_notes |= owners
                 elif review_note != wrapper:
                     if needs_review and gate._accepts_allow_label(review_note):
@@ -391,6 +403,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             return 1
         if note is not None:
             print(f"{tid}: {s.add_note(root, tid, note)}")
+        if base and gate.fields_at(root, tid, revision) is None:
+            lines.append(f'  Next:     the pull request needs an approving review or workorder-allow:{tid}; '
+                         'a reviewer reads and accepts the task definition')
         print("\n".join(lines))
         _, owed, delivery = gate.verdict(root, s.record(root, tid))
         debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""
@@ -441,7 +456,8 @@ def main(argv=None):
         if options.action == "init":
             from .bootstrap import initialize
             return initialize(root, options.check, options.force, claude=options.claude,
-                              update_workflow=options.update_workflow, light=options.light, test_first=options.test_first)
+                              update_workflow=options.update_workflow, light=options.light, test_first=options.test_first,
+                              project_test=options.project_test)
         elif options.action == "hook":
             from .hooks import run
             return run(root, options.event)

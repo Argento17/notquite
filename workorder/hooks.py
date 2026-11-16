@@ -153,15 +153,21 @@ def run(root, event):
         notes[:] = [line for line in notes if not line.startswith('Evidence:')]
     _, owned = local_claims(root)
     results = {}
+    # Snapshot selection depends on what is staged, even when its only change
+    # is a comment or docstring. Code comparisons still ignore those edits.
+    staged_paths = set()
+    if relevant:
+        staged_paths = set(s.git(root, 'diff', '--cached', '--name-only', '-z', '--no-renames', 'HEAD').stdout.split('\0'))
     for tid in sorted(relevant):
         try:
             record = s.record(root, tid)
         except s.Refused:
             continue  # readable completion claims already received their parse error above
         base = gate.local_test_base(root, record)
+        code = (gate.declared_code_paths(record, staged_paths) if 'code_paths' in record
+                else gate.task_code_paths(root, record, 'HEAD', staged=True))
         staged = bool((gate.strict_test_files(root, record, 'HEAD', staged=True)
-                       | gate.task_code_paths(root, record, 'HEAD', staged=True) | {f'tasks/{tid}.md'})
-                      & gate.changed_paths(root, 'HEAD', True))
+                       | code | {f'tasks/{tid}.md'}) & staged_paths)
         if staged:
             record = s.record(root, tid, True)
         if gate.waiting_for_review(root, record):

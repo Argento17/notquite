@@ -62,7 +62,7 @@ def test_remapped_editable_is_unavailable_not_evidence(local_repo, tmp_path, mod
     test = 'from unipkg import value\ndef test_value():\n    assert value() == 1\n'
     setup_task(root, python, test if mode == 'refactor' else '')
     (root / 'pkg/unipkg/__init__.py').write_text(
-        'def value():\n    return ' + ('(1)' if mode == 'refactor' else '2') + '\n')
+        'def value():\n    return ' + ('0 + 1' if mode == 'refactor' else '2') + '\n')
     if mode == 'feature':
         (root / 'tests/test_value.py').write_text(test.replace('== 1', '== 2'))
     commit_all(root)

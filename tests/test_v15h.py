@@ -94,6 +94,10 @@ def test_two_new_tasks_complete_with_their_own_functions(local_repo, unscoped):
         assert store.record(root, tid)['status'] == 'DONE'
     commit_all(root)
     result = check(root)
+    assert result.returncode == 1, result.stdout + result.stderr
+    for tid in ('TASK-1', 'TASK-2'):
+        assert f'{tid} was written and finished in this pull request;' in result.stdout
+    result = check(root, '--allow', 'TASK-1,TASK-2')
     assert result.returncode == 0, result.stdout + result.stderr
 
 

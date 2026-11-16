@@ -88,7 +88,7 @@ def test_unfinished_command_can_be_repaired_before_receipts(local_repo):
 def test_renew_preserves_refactor_after_rebase(local_repo, explicit):
     root = local_repo
     branch(root, test_text=TEST)
-    (root / 'calc.py').write_text(CODE.replace('a / b', '(a) / b'))
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-2', '--refactor')
     commit_all(root)
@@ -144,7 +144,7 @@ def test_init_installs_pep735_group(local_repo, group):
 def test_merge_target_test_changes_are_not_refactor_edits(local_repo):
     root = local_repo
     branch(root, test_text=TEST)
-    (root / 'calc.py').write_text(CODE.replace('a / b', '(a) / b'))
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-2', '--refactor')
     commit_all(root)
@@ -189,7 +189,7 @@ def test_done_reports_other_findings_once_in_summary(local_repo):
 def test_needs_review_refusal_does_not_advise_same_flag(local_repo):
     root = local_repo
     branch(root, test_text=TEST)
-    (root / 'calc.py').write_text(CODE.replace('a / b', '(a) / b'))
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-2', '--refactor')
     commit_all(root)
@@ -203,7 +203,7 @@ def test_needs_review_refusal_does_not_advise_same_flag(local_repo):
 def test_failure_output_is_printed_once(local_repo):
     root = local_repo
     branch(root, test_text=TEST)
-    (root / 'calc.py').write_text(CODE.replace('a / b', '(a) / b'))
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-2', '--refactor')
     commit_all(root)

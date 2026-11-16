@@ -146,11 +146,50 @@ def interpreter(command, root, env):
     return None
 
 
+def pytest_arguments(command):
+    """Recognize direct pytest invocations without mistaking Python -c text for a runner."""
+    if Path(command[0]).name in {'pytest', 'py.test', 'pytest.exe', 'py.test.exe'}:
+        return list(command[1:])
+    for index, word in enumerate(command[1:], 1):
+        if word == '-m':
+            return list(command[index + 2:]) if command[index + 1:index + 2] == ['pytest'] else None
+        if word == '-c':
+            from .pytest_selection import ISOLATED_RUNNER
+            return list(command[index + 2:]) if command[index + 1:index + 2] == [ISOLATED_RUNNER] else None
+    return None
+
+
 PROBE = r'''
 import ast, csv, importlib.metadata, importlib.util, json, pathlib, re, sys
 names = set(json.loads(sys.argv[1]))
 normalize = lambda name: re.sub(r'[-_.]+', '-', name).lower()
 projects = {normalize(name) for name in json.loads(sys.argv[2]) if name}
+pytest_args = json.loads(sys.argv[3])
+if pytest_args is not None and importlib.util.find_spec('pytest') is not None:
+    import pytest
+    from _pytest.config import get_config
+    # Let the test interpreter's pytest select and parse its own config. Its
+    # pythonpath entries are relative to that file and prepend sys.path, even
+    # with -I/-E. Stop before conftest loading and final option validation:
+    # repository conftests may themselves register command-line options.
+    class PathsReady(Exception):
+        pass
+    class ProbeConfiguration:
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_load_initial_conftests(self):
+            raise PathsReady
+    config = get_config(pytest_args)
+    config.pluginmanager.register(ProbeConfiguration())
+    if json.loads(sys.argv[4]):
+        spec = importlib.util.spec_from_file_location('__workorder_test_selection',
+            pathlib.Path.cwd() / '__workorder_test_selection.py')
+        plugin = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(plugin)
+        config.pluginmanager.register(plugin)
+    try:
+        config.parse(pytest_args)
+    except PathsReady:
+        pass
 for distribution in importlib.metadata.distributions():
     # Other distributions are dependencies, wherever and however installed.
     # Matching by name also covers a second clone using the first one's install.
@@ -221,8 +260,10 @@ def check(root, source, command, env, timeout=None):
     if python is None:
         return ImportFailure('could not verify the Python interpreter used by the test command') if names else None
     try:
+        from .pytest_selection import ISOLATED_RUNNER
         projects = sorted({project_name(root), project_name(source)} - {''})
-        run = subprocess.run([*python, '-c', PROBE, json.dumps(names), json.dumps(projects)], cwd=root, env=env,
+        run = subprocess.run([*python, '-c', PROBE, json.dumps(names), json.dumps(projects),
+                              json.dumps(pytest_arguments(command)), json.dumps(ISOLATED_RUNNER in command)], cwd=root, env=env,
                              capture_output=True, text=True, errors='replace', timeout=10)
         line = next(line for line in run.stdout.splitlines() if line.startswith('WORKORDER_IMPORTS='))
         report = json.loads(line.split('=', 1)[1])
@@ -236,6 +277,103 @@ def check(root, source, command, env, timeout=None):
     except (OSError, ValueError, configparser.Error, StopIteration, subprocess.SubprocessError) as error:
         return ImportFailure(f'could not verify project imports: {error or "the import probe failed"}')
     return None
+
+
+def missing_base_import(root, source, command):
+    """Recognize a mandatory import of wholly new code in an old-code copy.
+
+    Only explicit pytest files or Python scripts qualify. Optional imports, imports hidden behind
+    executable setup, dynamic imports, and any imported project package still
+    present in the copy retain the ordinary import probe.
+    """
+    from . import gate, store
+    args = pytest_arguments(command)
+    if args is None:
+        python = interpreter(command, root, store.copy_environment())
+        if python is None or len(command) <= len(python) or command[len(python)].startswith('-'):
+            return None
+        selections = [command[len(python)]]
+    else:
+        definition = {'test': store.join_command(['pytest', *args])}
+        selections = gate.pytest_collection_paths(definition)
+    if not selections:
+        return None
+    files = set()
+    for selection in selections:
+        path = root / selection
+        if path.suffix != '.py' or not path.is_file() or not path.resolve().is_relative_to(root.resolve()):
+            return None
+        files.add(path)
+    current = set(packages(source, modules=True))
+    existing = set(packages(root, modules=True))
+    if current <= existing:
+        return None
+    imported, required, seen = set(), set(), set()
+    pending = list(files)
+    for file in files:
+        for parent in (file.parent, *file.parent.parents):
+            if not parent.is_relative_to(root):
+                break
+            conftest = parent / 'conftest.py'
+            if conftest.is_file() and conftest.read_text(encoding='utf-8').strip():
+                return None  # Fixture startup may provide an otherwise missing import.
+    try:
+        while pending:
+            file = pending.pop()
+            if file in seen:
+                continue
+            seen.add(file)
+            tree = ast.parse(file.read_bytes())
+            if file in files:
+                # Every selected file must reach its missing project import
+                # before other executable code: even importing a local helper
+                # can populate sys.modules for this file or another test file.
+                for node in tree.body:
+                    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        continue
+                    if isinstance(node, ast.ImportFrom) and node.module == '__future__' and not node.level:
+                        continue
+                    if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                        return None
+                    names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or '']
+                    first = {name.split('.')[0] for name in names if not getattr(node, 'level', 0)}
+                    if not first or not first <= current:
+                        return None
+                    required.update(first)
+                    break
+                else:
+                    return None
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and (
+                    isinstance(node.func, ast.Name) and node.func.id == '__import__'
+                    or isinstance(node.func, ast.Attribute) and node.func.attr == 'import_module'
+                ):
+                    return None
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and not node.level:
+                    names = [node.module or '']
+                else:
+                    continue
+                for name in names:
+                    top = name.split('.')[0]
+                    imported.add(top)
+                    # Inspect local helpers and package sources too, so they
+                    # cannot hide an imported package that existed in base.
+                    for folder in (file.parent, root, root / 'src', source, source / 'src'):
+                        module = folder / top
+                        if module.with_suffix('.py').is_file():
+                            pending.append(module.with_suffix('.py'))
+                        elif module.is_dir():
+                            pending.extend(module.rglob('*.py'))
+                        else:
+                            continue
+                        break
+    except (OSError, ValueError, SyntaxError, UnicodeError):
+        return None
+    own = imported & current
+    mandatory = required & own
+    return sorted(mandatory)[0] if mandatory and not own & existing else None
 
 
 def installed_src(root):

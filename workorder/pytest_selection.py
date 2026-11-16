@@ -6,6 +6,14 @@ import re
 
 MODULE = '__workorder_test_selection'
 MARKER = 'workorder selected tests: '
+ISOLATED_RUNNER = '''import importlib.util, pathlib, sys
+import pytest
+spec = importlib.util.spec_from_file_location('__workorder_test_selection',
+    pathlib.Path.cwd() / '__workorder_test_selection.py')
+plugin = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(plugin)
+raise SystemExit(pytest.main(sys.argv[1:], plugins=[plugin]))
+'''
 SOURCE = '''import json
 import pytest
 
@@ -35,6 +43,12 @@ def command(words, tests):
     if not tests:
         return words
     options = ['-p', MODULE, '-rA']
+    # An isolated interpreter cannot import the copied plugin through cwd or
+    # PYTHONPATH. Load that one file explicitly, retaining the test's sys.path.
+    module = next((i for i in range(len(words) - 1) if words[i:i + 2] == ['-m', 'pytest']), None)
+    if module is not None and '-I' in words[:module]:
+        words = [*words[:module], '-c', ISOLATED_RUNNER, *words[module + 2:]]
+        options = ['-rA']
     for test in tests:
         options += ['--workorder-test-node', test]
     end = words.index('--') if '--' in words else len(words)

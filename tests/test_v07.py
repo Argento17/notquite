@@ -111,12 +111,13 @@ def test_show_next_step_uses_done(local_repo, work):
 def test_agent_block_updates_origin_explicitly():
     assert 'if the repository has an origin remote, run `git fetch origin`' in bootstrap.AGENT_BLOCK
     assert 'On main, update with `git pull --rebase origin main`' in bootstrap.AGENT_BLOCK
-    assert ('On a feature branch, merge or rebase main as needed, then run '
-            '`workorder renew --task <id>` if the task\'s own code or test files changed') in bootstrap.AGENT_BLOCK
+    assert 'On a feature branch, merge or rebase main as needed.' in bootstrap.AGENT_BLOCK
+    assert ("Renew only when the task's own code or tests changed after DONE: "
+            '`workorder renew --task <id>`') in bootstrap.AGENT_BLOCK
     assert '`git pull`' not in bootstrap.AGENT_BLOCK
     assert bootstrap.AGENT_BLOCK.strip() in (PACKAGE / 'README.md').read_text()
     readme = ' '.join((PACKAGE / 'README.md').read_text().split())
-    assert len((PACKAGE / 'README.md').read_text().splitlines()) <= 250
+    assert len((PACKAGE / 'README.md').read_text().splitlines()) <= 130
     assert "If the task's own code or test files changed, run `workorder renew --task <id>`." in readme
 
 
