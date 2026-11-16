@@ -1,5 +1,6 @@
 """Parallel test workers own bounded Git reads without sharing parent state."""
 import subprocess
+import tempfile
 from pathlib import Path
 from threading import Barrier
 
@@ -15,6 +16,7 @@ def test_parallel_tests_own_distinct_read_sessions(local_repo, monkeypatch, mode
     records = [{'id': f'TASK-{i}', 'test': store.join_command([PYTHON, '-c', f'print({i})'])}
                for i in (1, 2)]
     observed = []
+    batches = []
     barrier = Barrier(2)
     actual = store.cached_test
     with store.read_session():
@@ -26,6 +28,7 @@ def test_parallel_tests_own_distinct_read_sessions(local_repo, monkeypatch, mode
             barrier.wait(timeout=15)
             result = actual(*args, **kwargs)
             observed.append(worker)
+            batches.extend(worker.batches.values())
             assert parent['parent-marker'] == 'unchanged'
             return result
 
@@ -37,7 +40,7 @@ def test_parallel_tests_own_distinct_read_sessions(local_repo, monkeypatch, mode
     assert len(observed) == 2
     assert all(worker is not None and worker is not parent for worker in observed)
     assert observed[0] is not observed[1]
-    assert all(batch.process.poll() is not None for worker in observed for batch in worker.batches.values())
+    assert all(batch.process.poll() is not None for batch in batches)
 
 
 def test_parallel_test_reuses_head_reads_within_its_worker(local_repo, monkeypatch):
@@ -62,7 +65,7 @@ def test_snapshot_worker_closes_git_before_deleting_its_checkout(local_repo, mon
     batches = []
     alive_at_cleanup = []
     actual_process = subprocess.Popen
-    actual_directory = gate.tempfile.TemporaryDirectory
+    actual_directory = tempfile.TemporaryDirectory
 
     def start(argv, *args, **kwargs):
         process = actual_process(argv, *args, **kwargs)
@@ -78,7 +81,7 @@ def test_snapshot_worker_closes_git_before_deleting_its_checkout(local_repo, mon
             return super().__exit__(*args)
 
     monkeypatch.setattr(subprocess, 'Popen', start)
-    monkeypatch.setattr(gate.tempfile, 'TemporaryDirectory', Directory)
+    monkeypatch.setattr(tempfile, 'TemporaryDirectory', Directory)
     record = {'id': 'TASK-1', 'test': store.join_command([PYTHON, '-c', 'print("checked")'])}
     results = {}
     gate.prefetch_tests(local_repo, [record], results, jobs=1, snapshot=True)

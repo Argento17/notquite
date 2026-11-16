@@ -64,6 +64,7 @@ Test material is classified first: declared paths, recognized test-command files
 **Meaning:** `could not compare` can name an external project import, an unidentified interpreter, an unavailable dependency, an invalid pytest setup or a failed temporary-copy operation. It proves neither weakness nor a passing refactor.
 **Clear:** Install dependencies and make the tests import this checkout's project, using a suitable pytest `pythonpath` or non-editable install; fetch missing refs and fix the named command/setup error. Recheck isolated Python commands too. An unavailable project-import check requires `workorder-allow:ID`; approval and warning mode do not suffice. Other execution/setup failures need correction, not a claimed passing test.
 Fresh pytest comparisons verify imports in the test interpreter before loading conftests or tests, using pytest's selected configuration and plugins. Cached test results still require a fresh standalone import probe. Missing or timed-out verification cannot establish a passing comparison. A missing-pytest warning requires a separate import probe to confirm absence; duplicate availability markers are refused.
+Temporary comparison copies are removed after their Git processes exit, including failed or timed-out runs.
 
 <!-- refusal-family workflow -->
 ## Workorder workflow changed
@@ -98,8 +99,8 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/__init__.py e40c386dfd6e2fdf2c7d161d61b6a08b82cd5fd784f38ea4195132fa8e56932e records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
 <!-- refusal-inventory workorder/bootstrap.py a0d707075dd646d1dff075a0b77d19d23aa6642b581f0898a7205e07eb873afa records,workflow,project-test -->
-<!-- refusal-inventory workorder/cli.py 8df5a614a95a749215bfd128fe745033bb2bb9ca84139459f648ff5d4d297d40 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
-<!-- refusal-inventory workorder/gate.py 537f712e0435d1986feff02921427afd1cce509ca36e265f4c7052ea7122c8f6 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
+<!-- refusal-inventory workorder/cli.py 477ed9673833e167bc4cb1886c1775889da86fb2251bab4d6c979d5346ccde69 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
+<!-- refusal-inventory workorder/gate.py 3b0872539323e8c2ddb6485de2dbbe429a206cafeecb6d1c21522fe2c7c061d9 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 4c890e78327bd094ac6f84882d7e42640cb88130f5232d92f7f23bbea6502a79 evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
 <!-- refusal-inventory workorder/project_tests.py 09b2fd31037cb19f6db1f22dc22c15a36beaa8defe66df3cdda66ac1dc47b998 project-test,records -->
@@ -109,6 +110,6 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py e4aef26df9ff14c59d79571aa0042b8bcf366a0a8d159e974b266e05ce16aba8 records,evidence,current-tests,removal -->
-<!-- refusal-inventory workorder/git_reads.py 1109092ea60df17a2a98b8f8a5ee1189b6becf871095d2fe50479a9ad7daa321 records,evidence -->
+<!-- refusal-inventory workorder/store.py a3a16fc1a30cbc74a0d92feb72b6cd67998a4320b5bc813e40bfe3c2fbc3f782 records,evidence,current-tests,removal -->
+<!-- refusal-inventory workorder/git_reads.py 494271e8e22ab5f2c93ae88af4a3597d6ce39b380081796979d23218845cb1da records,evidence -->
 <!-- refusal-inventory workorder/console.py 6634087244aa3cbf3741281f4b740117043f662e24e309c6c5af10d7c543b681 records,current-tests -->

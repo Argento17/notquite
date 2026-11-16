@@ -70,9 +70,12 @@ class ReadCache(dict):
         finally:
             self.stack.pop()
 
-    def close(self):
-        for batch in self.batches.values():
-            batch.close()
+    def close(self, root=None):
+        """Reap all batches, or only those inside a checkout being removed."""
+        directory = Path(root).resolve() if root is not None else None
+        for key in list(self.batches):
+            if directory is None or Path(key[0]).resolve().is_relative_to(directory):
+                self.batches.pop(key).close()
 
 
 def _configuration_path(value, root, env, *, origin=None):

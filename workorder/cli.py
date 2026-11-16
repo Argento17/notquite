@@ -559,14 +559,13 @@ def main(argv=None):
             previous = next((item for item in reversed(s.entries(root, options.task)) if item['kind'] == 'test'), {})
             refactor = previous.get('refactor', False) if options.refactor is None else options.refactor
             if refactor:
-                import tempfile
                 base = gate.local_test_base(root, record)
                 if not base:
                     raise s.Refused('a declared refactor needs a locally available target; fetch origin first')
                 revision, _ = gate.comparison_base(root, base)
                 if gate.changed_test_paths(root, revision, gate.refactor_test_files(root, record, revision)):
                     raise s.Refused(f'{options.task}: its test files changed; use renew --no-refactor to drop the declaration')
-                with tempfile.TemporaryDirectory(prefix='workorder-refactor-') as temporary:
+                with s.temporary_checkout(prefix='workorder-refactor-') as temporary:
                     code, output = gate.run_ref_test(root, Path(temporary) / 'base', revision, command,
                                                      s.test_timeout(record, options.timeout), None)
                 if isinstance(code, str):

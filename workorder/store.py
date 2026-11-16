@@ -106,6 +106,24 @@ def read_session(*, seed=None):
             _READS.reset(token)
 
 
+@contextmanager
+def temporary_checkout(*, prefix):
+    """Release cached Git processes before removing temporary checkouts.
+
+    A command's read session can outlive many comparison directories. Windows
+    cannot remove a process's cwd, so reap every batch beneath this directory
+    even when snapshot preparation or test execution raises or times out.
+    Keep the source repository's batches available to the rest of the command.
+    """
+    with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
+        try:
+            yield temporary
+        finally:
+            cache = _READS.get()
+            if cache is not None:
+                cache.close(root=temporary)
+
+
 def invalidate_reads(*, metadata_only=False):
     cache = _READS.get()
     if cache is not None:
@@ -135,6 +153,21 @@ def _read_key(value):
     if isinstance(value, (set, frozenset)):
         return (type(value), frozenset(_read_key(item) for item in value))
     return value
+
+
+@contextmanager
+def read_scope(root):
+    """Validate one compound read without caching its caller's side effects.
+
+    Keep scopes inside read-only preparation, outside test execution. Nested
+    reads still revalidate if a repository mutation changes the generation.
+    """
+    cache = _READS.get()
+    if cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0':
+        yield
+    else:
+        with cache.checking(root):
+            yield
 
 
 def cached_read(function, *, git_query=False, diff_query=False):

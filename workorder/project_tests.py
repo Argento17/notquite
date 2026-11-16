@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 import re
 import subprocess
-import tempfile
 
 from . import gate, project_report, pytest_selection, store as s
 from .python_imports import interpreter, pytest_arguments
@@ -176,7 +175,7 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
         return [gate.reviewer_label(message, 'tests')]
 
     pytest = _pytest(words)
-    with tempfile.TemporaryDirectory(prefix='workorder-project-') as temporary, s.test_reuse(False):
+    with s.temporary_checkout(prefix='workorder-project-') as temporary, s.test_reuse(False):
         current_report = Path(temporary) / 'current.json'
         current_command = _reported_command(root, words, current_report) if pytest else words
         code, output = gate._run_test(root, current_command, timeout, counts, quiet=pytest)
