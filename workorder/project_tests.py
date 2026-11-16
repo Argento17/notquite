@@ -53,6 +53,7 @@ def configure(root, value, *, check=False):
         path = s.local_path(root, CONFIG)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(settings, indent=2) + '\n', encoding='utf-8')
+        s.invalidate_reads()
     return True
 
 

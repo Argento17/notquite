@@ -2,6 +2,13 @@
 
 ## 0.16.0 (16 Nov 2026)
 
+- Reuse read-only Git queries throughout each command, including `done`, while
+  checking repository contents, HEAD, refs and the index before reuse. Invalidate
+  reads after writes and external commands; fall back to fresh reads when state
+  cannot be fully inspected. Share a framed `cat-file --batch` connection for
+  blobs and HEAD lookups, renewing it when Git metadata changes and closing it
+  when the command ends. Keep test and receipt checks unchanged.
+
 - Run test evidence, comparisons and import probes with checkout bytecode
   refreshed on every run, including isolated Python and console pytest commands.
   Reuse dependency bytecode in Git-local cache slots, with exclusive slots for

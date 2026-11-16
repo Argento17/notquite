@@ -416,7 +416,8 @@ def check(root, source, command, env, timeout=None):
         projects = sorted({project_name(root), project_name(source)} - {''})
         probe = [*python, '-c', PROBE, json.dumps(names), json.dumps(projects),
                  json.dumps(pytest_arguments(command)), json.dumps(ISOLATED_RUNNER in command)]
-        with bytecode_cache(probe, root, env, cache_root=source) as (words, probe_env):
+        from . import store as s
+        with s.changing_repository(), bytecode_cache(probe, root, env, cache_root=source) as (words, probe_env):
             run = subprocess.run(words, cwd=root, env=probe_env,
                                  capture_output=True, text=True, errors='replace', timeout=10)
         line = next(line for line in run.stdout.splitlines() if line.startswith('WORKORDER_IMPORTS='))

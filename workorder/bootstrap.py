@@ -203,6 +203,7 @@ def claude_settings(root):
     return path, updated, changed
 
 
+@s.changing_repository()
 def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False,
                project_test=None):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""

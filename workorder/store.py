@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
-from functools import wraps
+from functools import partial, wraps
 import hashlib
 import hmac
 import heapq
@@ -22,6 +22,8 @@ import sys
 import tempfile
 import time
 import uuid
+
+from .git_reads import ReadCache, Batch
 
 
 class Refused(ValueError):
@@ -90,29 +92,51 @@ def read_session():
     if _READS.get() is not None:
         yield
         return
-    token = _READS.set({})
+    cache = ReadCache()
+    token = _READS.set(cache)
     try:
         yield
     finally:
-        _READS.reset(token)
+        try:
+            cache.close()
+        finally:
+            _READS.reset(token)
 
 
-def invalidate_reads():
+def invalidate_reads(*, metadata_only=False):
     cache = _READS.get()
     if cache is not None:
-        cache.clear()
+        cache.clear(queries=not metadata_only)
 
 
-def cached_read(function):
+@contextmanager
+def changing_repository():
+    """Commands may mutate even when they fail or cannot be started."""
+    invalidate_reads()
+    try:
+        yield
+    finally:
+        invalidate_reads()
+
+
+def cached_read(function, *, git_query=False):
     @wraps(function)
     def read(*args, **kwargs):
         cache = _READS.get()
         if cache is None:
             return function(*args, **kwargs)
-        key = (function, args, tuple(sorted(kwargs.items())))
-        if key not in cache:
-            cache[key] = function(*args, **kwargs)
-        return cache[key]
+        with cache.checking(args[0], isolated=kwargs.get('isolated', False)) as reusable:
+            if not reusable:
+                return function(*args, **kwargs)
+            entries = cache.queries if git_query else cache
+            key = (function, args, tuple(sorted(kwargs.items())))
+            if key not in entries:
+                generation = cache.generation
+                result = function(*args, **kwargs)
+                if generation == cache.generation:
+                    entries[key] = result
+                return result
+            return entries[key]
     return read
 
 
@@ -140,15 +164,40 @@ def now():
 
 
 def git(root, *args, data=None, required=True):
-    run = (_git_read if args[0] in {"rev-parse", "symbolic-ref", "show", "log", "ls-tree",
-                                   "ls-files", "diff", "merge-base", "rev-list", "patch-id",
-                                   "check-ref-format"} else _git_run)
-    return run(root, *args, data=data, required=required)
-
-
-@cached_read
-def _git_read(root, *args, data=None, required=True):
     return _git_run(root, *args, data=data, required=required)
+
+
+def _git_run(root, *args, data=None, required=True, isolated=False):
+    readonly = (args[0] in {"rev-parse", "show", "log", "ls-tree", "ls-files", "diff",
+                           "merge-base", "rev-list", "patch-id", "check-ref-format",
+                           "cat-file", "for-each-ref", "status"}
+                or args[0] == "symbolic-ref" and len([a for a in args[1:] if not a.startswith('-')]) == 1
+                or args[:2] == ("remote", "get-url")
+                or args[0] == "config" and (args[1:2] in {("--get",), ("--get-all",), ("--list",)}
+                                            or len(args) == 2 and not args[1].startswith('-')))
+    if readonly:
+        isolated = isolated and copy_environment() != dict(os.environ)
+        result = _git_read(root, *args, data=data, isolated=isolated)
+        if required and result.returncode:
+            raise Refused(result.stderr.strip() or "Git command failed")
+        return result
+    with changing_repository():
+        return _git_execute(root, *args, data=data, required=required, isolated=isolated)
+
+
+@partial(cached_read, git_query=True)
+def _git_read(root, *args, data=None, isolated=False):
+    if (not isolated and _READS.get() is not None
+            and args == ('rev-parse', '--verify', 'HEAD^{commit}')):
+        item = _batch_object(root, 'HEAD^{commit}')
+        if item is not None:
+            return subprocess.CompletedProcess(['git', *args], 0, item[0] + '\n', '')
+    if not isolated and len(args) == 2 and args[0] == 'show' and ':' in args[1]:
+        raw = blob_bytes(root, args[1])
+        if raw is not None:
+            return subprocess.CompletedProcess(['git', *args], 0,
+                raw.decode('utf-8', 'surrogateescape').replace('\r\n', '\n').replace('\r', '\n'), '')
+    return _git_execute(root, *args, data=data, required=False, isolated=isolated)
 
 
 def copy_environment():
@@ -159,7 +208,7 @@ def copy_environment():
     return {key: value for key, value in os.environ.items() if key not in local}
 
 
-def _git_run(root, *args, data=None, required=True, isolated=False):
+def _git_execute(root, *args, data=None, required=True, isolated=False):
     result = subprocess.run(
         ["git", *args], cwd=root, input=data, capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=30,
@@ -200,11 +249,10 @@ def local_path(root, relative):
 def read_bytes(root, relative, staged=False):
     local_path(root, relative)
     if staged:
-        result = subprocess.run(["git", "show", f":{relative}"], cwd=root,
-                                capture_output=True, timeout=30)
-        if result.returncode:
+        content = blob_bytes(root, f":{relative}")
+        if content is None:
             raise Refused(f"missing staged file: {relative}")
-        return result.stdout
+        return content
     return local_path(root, relative).read_bytes()
 
 
@@ -700,6 +748,7 @@ def release(root, tid, force=False):
     return not holder
 
 
+@changing_repository()
 def fetch_upstream(root):
     """Best-effort show refresh, with one short deadline and no stale-ref fallback."""
     if not has_origin(root):
@@ -874,26 +923,42 @@ def metadata_texts(root, rev=None, tid=None, staged=False):
     return {path: blobs[oid] for path, oid in objects.items()}
 
 
-def read_blobs(root, oids):
-    # Preserve undecodable bytes in the shared batch. read_text/receipt_texts validate only the
-    # selected file, so an unrelated task's bad encoding cannot poison every cached metadata read.
+@partial(cached_read, git_query=True)
+def blob_bytes(root, spec):
+    """Read a blob by object ID or revision:path, preserving its exact bytes."""
+    if _READS.get() is None:
+        with read_session():
+            return blob_bytes(root, spec)
+    # The batch protocol is line delimited. Unusual Git paths still use argv.
+    if '\n' in spec or '\r' in spec:
+        result = subprocess.run(['git', 'show', spec], cwd=root, capture_output=True, timeout=30)
+        return result.stdout if result.returncode == 0 else None
+    item = _batch_object(root, spec)
+    return item[2] if item is not None and item[1] == b'blob' else None
+
+
+def _batch_object(root, spec):
     cache = _READS.get()
-    blobs = cache.setdefault(("blobs", root), {}) if cache is not None else {}
-    wanted = sorted(set(oids) - blobs.keys())
-    if wanted:
-        result = subprocess.run(["git", "cat-file", "--batch"], cwd=root,
-                                input=("\n".join(wanted) + "\n").encode(),
-                                capture_output=True, timeout=30, check=True)
-        offset = 0
-        for oid in wanted:
-            end = result.stdout.index(b"\n", offset)
-            header = result.stdout[offset:end].split()
-            if len(header) != 3 or header[1] != b"blob":
-                raise Refused("Git could not read a task or receipt blob")
-            size = int(header[2])
-            raw = result.stdout[end + 1:end + 1 + size]
-            blobs[oid] = raw.decode("utf-8", errors="surrogateescape").removeprefix("\ufeff").replace("\r\n", "\n")
-            offset = end + 2 + size
+    key = (root, tuple(sorted(os.environ.items())))
+    if key not in cache.batches:
+        cache.batches[key] = Batch(root)
+    try:
+        return cache.batches[key].read(spec)
+    except (ValueError, OSError) as error:
+        cache.batches.pop(key).close()
+        raise Refused(str(error)) from error
+
+
+def read_blobs(root, oids):
+    if _READS.get() is None:
+        with read_session():
+            return read_blobs(root, oids)
+    blobs = {}
+    for oid in set(oids):
+        raw = blob_bytes(root, oid)
+        if raw is None:
+            raise Refused("Git could not read a task or receipt blob")
+        blobs[oid] = raw.decode("utf-8", errors="surrogateescape").removeprefix("\ufeff").replace("\r\n", "\n")
     return blobs
 
 
@@ -1161,7 +1226,7 @@ def annotate_pending_review(root, tid, findings):
         for line in dict.fromkeys(findings)]
     item.pop('hash')
     item['hash'] = digest(packed(item).encode())
-    invalidate_reads()
+    invalidate_reads(metadata_only=True)
 
 
 def completion_transaction(function):
@@ -1203,7 +1268,7 @@ def append(root, tid, item):
         write_receipt(root, tid, data)
     else:
         pending.append(data)
-        invalidate_reads()
+        invalidate_reads(metadata_only=True)
     return data
 
 
@@ -1452,6 +1517,7 @@ def test_timeout(record, override=None):
     return positive_seconds(value) if value is not None else None
 
 
+@changing_repository()
 def run_test(command, root, timeout=None, capture_output=True, *, isolated=False, cache_root=None):
     """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
     from .python_imports import bytecode_cache, environment
@@ -1742,8 +1808,9 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
                 run = cached_test(command, root, test_timeout(definition, timeout), fresh=True)
                 print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0)
             else:
-                run = subprocess.run(list(command), cwd=root, capture_output=True,
-                                     encoding="utf-8", errors="replace")
+                with changing_repository():
+                    run = subprocess.run(list(command), cwd=root, capture_output=True,
+                                         encoding="utf-8", errors="replace")
             exit_code = run.returncode
             output = run.stdout or ""
         except OSError as error:
