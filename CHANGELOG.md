@@ -2,6 +2,13 @@
 
 ## 0.16.0 (16 Nov 2026)
 
+- Keep the read cache active with Git for Windows' default diff drivers. Raw
+  evidence reads bypass helpers; caller-requested helper output stays fresh
+  only when the selected paths use it. Escape characters a console cannot
+  encode in diagnostics, including test IDs. Retry a briefly locked final
+  comparison import report without changing the test's exit or accepting
+  missing, unreadable or invalid evidence.
+
 - Wait for briefly locked comparison import reports instead of aborting valid
   tests; missing, unreadable, or invalid import evidence still refuses the run.
 

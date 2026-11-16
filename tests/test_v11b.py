@@ -328,6 +328,13 @@ def test_staged_hook_reviews_only_tasks_touched_by_commit(local_repo):
 @pytest.mark.parametrize('snapshot_kind', ['working', 'staged', 'ref', 'write'])
 def test_extended_absolute_internal_symlink_never_writes_checkout(local_repo, tmp_path, monkeypatch, snapshot_kind):
     root = local_repo
+    # This test deliberately creates real links, including in a REF checkout.
+    # Git for Windows defaults to checking links out as plain text files; opt
+    # into links for this fixture and its clones so the write-isolation test runs.
+    count = int(os.environ.get('GIT_CONFIG_COUNT', '0'))
+    monkeypatch.setenv('GIT_CONFIG_COUNT', str(count + 1))
+    monkeypatch.setenv(f'GIT_CONFIG_KEY_{count}', 'core.symlinks')
+    monkeypatch.setenv(f'GIT_CONFIG_VALUE_{count}', 'true')
     (root / 'shared.txt').write_text('keep checkout unchanged\n')
     link = root / 'alias.txt'
     try:

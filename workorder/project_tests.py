@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .console import print
+
 import json
 from pathlib import Path
 import re

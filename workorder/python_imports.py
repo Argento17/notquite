@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 
 
 class ImportFailure(str):
@@ -549,13 +550,17 @@ class _ImportGuard:
             self.command[end:end] = ['-p', module]
 
     def status(self):
+        self.report_locked = False
         try:
             value = json.loads(self.report.read_text(encoding='utf-8'))
             return value if isinstance(value, dict) else {'error': 'invalid import guard report'}
-        except (FileNotFoundError, PermissionError):
+        except PermissionError:
             # Windows can deny a read while the child publishes the report.
             # Keep waiting within the startup deadline; finish still refuses
             # a report that remains inaccessible when the child exits.
+            self.report_locked = True
+            return None
+        except FileNotFoundError:
             return None
         except (OSError, ValueError):
             return {'error': 'unreadable import guard report'}
@@ -564,6 +569,13 @@ class _ImportGuard:
         if run.returncode == 124:
             return run
         report = self.status()
+        # The child can exit before the parent first reads its published report.
+        # Allow a brief sharing violation here too, without accepting missing,
+        # persistently unreadable or invalid evidence, or changing the test exit.
+        deadline = time.monotonic() + 0.25
+        while report is None and self.report_locked and time.monotonic() < deadline:
+            time.sleep(0.01)
+            report = self.status()
         if (report is None and run.returncode and
                 re.search(r"No module named ['\"]?_?pytest['\"]?(?:\r?\n|$)", run.stderr or '')):
             # The original interpreter may lack pytest entirely. Preserve its

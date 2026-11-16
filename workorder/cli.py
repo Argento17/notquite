@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .console import print
+
 import argparse
 import os
 from pathlib import Path

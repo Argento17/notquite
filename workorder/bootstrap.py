@@ -1,6 +1,8 @@
 """Repository setup text, also shown in the README and reference."""
 
 from importlib import metadata
+from .console import print
+
 import difflib
 import json
 import os

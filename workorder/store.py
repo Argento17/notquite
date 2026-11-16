@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .console import print
+
 import datetime as dt
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -24,7 +26,7 @@ import tempfile
 import time
 import uuid
 
-from .git_reads import ReadCache, Batch
+from .git_reads import ReadCache, Batch, uses_diff_helper
 
 
 class Refused(ValueError):
@@ -135,7 +137,7 @@ def _read_key(value):
     return value
 
 
-def cached_read(function, *, git_query=False):
+def cached_read(function, *, git_query=False, diff_query=False):
     @wraps(function)
     def read(*args, **kwargs):
         cache = _READS.get()
@@ -143,6 +145,13 @@ def cached_read(function, *, git_query=False):
             return function(*args, **kwargs)
         with cache.checking(args[0], isolated=kwargs.get('isolated', False)) as reusable:
             if not reusable:
+                return function(*args, **kwargs)
+            if diff_query and uses_diff_helper(args[0], args[1:],
+                    cache.states[(args[0], kwargs.get('isolated', False))][2],
+                    isolated=kwargs.get('isolated', False)):
+                # A derived read enclosing this query must not retain helper
+                # output either. Ordinary plumbing reads remain reusable.
+                cache.clear(queries=False)
                 return function(*args, **kwargs)
             entries = cache.queries if git_query else cache
             key = (function, tuple(_read_key(arg) for arg in args),
@@ -204,7 +213,7 @@ def _git_run(root, *args, data=None, required=True, isolated=False):
         return _git_execute(root, *args, data=data, required=required, isolated=isolated)
 
 
-@partial(cached_read, git_query=True)
+@partial(cached_read, git_query=True, diff_query=True)
 def _git_read(root, *args, data=None, isolated=False):
     if (not isolated and _READS.get() is not None
             and args == ('rev-parse', '--verify', 'HEAD^{commit}')):

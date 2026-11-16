@@ -12,9 +12,9 @@ from test_environment import TEST_PYTHON
 @pytest.fixture
 def observable_git_environment(tmp_path, monkeypatch):
     """Give cache-budget tests Git inputs whose dependencies can be observed."""
-    # Git for Windows can register a system textconv helper. Such external
-    # helpers correctly force fresh reads, so reuse budgets need their own
-    # configuration. Functional environment-safety tests do not use this fixture.
+    # Keep exact discovery budgets independent of ambient includes, filters
+    # and attributes. Git for Windows defaults are covered without this fixture
+    # by the git-cache and Windows regression tests.
     for name in list(os.environ):
         if name.startswith('GIT_'):
             monkeypatch.delenv(name)

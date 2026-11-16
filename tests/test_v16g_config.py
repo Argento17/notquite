@@ -75,9 +75,9 @@ def test_ineffective_filter_rules_allow_reuse(local_repo, git_spawns, location, 
 def test_override_removal_activates_filter_with_external_inputs(local_repo, git_spawns):
     root = local_repo
     dependency = root.parent / 'filter-data'
-    dependency.write_text('items = []\n')
+    dependency.write_bytes(b'items = []\n')
     (root / 'app.py').write_text('worktree input differs\n')
-    code = f'import sys; from pathlib import Path; sys.stdin.read(); sys.stdout.write(Path({str(dependency)!r}).read_text())'
+    code = f'import sys; from pathlib import Path; sys.stdin.buffer.read(); sys.stdout.buffer.write(Path({str(dependency)!r}).read_bytes())'
     git(root, 'config', 'filter.dynamic.clean', shlex.join([PYTHON, '-c', code]))
     (root / '.gitattributes').write_text('app.py filter=dynamic\n')
     override = root / '.git/info/attributes'
@@ -88,15 +88,15 @@ def test_override_removal_activates_filter_with_external_inputs(local_repo, git_
         reused(root, query, git_spawns, 'app.py\n', budget=5)
         override.unlink()
         assert store.git(root, *query).stdout == ''
-        dependency.write_text('external output changed\n')
+        dependency.write_bytes(b'external output changed\n')
         assert store.git(root, *query).stdout == 'app.py\n'
 
 
 def test_new_index_path_activates_previously_unmatched_filter(local_repo, git_spawns):
     root = local_repo
     dependency = root.parent / 'filter-data'
-    dependency.write_text('first filtered output\n')
-    code = f'import sys; from pathlib import Path; sys.stdin.read(); sys.stdout.write(Path({str(dependency)!r}).read_text())'
+    dependency.write_bytes(b'first filtered output\n')
+    code = f'import sys; from pathlib import Path; sys.stdin.buffer.read(); sys.stdout.buffer.write(Path({str(dependency)!r}).read_bytes())'
     git(root, 'config', 'filter.dynamic.clean', shlex.join([PYTHON, '-c', code]))
     (root / '.gitattributes').write_text('*.psd filter=dynamic\n')
     query = ('diff', 'HEAD', '--', 'new.psd')
@@ -106,7 +106,7 @@ def test_new_index_path_activates_previously_unmatched_filter(local_repo, git_sp
         (root / 'new.psd').write_text('worktree input\n')
         git(root, 'add', '--intent-to-add', 'new.psd')
         assert '+first filtered output\n' in store.git(root, *query).stdout
-        dependency.write_text('changed filtered output\n')
+        dependency.write_bytes(b'changed filtered output\n')
         assert '+changed filtered output\n' in store.git(root, *query).stdout
 
 
@@ -117,8 +117,9 @@ def test_large_index_inventory_uses_fresh_reads(local_repo, git_spawns):
     oid = git(root, 'rev-parse', 'HEAD:app.py')
     inventory = ''.join(f'100644 {oid}\tbulk-{number}.txt\n' for number in range(4097))
     result = subprocess.run(['git', 'update-index', '--index-info'], cwd=root,
-                            input=inventory, capture_output=True, text=True)
+                            input=inventory.encode('utf-8'), capture_output=True)
     assert result.returncode == 0, result.stderr
+    assert len(git(root, 'ls-files', '-z').split('\0')) == 4099
     query = ('config', '--get', 'user.name')
     git_spawns.clear()
     with store.read_session():
@@ -332,9 +333,9 @@ def test_false_system_config_flag_observes_created_configuration(local_repo, mon
 def test_active_filter_with_unobservable_dependencies_uses_fresh_git(local_repo, location, driver, redirect_config, monkeypatch, git_spawns):
     root = local_repo
     dependency = root.parent / 'filter-data'
-    dependency.write_text('items = []\n')
+    dependency.write_bytes(b'items = []\n')
     (root / 'app.py').write_text('worktree input differs\n')
-    code = f'import sys; from pathlib import Path; sys.stdin.read(); sys.stdout.write(Path({str(dependency)!r}).read_text())'
+    code = f'import sys; from pathlib import Path; sys.stdin.buffer.read(); sys.stdout.buffer.write(Path({str(dependency)!r}).read_bytes())'
     git(root, 'config', f'filter.{driver}.clean', shlex.join([PYTHON, '-c', code]))
     if location in {'worktree', 'index'}:
         attrs = root / '.gitattributes'
@@ -346,7 +347,7 @@ def test_active_filter_with_unobservable_dependencies_uses_fresh_git(local_repo,
         attrs = root.parent / 'configured-attributes'
         git(root, 'config', 'core.attributesFile', str(attrs))
     attrs.parent.mkdir(parents=True, exist_ok=True)
-    attrs.write_text(f'app.py filter={driver}\n')
+    attrs.write_text(f'app.py filter={driver}\n', encoding='utf-8')
     if location == 'index':
         git(root, 'add', '.gitattributes')
         attrs.unlink()
@@ -360,7 +361,7 @@ def test_active_filter_with_unobservable_dependencies_uses_fresh_git(local_repo,
         assert store.git(root, *query).stdout == ''
         assert store.git(root, *query).stdout == ''
         assert git_spawns.count(query) == 2
-        dependency.write_text('filtered output changed\n')
+        dependency.write_bytes(b'filtered output changed\n')
         assert store.git(root, *query).stdout == 'app.py\n'
 
 
@@ -412,7 +413,7 @@ def test_gitfile_retarget_discovers_new_configuration_dependencies(local_repo):
         assert store.git(root, *query).stdout == ''
 
 
-def test_replacement_of_indexed_attributes_refreshes_helper_detection(local_repo):
+def test_replacement_of_indexed_attributes_refreshes_helper_detection(local_repo, git_spawns):
     root = local_repo
     attrs = root / '.gitattributes'
     attrs.write_text('app.py text\n')
@@ -420,9 +421,9 @@ def test_replacement_of_indexed_attributes_refreshes_helper_detection(local_repo
     original = git(root, 'rev-parse', ':.gitattributes')
     attrs.unlink()
     dependency = root.parent / 'filter-data'
-    dependency.write_text('items = []\n')
+    dependency.write_bytes(b'items = []\n')
     (root / 'app.py').write_text('worktree input differs\n')
-    code = f'import sys; from pathlib import Path; sys.stdin.read(); sys.stdout.write(Path({str(dependency)!r}).read_text())'
+    code = f'import sys; from pathlib import Path; sys.stdin.buffer.read(); sys.stdout.buffer.write(Path({str(dependency)!r}).read_bytes())'
     git(root, 'config', 'filter.dynamic.clean', shlex.join([PYTHON, '-c', code]))
     query = ('diff', '--name-only')
     with store.read_session():
@@ -431,6 +432,14 @@ def test_replacement_of_indexed_attributes_refreshes_helper_detection(local_repo
         replacement.write_text('app.py filter=dynamic\n')
         oid = git(root, 'hash-object', '-w', str(replacement))
         git(root, 'replace', original, oid)
-        assert store.git(root, *query).stdout == '.gitattributes\n'
-        dependency.write_text('external helper output changed\n')
+        for _ in range(3):
+            assert store.git(root, *query).stdout == '.gitattributes\n'
+        # Even after Git refreshes its index stat cache, Workorder must perform
+        # fresh reads for the active helper. No repository input changes here.
+        assert git_spawns.count(query) == 4
+        # Reset Git's stat entry so the next fresh Git call re-filters the file
+        # instead of trusting the earlier matching result on Windows.
+        git(root, 'update-index', '--cacheinfo', '100644',
+            git(root, 'rev-parse', ':app.py'), 'app.py')
+        dependency.write_bytes(b'external helper output changed\n')
         assert store.git(root, *query).stdout == '.gitattributes\napp.py\n'

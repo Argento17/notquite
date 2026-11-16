@@ -214,7 +214,9 @@ def test_deleted_object_cannot_be_returned_from_cache(local_repo):
     oid = git(root, 'rev-parse', 'HEAD:app.py')
     with store.read_session():
         assert store.blob_bytes(root, oid) == b'items = []\n'
-        (root / '.git/objects' / oid[:2] / oid[2:]).unlink()
+        loose = root / '.git/objects' / oid[:2] / oid[2:]
+        loose.chmod(0o600)  # Git makes loose objects read-only on Windows.
+        loose.unlink()
         assert store.blob_bytes(root, oid) is None
 
 

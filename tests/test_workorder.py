@@ -848,7 +848,7 @@ def local_repo(tmp_path):
     # Explicit maintenance/repack tests remain free to run those commands.
     git(root, "config", "maintenance.auto", "false")
     git(root, "config", "gc.auto", "0")
-    (root / "app.py").write_text("items = []\n", encoding="utf-8")
+    (root / "app.py").write_bytes(b"items = []\n")
     git(root, "add", "app.py")
     git(root, "commit", "-qm", "Start")
     return root

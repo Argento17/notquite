@@ -1,5 +1,7 @@
 """Claude Code hook commands: local task context and completion checks."""
 
+from .console import print
+
 import json
 import re
 import sys

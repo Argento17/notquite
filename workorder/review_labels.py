@@ -1,5 +1,7 @@
 """Reviewer allowances from GitHub issue events, used by the generated workflow."""
 
+from .console import print
+
 import json
 import re
 import sys

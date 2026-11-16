@@ -192,7 +192,8 @@ def _git_configuration(root, gitdir, common, env, environment, configurations, c
                           for value in defaults.get('GIT_ATTR_SYSTEM', ('/etc/gitattributes',)))
     inputs = {xdg / 'git/ignore'}
     filters = set()
-    unsafe = bool(env.get('GIT_EXTERNAL_DIFF'))
+    unsafe = False
+    diff_helpers = {'external': bool(env.get('GIT_EXTERNAL_DIFF')), 'textconv': set(), 'command': set()}
     effective = {}
     for source, name, value in records:
         origin = None
@@ -214,10 +215,14 @@ def _git_configuration(root, gitdir, common, env, environment, configurations, c
             filters.add(name[len('filter.'):].rsplit('.', 1)[0])
         if name == 'core.fsmonitor' and (value is None or value.lower() not in {'', 'false', 'no', 'off', '0'}):
             unsafe = True
-        if value and (name == 'diff.external' or name.startswith('diff.') and name.endswith(('.textconv', '.command'))):
-            unsafe = True
+        if name == 'diff.external' and value:
+            diff_helpers['external'] = True
+        if name.startswith('diff.') and name.endswith(('.textconv', '.command')) and value:
+            driver, kind = name[len('diff.'):].rsplit('.', 1)
+            diff_helpers[kind].add(driver.encode('utf-8', 'surrogateescape'))
     result = {'configuration_paths': paths, 'signature': _configuration_files(paths, contents, observe),
-              'inputs': inputs, 'attributes': attributes, 'filters': filters, 'unsafe': unsafe}
+              'inputs': inputs, 'attributes': attributes, 'filters': filters, 'unsafe': unsafe,
+              'diff_helpers': diff_helpers}
     configurations[key] = result
     return result
 
@@ -492,12 +497,69 @@ def repository_state(root, *, isolated=False, configurations=None, contents=None
                                      working_paths | indexed_paths, configurations, (working, metadata)):
                     return None
         digest.update(repr(environment).encode('utf-8', 'surrogateescape'))
-        result = working, digest.digest()
+        result = working, digest.digest(), configuration['diff_helpers']
         if snapshots is not None and os.name != 'nt':
             snapshots[identity] = environment, observed, result
         return result
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         return None
+
+
+def uses_diff_helper(root, args, helpers, *, isolated=False):
+    """Only patch reads can run diff helpers; ask Git which paths they read.
+
+    Workorder's evidence patches explicitly disable both kinds of helper. Raw
+    caller queries may opt in, and their external inputs cannot be cached.
+    """
+    if not args or args[0] not in {'diff', 'log', 'show'} or not any(helpers.values()):
+        return False
+    end = args.index('--') if '--' in args else len(args)
+    options = args[1:end]
+    if args[0] == 'show' and len(args) == 2 and ':' in args[1]:
+        return False  # store reads the blob through cat-file
+    textconv = external = args[0] != 'log'
+    patch = args[0] != 'log'
+    for option in options:
+        if option in {'--textconv', '--no-textconv'}:
+            textconv = option == '--textconv'
+        elif option in {'--ext-diff', '--no-ext-diff'}:
+            external = option == '--ext-diff'
+        elif option in {'--name-only', '--name-status', '--raw', '--numstat', '--stat', '-s', '--no-patch'}:
+            patch = False
+        elif option in {'-p', '-u', '--patch', '--patch-with-raw', '--patch-with-stat'}:
+            patch = True
+    names = (helpers['textconv'] if textconv else set()) | (helpers['command'] if external else set())
+    if not patch or not (names or external and helpers['external']):
+        return False
+    from .store import copy_environment
+    env = copy_environment() if isolated else None
+    try:
+        # Keep revisions/pathspecs and let Git resolve renames and historical
+        # paths. These flags suppress helpers even for explicitly opted-in reads.
+        flags = ['--no-ext-diff', '--no-textconv', '--name-only', '-z']
+        if args[0] != 'diff':
+            flags.append('--format=')
+        listing = subprocess.run(['git', *args[:end], *flags, *args[end:]],
+                                 cwd=root, env=env, capture_output=True, timeout=30)
+        if listing.returncode or len(listing.stdout) > 32 * 1024 * 1024:
+            return True
+        if not listing.stdout:
+            return False
+        if external and helpers['external']:
+            return True
+        # Log/show can separate commits with newlines. Ambiguous framing stays
+        # fresh, including unusual path names, rather than missing a dependency.
+        if b'\n' in listing.stdout or not listing.stdout.endswith(b'\0'):
+            return True
+        attributes = subprocess.run(['git', 'check-attr', '-z', '--stdin', 'diff'],
+                                    cwd=root, env=env, input=listing.stdout,
+                                    capture_output=True, timeout=30)
+        values = attributes.stdout.split(b'\0')
+        if attributes.returncode or values.pop() != b'' or len(values) % 3:
+            return True
+        return any(value in names for value in values[2::3])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return True
 
 
 class Batch:
