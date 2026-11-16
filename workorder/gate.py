@@ -291,7 +291,7 @@ def delivered_code(root, implemented, item, computed=None):
         computed and not item["missing"] and s.contains(root, computed["commit"], item["commit"]))
 
 
-def verdict(root, record, staged=False):
+def verdict(root, record, staged=False, *, allow_no_code_change=False):
     tid = record["id"]
     history = s.entries(root, tid, staged)
     recognise_squashed(root, tid, history, staged)
@@ -315,8 +315,8 @@ def verdict(root, record, staged=False):
                 base, _ = implementation_base(root, record)
             problem = no_code_change_problem(root, record, base,
                                              end=implemented.get('seen_on', implemented['commit']))
-            if problem:
-                done.append(problem)
+            if problem and not allow_no_code_change:
+                done.append(reviewer_label(ReviewProblem(problem, f'tasks/{tid}.md', label_only=True), tid))
         if runs and runs[-1].get('no_tests_passed'):
             done.append(f"its test ran but no test passed ({runs[-1]['no_tests_passed']})")
         elif not runs or runs[-1]["exit_code"] != 0 or not runs[-1]["valid"]:
@@ -2283,14 +2283,57 @@ def implementation_base(root, record):
     return commit, s.git(root, 'rev-parse', '--short', commit).stdout.strip()
 
 
+def declared_code_paths(record, paths):
+    scopes = {posixpath.normpath(path) for path in record['code_paths']}
+    return {path for path in paths if any(scope == '.' or path == scope or path.startswith(scope + '/')
+                                         for scope in scopes)}
+
+
+def other_recorded_paths(root, record, base, changed, staged=False, end=None):
+    """Only other tasks' new receipts covering these exact file versions narrow verification."""
+    covered = set()
+    current = s.code_tree(root, end or (s.index_tree(root) if staged else s.head(root)))
+    original = s.code_tree(root, base)
+    unrecorded = changed_paths(root, 'HEAD', staged) if end is None else set()
+    for tid, other in records(root, staged, errors={}).items():
+        if tid == record['id']:
+            continue
+        try:
+            old = {entry['hash'] for entry in s.entries(root, tid, rev=base)}
+            entries = s.entries(root, tid, staged)
+        except s.Refused:
+            continue  # unreadable receipts cannot narrow this task's protection
+        for entry in entries:
+            if (entry['hash'] in old or entry['kind'] not in {'implemented', 'test'} or entry['missing']
+                    or not s.contains(root, entry['commit'], end or s.head(root))):
+                continue
+            if entry['kind'] == 'test' and (not entry['valid'] or entry['exit_code']):
+                continue
+            recorded = s.code_tree(root, entry['commit'])
+            paths = {path for path in changed - unrecorded
+                     if recorded.get(path) != original.get(path) and recorded.get(path) == current.get(path)}
+            if 'implementation_paths' in entry:
+                paths &= entry['implementation_paths'].keys()
+            if 'code_paths' in other:
+                paths &= declared_code_paths(other, paths) | strict_test_files(root, other, base, staged)
+            covered |= paths
+    return covered
+
+
 def no_code_change_problem(root, record, base, staged=False, end=None):
     if end is None:
         changed = changed_paths(root, base, staged)
     else:
         changed = set(s.git(root, 'diff', '--name-only', '-z', '--no-renames', base, end).stdout.split('\0'))
-    code = sorted(path for path in changed if path and needs_task_receipt(path))
+    code = {path for path in changed if path and needs_task_receipt(path)}
     if code:
-        return (f"{record['id']}: code changed ({', '.join(code)}); "
+        tests = strict_test_files(root, record, base, staged)
+        if 'code_paths' in record:
+            code &= declared_code_paths(record, code) | tests
+        else:
+            code -= other_recorded_paths(root, record, base, code, staged, end) - tests
+    if code:
+        return (f"{record['id']}: code changed ({', '.join(sorted(code))}); "
                 '--no-code-change is for verification tasks with no code change')
     return None
 
@@ -2553,6 +2596,37 @@ def pending_review(root, record, base=None, staged=False):
                and entry['hash'] not in carried for entry in s.entries(root, record['id'], staged))
 
 
+def covered_pending_findings(root, record, base):
+    """Findings declared in this change by a completion covering the current tests.
+
+    None means no such completion; an empty set still declares its own test edits.
+    Other code may have moved since the declaration, so compare test file versions,
+    not the whole repository digest. New comparison findings need their own declaration.
+    """
+    if record['status'] not in FINISHED:
+        return None
+    carried = {entry['hash'] for entry in s.entries(root, record['id'], rev=base)}
+    protected = strict_test_files(root, record, base)
+    current = s.code_tree(root, s.head(root))
+    findings, implemented = None, None
+    for entry in s.entries(root, record['id']):
+        if entry['kind'] == 'implemented':
+            implemented = entry
+        if (entry['kind'] != 'test' or entry.get('pending_review') is not True
+                or entry['hash'] in carried or not entry['valid'] or entry['exit_code']
+                or entry.get('no_tests_passed') or implemented is None
+                or not counting_runs(record, [entry], implemented)
+                or not s.contains(root, entry['commit'], s.head(root))):
+            continue
+        recorded = s.code_tree(root, entry['commit'])
+        if any(recorded.get(path) != current.get(path) for path in protected):
+            continue
+        if findings is None:
+            findings = set()
+        findings.update(item['message'] for item in entry.get('pending_findings', []))
+    return findings
+
+
 def waiting_for_review(root, record, staged=False):
     target = merge_target(root, record)
     # The declaration records a review request, not the review service's state.
@@ -2569,10 +2643,7 @@ def task_test_paths(root, record, base, staged=False):
 def task_code_paths(root, record, base, staged=False):
     changed = changed_paths(root, base, staged)
     if 'code_paths' in record:
-        scopes = {posixpath.normpath(path) for path in record['code_paths']}
-        return {path for path in changed if not s.generated_path(path)
-                and any(scope == '.' or path == scope or path.startswith(scope + '/')
-                                               for scope in scopes)}
+        return declared_code_paths(record, {path for path in changed if not s.generated_path(path)})
     implemented = newest_implementation(s.entries(root, record['id'], staged))
     if implemented:
         paths = implemented.get('implementation_paths')
@@ -2841,7 +2912,10 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
     if run.get('no_code_change') is True and not identities & carried:
         exemption_problem = no_code_change_problem(root, record, base, staged)
         if exemption_problem:
-            problems.append(exemption_problem)
+            if allow if allow_failure is None else allow_failure:
+                notes.append(exemption_problem + ' (allowed by workorder-allow:' + tid + ')')
+            else:
+                problems.append(reviewer_label(ReviewProblem(exemption_problem, f'tasks/{tid}.md', label_only=True), tid))
     for problem in assertions if review_files else []:
         if allow if allow_failure is None else allow_failure:
             notes.append(str(problem) + ' (allowed by workorder-allow:' + tid + ')')
@@ -3072,12 +3146,14 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
 class Views(dict):
     """Verdicts worked out on first use, so a scoped check reads only the tasks it needs."""
 
-    def __init__(self, root, all_records, staged=False):
+    def __init__(self, root, all_records, staged=False, *, allow_no_code_change=()):
         super().__init__()
         self.root, self.all_records, self.staged = root, all_records, staged
+        self.allow_no_code_change = allow_no_code_change
 
     def __missing__(self, tid):
-        self[tid] = verdict(self.root, self.all_records[tid], self.staged)
+        self[tid] = verdict(self.root, self.all_records[tid], self.staged,
+                            allow_no_code_change=tid in self.allow_no_code_change)
         return self[tid]
 
 
@@ -3576,7 +3652,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             problems.append(f'{tid}: no test files are known for its test; set test_paths')
         problems += repository_review_problems(root, base, all_records, staged, allow, strict_tests, errors, notes,
                                                run_tests, timeout, counts, explicit_allow)
-    views = Views(root, all_records, staged)
+    views = Views(root, all_records, staged, allow_no_code_change=explicit_allow if base else ())
     # Include removed receipts and ledgers whose task file was also removed.
     paths = set(s.receipt_paths(root, rev="HEAD")) | set(s.receipt_paths(root, staged))
     tids = {s.receipt_task(path) for path in paths

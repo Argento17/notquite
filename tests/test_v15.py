@@ -175,10 +175,13 @@ def test_old_no_code_change_receipt_cannot_exempt_changed_code(local_repo, targe
     store.set_task_field(root, 'TASK-1', 'status', 'DONE')
     if mode == 'staged':
         git(root, 'add', 'tasks', '.workorder')
-    flags = ['--staged'] if mode == 'staged' else ['--base', base, '--allow', 'TASK-1,tests', '--review', 'warn'] if mode == 'base' else []
+    flags = ['--staged'] if mode == 'staged' else ['--base', base, '--review', 'warn'] if mode == 'base' else []
     result = cli(root, 'check', *flags)
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'TASK-1: code changed (feature.py); --no-code-change is for verification tasks with no code change' in result.stdout
+    if mode == 'base':
+        # Item 43 gives even an old false exemption an explicit task-label route.
+        ok(root, 'check', *flags, '--allow', 'TASK-1')
 
 
 def finished_command(root, target):

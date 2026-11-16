@@ -37,9 +37,13 @@ why). Every command resolves the repository root, so commands also work from sub
 Without a target, it compares with the commit that created the task (HEAD for an
 uncommitted task). Otherwise it refuses: `TASK-1: no code changed since <ref>;
 nothing was implemented; land the task on main first, then do the work on a branch`.
-Documentation, ignore rules, license files and image assets do not count as code changes. Use `--no-code-change` only for verification tasks with no code edits, including
-no edits to test scripts. The comparison uses the target merge base, or task
-creation without a target. A changed code file refuses even with review flags:
+Documentation, ignore rules, license files and image assets do not count as code changes. Use `--no-code-change` only for verification tasks whose own code and tests are unchanged.
+Declared `code_paths` and the task's test files set the boundary. Without declared
+code paths, changes covered by another task's new implementation or passing test
+receipts in this change are excluded. Only matching file versions count; later
+edits stay protected, as do this task's own tests. The comparison uses the target
+merge base, or task creation without a target. `done` refuses changes inside this
+boundary even with `--needs-review`:
 
 ```text
 TASK-1: code changed (feature.py); --no-code-change is for verification tasks with no code change
@@ -50,8 +54,10 @@ receipt records the exemption and optional `no_code_change_base` commit. Checks
 validate the exemption against that base, and against the branch comparison
 for an exemption first recorded on the branch. A receipt already on the base
 keeps its historical claim. Old receipts use their implementation base when
-available, then the usual target or task-creation comparison. A label cannot
-accept a false exemption.
+available, then the usual target or task-creation comparison. In a pull-request
+check, `workorder-allow:<ID>` accepts that task's false exemption, including one
+in an older receipt. An approving review, warning mode or another task's label
+does not accept it. Current test failures still refuse.
 
 When tests changed on purpose, rerun `done --task ID --needs-review`. Passing,
 supported evidence is recorded with optional `pending_review: true` on the test
@@ -65,6 +71,15 @@ TASK-6 DONE, pending review: the pull request needs workorder-allow:TASK-6 or an
 
 Changed shared test data and affected finished tasks are checked too. Their notes
 list any additional task labels or `workorder-allow:tests` for files without an owner.
+Another task's findings stop blocking plain `done` only when that task has its
+own `done --needs-review` completion recorded in this change, with receipts
+covering its current test files. Only its own test edits and its own recorded
+pending findings qualify. Old declarations, later test edits and new findings
+still block. For example, weakening another task's test while breaking its
+base-version test still refuses plain `done`; use `--needs-review` for intentional
+changes. All other-task findings appear once in `Other:`. The other task's
+receipts and pending review stay unchanged, and the pull-request check still
+requires its review. A failing current test refuses completion and names the task.
 Current test failures still refuse completion with `--needs-review`. Assertion
 findings, a test that passes with changed functions stubbed out, and unavailable
 import comparisons can be recorded pending review; these need the task label.
@@ -166,7 +181,7 @@ matter between two `---` lines, one
 `key: value` per line, each key once. These seven fields are required: `id`,
 `title`, `owner`, `status`, `ships`, `waits_on`, `contract`.
 
-A value is plain single-line text, a JSON string, or a list. `note` appends a line under Progress. `done` clears `next` and changes the status line to DONE after checking the claim, and `done --note` also appends a dated line. Other task text is preserved. `note --next "TEXT"` replaces or adds the next field, including existing folded/literal values; an empty string clears it. With no NOTE it adds no Progress entry. `done --note` writes the handover line and new receipts only when DONE is written. A refusal leaves both unchanged, so retries do not duplicate them. Use `workorder note` to record progress separately during unfinished work. Refusal says `TASK-1: DONE was not written; the status stays IN_PROGRESS`, then the task's distinct Missing lines and one Next line. Findings about other tasks get one summary line; `check --base REF --run-tests` shows their details. If already finished, it says `TASK-7 stays DONE; this change was refused:` followed by its reason. After a real failure, Next says `fix the code or the test, then run workorder done again`. `done` refuses a missing or empty Scope or Acceptance section, including sections containing only HTML template comments: `fill in Scope and Acceptance first`. It checks this before recording evidence. It preserves the status line's plain, single-quoted or double-quoted style, and its existing line endings. Success says `TASK-1 DONE: its declared test passed on this code`, followed by `; still owes: merge of the tested code` when applicable (and any other delivery debt). A separate line asks you to commit tasks/ and .workorder/, adding `and push` only with an origin remote. It warns when this clone has no pre-commit hook. With a locally available target, it runs the test-change checks below against the merge base of HEAD and that ref, plus the tests of affected finished tasks, before writing DONE and refuses with exit 1 when they find a problem, preserving the prior status. It adds `a reviewer accepts it with the label workorder-allow:<ID> (or an approving review)` to the same diagnostic. It does not fetch. Without a target it prints `could not compare with the target: fetch origin first`. Local main/master is used on a branch when no remote target is available. A passing run that does not count reports whether files or HEAD changed while it ran; generated files such as __pycache__/ should be added to .gitignore before committing and running done again. `done` needs a concrete declared command; use the individual receipts for `test: any`. A task
+A value is plain single-line text, a JSON string, or a list. `note` appends a line under Progress. `done` clears `next` and changes the status line to DONE after checking the claim, and `done --note` also appends a dated line. Other task text is preserved. `note --next "TEXT"` replaces or adds the next field, including existing folded/literal values; an empty string clears it. With no NOTE it adds no Progress entry. `done --note` writes the handover line and new receipts only when DONE is written. A refusal leaves both unchanged, so retries do not duplicate them. Use `workorder note` to record progress separately during unfinished work. Refusal says `TASK-1: DONE was not written; the status stays IN_PROGRESS`, then the task's distinct Missing lines and one Next line. Findings about other tasks get one summary line; `check --base REF --run-tests` shows their details. If already finished, it says `TASK-7 stays DONE; this change was refused:` followed by its reason. After a real failure, Next says `fix the code or the test, then run workorder done again`. `done` refuses a missing or empty Scope or Acceptance section, including sections containing only HTML template comments: `fill in Scope and Acceptance first`. It checks this before recording evidence. It preserves the status line's plain, single-quoted or double-quoted style, and its existing line endings. Success says `TASK-1 DONE: its declared test passed on this code`, followed by `; still owes: merge of the tested code` when applicable (and any other delivery debt). A separate line asks you to commit tasks/ and .workorder/, adding `and push` only with an origin remote. It warns when this clone has no pre-commit hook. With a locally available target, it runs the test-change checks below against the merge base of HEAD and that ref, plus the tests of affected finished tasks, before writing DONE. It refuses with exit 1 for blocking findings, preserving the prior status. Another task's own test edits and recorded pending findings stop blocking only when that task has its own pending completion in this change covering its current tests. Other findings still block plain done and appear once in the Other line. It adds `a reviewer accepts it with the label workorder-allow:<ID> (or an approving review)` to the same diagnostic. It does not fetch. Without a target it prints `could not compare with the target: fetch origin first`. Local main/master is used on a branch when no remote target is available. A passing run that does not count reports whether files or HEAD changed while it ran; generated files such as __pycache__/ should be added to .gitignore before committing and running done again. `done` needs a concrete declared command; use the individual receipts for `test: any`. A task
 file that cannot be read is reported as a problem of that task; the other tasks
 are still checked. Fields starting with `x-` (such as `x-issue`) are your own:
 they are kept and never checked.

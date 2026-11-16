@@ -2,6 +2,18 @@
 
 ## 0.15.0 (15 Nov 2026)
 
+- Limit --no-code-change to the task's declared code paths and test files.
+  Without declared paths, exclude changes covered by another task's new
+  implementation or test receipts, while keeping the task's own tests protected.
+  Use the same scope for done and receipt checks. A task label can accept a
+  false exemption in the pull-request check, including existing receipts.
+- Let done finish alongside another task's own pending-review completion
+  recorded in this change, when its receipts cover its current test files.
+  Only that task's own test edits and recorded pending findings stop blocking.
+  Other findings still block and appear once in Other; --needs-review remains
+  the route for intentional changes. Current failures and pull-request review
+  requirements keep their protections.
+
 - Let finished declared refactors commit passing test edits. Local hooks advise
   renew --no-refactor or done --needs-review after committing; failing edits
   still refuse, and the pull request still needs the task label.

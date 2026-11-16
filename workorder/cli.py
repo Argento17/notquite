@@ -273,7 +273,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                                           for path in gate.changed_paths(root, revision)):
             raise s.Refused(f'{tid}: no code changed since {reference}; nothing was implemented; '
                             'land the task on main first, then do the work on a branch')
-        if 'code_paths' not in record:
+        if 'code_paths' not in record and not no_code_change:
             code = sorted(path for path in gate.changed_paths(root, revision) - material
                           if gate.needs_task_receipt(path))
             if code:
@@ -310,7 +310,15 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if base:
             notes = []
             revision, label = gate.comparison_base(root, base)
-            for problem in gate.repository_review_problems(root, revision, gate.records(root, errors={})):
+            records = gate.records(root, errors={})
+            declared = {}
+            for other, definition in records.items():
+                if other != tid and gate.pending_review(root, definition, revision):
+                    notes.append(f'{other}: ' + gate.pending_review_message(other))
+                    findings = gate.covered_pending_findings(root, definition, revision)
+                    if findings is not None:
+                        declared[other] = findings
+            for problem in gate.repository_review_problems(root, revision, records):
                 problem = gate.comparison_message(problem, revision, base, label)
                 owner = problem.split(':', 1)[0]
                 owner = owner.split(', ', 1)[0]
@@ -327,7 +335,16 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                                                        notes=notes, results=results, pending_review=needs_review, jobs=jobs)
             if not needs_review:
                 problems += [note for note in notes if gate._accepts_allow_label(note)]
-            problems = list(dict.fromkeys(problems))
+            blocking = []
+            for problem in dict.fromkeys(problems):
+                owners = finding_tasks(problem)
+                if (gate._accepts_allow_label(problem) and owners and tid not in owners
+                        and all(owner in declared and (problem in declared[owner]
+                                or problem.startswith(f'{owner}: its test files ')) for owner in owners)):
+                    notes.append(problem)
+                else:
+                    blocking.append(problem)
+            problems = blocking
             other_notes = set()
             for review_note in dict.fromkeys(notes):
                 owners = finding_tasks(review_note)

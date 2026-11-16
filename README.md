@@ -74,7 +74,7 @@ work. It never commits or pushes for you. If it refuses, follow its Missing and
 Next lines. A reopened DONE/CLOSED task can stay IN_PROGRESS or BLOCKED while being fixed;
 if its test still fails, the pull request needs the reviewer's explicit `workorder-allow:<ID>` label. Approval or warning mode is insufficient.
 Ordinary tasks need a code change since the target merge base (or task creation).
-Use `--no-code-change` only when no code files changed. For intentional test edits,
+Use `--no-code-change` only when the task's own code and test files are unchanged. For intentional test edits,
 `--needs-review` writes DONE pending a reviewer label or approval. Use `--refactor`
 for unchanged tests passing before and after. Plain `renew` keeps that declaration; `renew --no-refactor` drops it. `new --code-paths src/calc.py` sets code scope. [Task format](docs/reference.md#task-files).
 
@@ -108,9 +108,9 @@ Stop checks relevant completion claims and writes refusals to stderr with exit 2
 For test-first work, write a failing test, run `new --test-first --test "..."`, and land the task and test on main before implementation.
 Use `init --test-first` to add `check --require-test-first`; tests added or changed with the work need the task's explicit reviewer label.
 
-The pre-commit hook checks staged work; finished-task command repairs get review notes if they pass. With a local target, `done` also tests finished tasks whose recorded code or tests changed. Fetch origin before `done`.
+The pre-commit hook checks staged work; finished-task command repairs get review notes if they pass. With a local target, `done` also tests affected finished tasks. Another task's own test edits and recorded findings stop blocking only after its own `done --needs-review` in this change covers its current tests. Other findings still block plain `done`; all appear once in `Other:`. Fetch origin before `done`.
 
-A completed task's test must fail on the target's merge-base code when its own code or tests changed. `--refactor` accepts unchanged tests passing on both versions; `--no-code-change` exempts work with no code edits. Each exemption remains a separate task note.
+A completed task's test must fail on the target's merge-base code when its own code or tests changed. `--refactor` accepts unchanged tests passing on both versions; `--no-code-change` checks the task's declared code paths and tests. Without code paths, other tasks' new receipts exclude their recorded changes. The task label can accept a false exemption in the pull request. Each exemption remains a separate task note.
 
 New or changed Python test functions need an assertion or helper (including `pytest.warns`); literal-only assertions and `value == value` refuse. Tests must also fail when the task's changed Python functions are replaced with bodies that raise an error in a temporary copy. Declared code paths set that boundary; without them, other tasks' declared paths are excluded. Refactor and no-code-change runs are exempt; unusual valid tests can use `done --needs-review` and need the task's explicit reviewer label. [Test checks](docs/reference.md#checks-against-a-base).
 
