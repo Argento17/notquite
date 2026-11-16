@@ -1633,8 +1633,8 @@ def run_test(command, root, timeout=None, capture_output=True, *, isolated=False
                                cache_root=cache_root) as (execution, env):
             if guard:
                 guard.pycache_prefix = env.get('PYTHONPYCACHEPREFIX')
-            # A guarded pytest startup retains the standalone probe's deadline,
-            # even when the declared test itself has no timeout.
+            # Bound import verification during pytest startup even without a
+            # test timeout. An earlier declared test deadline always wins.
             if timeout is None and guard is None:
                 run = subprocess.run(execution, cwd=root, capture_output=capture_output,
                                      encoding="utf-8", errors="replace", env=env)
@@ -1677,7 +1677,7 @@ def run_test(command, root, timeout=None, capture_output=True, *, isolated=False
                         elif now >= probe_deadline:
                             output, errors = stop()
                             failure = ImportFailure('could not verify project imports: '
-                                                    f'import probe timed out after {guard.timeout:g} seconds')
+                                                    f'import guard startup timed out after {guard.timeout:g} seconds')
                             return subprocess.CompletedProcess(command, failure, output, errors)
                     wait = max(0, deadline - now) if deadline is not None else None
                     if probe_deadline is not None:

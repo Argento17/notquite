@@ -119,18 +119,19 @@ def test_integrated_guard_keeps_declared_timeout_124(local_repo, tmp_path):
     assert 'test timed out' in run.stderr
 
 
-def test_pytest_startup_keeps_import_probe_deadline(local_repo, tmp_path, monkeypatch):
+@pytest.mark.parametrize('timeout', [None, 30])
+def test_pytest_startup_without_report_is_refused(local_repo, tmp_path, monkeypatch, timeout):
     destination = comparison(local_repo, tmp_path)
     plugin = tmp_path / 'plugins'
     plugin.mkdir()
     (plugin / 'slow_plugin.py').write_text('import time\ntime.sleep(30)\n')
     monkeypatch.setenv('PYTHONPATH', str(plugin))
     monkeypatch.setenv('PYTEST_PLUGINS', 'slow_plugin')
-    monkeypatch.setattr(python_imports, 'PROBE_TIMEOUT', 0.5, raising=False)
+    monkeypatch.setattr(python_imports, 'GUARD_STARTUP_TIMEOUT', 0.5)
     command = [PYTHON, '-m', 'pytest', '-q', 'tests/test_calc.py']
-    run = store.cached_test(command, destination, cache_root=local_repo, fresh=True)
+    run = store.cached_test(command, destination, timeout=timeout, cache_root=local_repo, fresh=True)
     assert isinstance(run.returncode, python_imports.ImportFailure)
-    assert 'timed out' in run.returncode
+    assert 'import guard startup timed out after 0.5 seconds' in run.returncode
 
 
 def test_script_arguments_do_not_turn_it_into_a_pytest_entrypoint(local_repo, tmp_path):

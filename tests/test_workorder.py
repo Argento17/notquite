@@ -29,10 +29,31 @@ def git(root, *args):
     return result.stdout.strip()
 
 
+def _windows_process_table():
+    """Diagnostic for a pipe held open after Workorder exits (seen only on Windows CI)."""
+    command = ("Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,"
+               "CreationDate,Name,CommandLine | Format-Table -AutoSize -Wrap | Out-String -Width 400")
+    try:
+        return subprocess.run(["powershell", "-NoProfile", "-Command", command],
+                              capture_output=True, encoding="utf-8", errors="replace", timeout=60).stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"could not list processes: {error}"
+
+
 def cli(root, *args):
     env = dict(os.environ, PYTHONPATH=str(PACKAGE), GIT_TERMINAL_PROMPT="0")
-    return subprocess.run([PYTHON, "-m", "workorder", *args], cwd=root, env=env,
-                          capture_output=True, encoding="utf-8", timeout=120)
+    process = subprocess.Popen([PYTHON, "-m", "workorder", *args], cwd=root, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
+    try:
+        stdout, stderr = process.communicate(timeout=120)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            print(f"workorder pid {process.pid} exit {process.poll()}; processes while its output is still open:")
+            print(_windows_process_table())
+        process.kill()
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
 
 def ok(root, *args):

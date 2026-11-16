@@ -365,6 +365,9 @@ def import_locations(names, projects):
 
 
 PROBE_TIMEOUT = 10
+# The integrated guard also waits for interpreter startup, pytest/plugins and
+# fresh project bytecode. The runner still enforces any earlier test deadline.
+GUARD_STARTUP_TIMEOUT = 60
 
 
 PROBE = _IMPORT_REPORT + r'''
@@ -509,7 +512,7 @@ class _ImportGuard:
         self.directory = directory
         self.report = directory / 'report.json'
         self.pycache_prefix = None
-        self.timeout = PROBE_TIMEOUT
+        self.timeout = GUARD_STARTUP_TIMEOUT
         module = '__workorder_import_guard_' + os.urandom(8).hex()
         plugin = directory / (module + '.py')
         data = dict(names=sorted(set(packages(root, modules=True)) | set(packages(source, modules=True))),

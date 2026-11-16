@@ -63,7 +63,7 @@ Test material is classified first: declared paths, recognized test-command files
 ## The test could not run against the intended copy
 **Meaning:** `could not compare` can name an external project import, an unidentified interpreter, an unavailable dependency, an invalid pytest setup or a failed temporary-copy operation. It proves neither weakness nor a passing refactor.
 **Clear:** Install dependencies and make the tests import this checkout's project, using a suitable pytest `pythonpath` or non-editable install; fetch missing refs and fix the named command/setup error. Recheck isolated Python commands too. An unavailable project-import check requires `workorder-allow:ID`; approval and warning mode do not suffice. Other execution/setup failures need correction, not a claimed passing test.
-Fresh pytest comparisons verify imports in the test interpreter before loading conftests or tests, using pytest's selected configuration and plugins. Cached test results still require a fresh standalone import probe. Missing or timed-out verification cannot establish a passing comparison. A missing-pytest warning requires a separate import probe to confirm absence; duplicate availability markers are refused.
+Fresh pytest comparisons verify imports in the test interpreter before loading conftests or tests, using pytest's selected configuration and plugins. This startup has a 60-second limit; an earlier declared test timeout still stops the run with exit 124, and the test's deadline is not reset after verification. Cached test results still require a fresh standalone import probe with its own 10-second limit. Missing or timed-out verification cannot establish a passing comparison. A missing-pytest warning requires a separate import probe to confirm absence; duplicate availability markers are refused.
 Temporary comparison copies are removed after their Git processes exit, including failed or timed-out runs.
 
 <!-- refusal-family workflow -->
@@ -110,6 +110,6 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py a3a16fc1a30cbc74a0d92feb72b6cd67998a4320b5bc813e40bfe3c2fbc3f782 records,evidence,current-tests,removal -->
+<!-- refusal-inventory workorder/store.py 33bede98ae60a60d589b42a80ed9f8399a1464d7531522a33d18db822d85205e records,evidence,current-tests,removal -->
 <!-- refusal-inventory workorder/git_reads.py 494271e8e22ab5f2c93ae88af4a3597d6ce39b380081796979d23218845cb1da records,evidence -->
 <!-- refusal-inventory workorder/console.py 6634087244aa3cbf3741281f4b740117043f662e24e309c6c5af10d7c543b681 records,current-tests -->
