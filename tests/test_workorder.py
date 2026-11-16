@@ -42,7 +42,15 @@ def _windows_process_table():
 
 def cli(root, *args):
     env = dict(os.environ, PYTHONPATH=str(PACKAGE), GIT_TERMINAL_PROMPT="0")
-    process = subprocess.Popen([PYTHON, "-m", "workorder", *args], cwd=root, env=env,
+    command = [PYTHON, "-m", "workorder", *args]
+    if os.name == "nt":
+        # Diagnostic for an intermittent Windows hang: dump every thread's stack
+        # to stderr shortly before the 120-second limit.
+        command = [PYTHON, "-c", "import faulthandler, runpy, sys; "
+                   "faulthandler.dump_traceback_later(100, file=sys.stderr); "
+                   "sys.argv = ['workorder', *sys.argv[1:]]; "
+                   "runpy.run_module('workorder', run_name='__main__', alter_sys=True)", *args]
+    process = subprocess.Popen(command, cwd=root, env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
     try:
         stdout, stderr = process.communicate(timeout=120)
@@ -51,7 +59,9 @@ def cli(root, *args):
             print(f"workorder pid {process.pid} exit {process.poll()}; processes while its output is still open:")
             print(_windows_process_table())
         process.kill()
-        process.communicate()
+        _, stderr = process.communicate()
+        print("workorder stderr (thread dump on Windows):")
+        print(stderr[-30000:])
         raise
     return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
