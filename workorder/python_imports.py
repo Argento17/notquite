@@ -1,6 +1,8 @@
 """Keep Python source and import evidence local to a test checkout."""
 import ast
 import configparser
+from contextlib import contextmanager
+import errno
 import json
 import os
 from pathlib import Path, PureWindowsPath
@@ -8,6 +10,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 
 
 class ImportFailure(str):
@@ -104,10 +107,13 @@ def _project_name_310(text):
     return value if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', value) else ''
 
 
+_PYTHON_COMMAND = re.compile(r'(?:python|pypy)(?:\d+(?:\.\d+)*)?(?:\.exe)?')
+
+
 def interpreter(command, root, env):
     first = command[0]
     name = Path(first).name.lower()
-    if re.fullmatch(r'(?:python|pypy)(?:\d+(?:\.\d+)*)?(?:\.exe)?', name):
+    if _PYTHON_COMMAND.fullmatch(name):
         flags = []
         words = iter(command[1:])
         for word in words:
@@ -146,6 +152,147 @@ def interpreter(command, root, env):
     return None
 
 
+def _clear_checkout_bytecode(path, source, owner=None):
+    """Remove project caches, retaining only ignored, untracked installed libraries."""
+    if path.is_symlink():
+        path.unlink()
+        return
+    if not path.exists():
+        return
+    if owner is None:
+        shutil.rmtree(path)
+        return
+    if (source.name == 'site-packages'
+            and any((parent / 'pyvenv.cfg').is_file() for parent in list(source.parents)[1:3])):
+        from . import store as s
+        relative = source.relative_to(owner).as_posix()
+        ignored = s._git_run(owner, 'check-ignore', '-q', '--', relative, required=False, isolated=True)
+        tracked = s._git_run(owner, 'ls-files', '-z', '--', relative, required=False, isolated=True)
+        if ignored.returncode == 0 and tracked.returncode == 0 and not tracked.stdout:
+            return
+    for child in path.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            _clear_checkout_bytecode(child, source / child.name, owner)
+        else:
+            child.unlink()
+    try:
+        path.rmdir()
+    except OSError as error:
+        if error.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+            raise
+
+
+@contextmanager
+def _bytecode_directory(root, owner):
+    """Lease a reusable cache without serializing parallel test processes."""
+    from . import store as s
+    handle = None
+    try:
+        result = s._git_run(owner, 'rev-parse', '--git-path', 'workorder-bytecode',
+                            required=False, isolated=True)
+        if result.returncode:
+            raise OSError('no repository cache')
+        parent = (owner / result.stdout.strip()).resolve()
+        index = 0
+        while True:
+            slot = parent / str(index)
+            slot.mkdir(parents=True, exist_ok=True)
+            handle = (slot / 'lock').open('a+b')
+            try:
+                # OS locks are released even if Workorder is killed. Separate
+                # slots also isolate overlapping runs of the same checkout.
+                if os.name == 'nt':
+                    import msvcrt
+                    if not handle.tell():
+                        handle.write(b'0')
+                        handle.flush()
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as error:
+                handle.close()
+                handle = None
+                if error.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise
+                index += 1
+        cache = slot / 'pycache'
+        cache.mkdir(exist_ok=True)
+        # CPython strips a drive letter and leading separators, but retains
+        # UNC server/share components. Cover a symlink spelling and real cwd.
+        checkouts = {}
+        for source in (root.absolute(), root.resolve()):
+            name = source.as_posix()
+            if len(name) > 1 and name[1] == ':' and name[0] != '/':
+                name = name[2:]
+            checkouts[cache.joinpath(*name.lstrip('/').split('/'))] = source
+        # Temporary checkout paths must disappear entirely. Only the real
+        # repository may retain its ignored virtualenv's installed libraries.
+        keep = root == owner
+        for path, source in checkouts.items():
+            _clear_checkout_bytecode(path, source, source if keep else None)
+    except OSError:
+        if handle is not None:
+            handle.close()
+        # Missing/unwritable Git metadata must not prevent current-source tests.
+        with tempfile.TemporaryDirectory(prefix='workorder-bytecode-', ignore_cleanup_errors=True) as cache:
+            yield cache
+        return
+    try:
+        yield str(cache)
+    finally:
+        try:
+            for path, source in checkouts.items():
+                try:
+                    _clear_checkout_bytecode(path, source, source if keep else None)
+                except OSError:
+                    pass  # The next lease must clear successfully or use a fresh cache.
+                # Remove empty parents of temporary comparison checkouts too.
+                for directory in path.parents:
+                    if directory == cache:
+                        break
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        break
+        finally:
+            handle.close()
+
+
+@contextmanager
+def bytecode_cache(command, root, env, *, cache_root=None):
+    """Refresh checkout bytecode, retaining cached dependencies between runs."""
+    with _bytecode_directory(root, cache_root if cache_root is not None else root) as cache:
+        env = dict(env, PYTHONPYCACHEPREFIX=cache)
+        words = list(command)
+        python = (interpreter(words, root, env)
+                  if _PYTHON_COMMAND.fullmatch(Path(words[0]).name.lower()) else None)
+        if python:
+            executable = root / python[0]
+            virtualenv = executable.parent.parent
+            if virtualenv.is_symlink() and (virtualenv / 'pyvenv.cfg').is_file():
+                # Snapshots link ignored virtualenvs. Use the real environment's
+                # directory so its dependencies keep stable cache paths. Do not
+                # redirect partially copied environments containing tracked code,
+                # or resolve Python's own symlink to the base interpreter.
+                python[0] = str(virtualenv.resolve() / executable.parent.name / executable.name)
+            # Replace both spellings of a declared prefix: repeated -X options
+            # need not use the last value. Leave script/module arguments alone.
+            flags = []
+            options = iter(python[1:])
+            for word in options:
+                if word in {'-W', '-X', '--check-hash-based-pycs'}:
+                    value = next(options)
+                    if word != '-X' or value.partition('=')[0] != 'pycache_prefix':
+                        flags.extend([word, value])
+                elif not (word.startswith('-X') and word[2:].partition('=')[0] == 'pycache_prefix'):
+                    flags.append(word)
+            words = [python[0], *flags, '-X', 'pycache_prefix=' + cache, *words[len(python):]]
+        yield words, env
+
+
 def pytest_arguments(command):
     """Recognize direct pytest invocations without mistaking Python -c text for a runner."""
     if Path(command[0]).name in {'pytest', 'py.test', 'pytest.exe', 'py.test.exe'}:
@@ -176,7 +323,12 @@ if pytest_args is not None and importlib.util.find_spec('pytest') is not None:
         pass
     class ProbeConfiguration:
         @pytest.hookimpl(tryfirst=True)
-        def pytest_load_initial_conftests(self):
+        def pytest_load_initial_conftests(self, early_config):
+            # Pytest 8 applies these in another initial-conftest hook; pytest 9
+            # applies them before this hook. Apply the parsed setting ourselves
+            # so the probe does not depend on hook order or pytest version.
+            for path in reversed(early_config.getini('pythonpath')):
+                sys.path.insert(0, str(path))
             raise PathsReady
     config = get_config(pytest_args)
     config.pluginmanager.register(ProbeConfiguration())
@@ -262,9 +414,11 @@ def check(root, source, command, env, timeout=None):
     try:
         from .pytest_selection import ISOLATED_RUNNER
         projects = sorted({project_name(root), project_name(source)} - {''})
-        run = subprocess.run([*python, '-c', PROBE, json.dumps(names), json.dumps(projects),
-                              json.dumps(pytest_arguments(command)), json.dumps(ISOLATED_RUNNER in command)], cwd=root, env=env,
-                             capture_output=True, text=True, errors='replace', timeout=10)
+        probe = [*python, '-c', PROBE, json.dumps(names), json.dumps(projects),
+                 json.dumps(pytest_arguments(command)), json.dumps(ISOLATED_RUNNER in command)]
+        with bytecode_cache(probe, root, env, cache_root=source) as (words, probe_env):
+            run = subprocess.run(words, cwd=root, env=probe_env,
+                                 capture_output=True, text=True, errors='replace', timeout=10)
         line = next(line for line in run.stdout.splitlines() if line.startswith('WORKORDER_IMPORTS='))
         report = json.loads(line.split('=', 1)[1])
         if run.returncode:

@@ -1452,22 +1452,24 @@ def test_timeout(record, override=None):
     return positive_seconds(value) if value is not None else None
 
 
-def run_test(command, root, timeout=None, capture_output=True, *, isolated=False):
+def run_test(command, root, timeout=None, capture_output=True, *, isolated=False, cache_root=None):
     """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
-    from .python_imports import environment
+    from .python_imports import bytecode_cache, environment
     # pytest parses this environment option with shlex even on Windows. Each
-    # subprocess owns its cache; it never becomes part of our result-cache key.
-    with tempfile.TemporaryDirectory(prefix="workorder-pytest-", ignore_cleanup_errors=True) as cache:
-        env = environment(root, copy_environment() if isolated else os.environ.copy())
+    # subprocess owns its pytest cache; neither cache affects our result key.
+    env = environment(root, copy_environment() if isolated else os.environ.copy())
+    with tempfile.TemporaryDirectory(prefix="workorder-pytest-", ignore_cleanup_errors=True) as cache, \
+            bytecode_cache(command, root, env, cache_root=cache_root) as (execution, env):
         env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "")
                                  + " -o cache_dir=" + shlex.quote(cache))
         # Keep the ordinary subprocess path when there is no deadline. With a deadline,
         # use a process group so child test runners cannot keep captured pipes open.
         if timeout is None:
-            return subprocess.run(list(command), cwd=root, capture_output=capture_output,
-                                  encoding="utf-8", errors="replace",
-                                  env=env)
-        with subprocess.Popen(list(command), cwd=root, stdout=subprocess.PIPE if capture_output else None,
+            run = subprocess.run(execution, cwd=root, capture_output=capture_output,
+                                 encoding="utf-8", errors="replace", env=env)
+            run.args = command
+            return run
+        with subprocess.Popen(execution, cwd=root, stdout=subprocess.PIPE if capture_output else None,
                               stderr=subprocess.PIPE if capture_output else None,
                               encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
                               env=env) as process:
@@ -1527,7 +1529,7 @@ def ci_environment():
 
 def test_cache_path(root, fingerprint, command, timeout):
     folder = root / git(root, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
-    key = digest(packed([3, fingerprint, list(command), timeout]).encode('ascii'))
+    key = digest(packed([4, fingerprint, list(command), timeout]).encode('ascii'))
     return folder / (key + '.json')
 
 
@@ -1638,7 +1640,7 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
         except OSError:
             pass
     try:
-        run = run_test(command, root, timeout, capture_output=True, isolated=isolated)
+        run = run_test(command, root, timeout, capture_output=True, isolated=isolated, cache_root=owner)
     finally:
         invalidate_reads()
     # Pytest can report a failure even when application shutdown code forces exit 0.

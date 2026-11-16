@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.16.0 (unreleased)
+## 0.16.0 (16 Nov 2026)
+
+- Run test evidence, comparisons and import probes with checkout bytecode
+  refreshed on every run, including isolated Python and console pytest commands.
+  Reuse dependency bytecode in Git-local cache slots, with exclusive slots for
+  parallel runs; remove each checkout's entries after its run. Same-size edits
+  with unchanged timestamps cannot reuse stale bytecode, and runs leave project
+  bytecode caches untouched. Fall back to temporary caches without writable Git metadata.
+  Discard test-result caches created before bytecode isolation.
 
 - Keep pytest project-test output concise in done and pull-request checks:
   one passing note with pytest's counts, or failing-test summaries and failure
@@ -15,8 +23,9 @@
   base, and distinguish old failures from new ones. A reviewer can accept a
   project failure with approval or `workorder-allow:tests`. Hooks do not run
   it. Without a configured command, print the limits of the declared tests.
-- Apply pytest's selected pythonpath configuration in import probes, including
-  isolated Python commands. Recognize mandatory imports of packages absent
+- Apply pytest's selected pythonpath configuration and overrides in import probes,
+  including isolated Python commands, consistently with pytest 8.3 and later.
+  Recognize mandatory imports of packages absent
   from the base without mistaking an editable install for old-code evidence.
 - Exclude documentation and Python changes with unchanged syntax apart from
   docstrings from code scope, new implementation path maps and staleness

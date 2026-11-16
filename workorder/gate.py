@@ -3003,7 +3003,7 @@ def run_ref_test(root, destination, revision, command, timeout, counts, overlays
         settings = s.git(root, 'config', '--list').stdout
         contents = [(path, s.digest(content) if content is not None else None, mode)
                     for path, (content, mode) in sorted((overlays or {}).items())]
-        key = s.digest(s.packed(['ref-v3', revision, command, timeout, settings, contents]).encode('ascii'))
+        key = s.digest(s.packed(['ref-v4', revision, command, timeout, settings, contents]).encode('ascii'))
         folder = root / s.git(root, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
         alias = folder / ('ref-' + key + '.json')
         if s._REUSE_TESTS.get():
