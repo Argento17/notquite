@@ -8,7 +8,7 @@ import re
 import subprocess
 import tempfile
 
-from . import gate, pytest_selection, store as s
+from . import gate, project_report, pytest_selection, store as s
 from .python_imports import interpreter, pytest_arguments
 
 
@@ -72,27 +72,53 @@ def _options(words, options):
 
 def _report_source(path):
     """Use pytest's exact node IDs; terminal summaries have ambiguous separators."""
-    return ('import json\nfrom pathlib import Path\n'
-            '_workorder_outcomes = {}\n'
-            'def pytest_runtest_logreport(report):\n'
-            '    if report.failed:\n'
-            '        _workorder_outcomes[report.nodeid] = "FAILED"\n'
-            '    elif report.when == "call" and report.passed:\n'
-            '        _workorder_outcomes.setdefault(report.nodeid, "PASSED")\n'
-            'def pytest_sessionfinish(session, exitstatus):\n'
-            f'    Path({str(path)!r}).write_text(json.dumps(_workorder_outcomes), encoding="utf-8")\n')
+    return project_report.SOURCE + f'\n_workorder_report_path = {str(path)!r}\n'
 
 
-def _outcomes(path):
+def _report(path):
     try:
         value = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return {}
-    if not isinstance(value, dict) or not all(
+    if not isinstance(value, dict):
+        return {}
+    outcomes = value.get('outcomes')
+    if not isinstance(outcomes, dict) or not all(
             isinstance(node, str) and isinstance(outcome, str) and outcome in {'PASSED', 'FAILED'}
-            for node, outcome in value.items()):
+            for node, outcome in outcomes.items()):
+        return {}
+    if not all(isinstance(value.get(key), str) for key in ('summary', 'short_summary')):
+        return {}
+    if not isinstance(value.get('failures'), list) or not all(
+            isinstance(section, str) for section in value['failures']):
         return {}
     return value
+
+
+def _failure_output(report, output):
+    if report.get('short_summary'):
+        print(report['short_summary'])
+    sections = report.get('failures') or []
+    if not sections:
+        # Startup failures/timeouts can prevent the plugin from writing a report.
+        # Keep their diagnostic text without treating it as outcome evidence.
+        lines = re.sub(r'\x1b\[[0-9;]*m', '', output).strip().splitlines()
+        if report:
+            # A completed session already supplied its diagnostics and counts.
+            # Pytest emits usage errors after sessionfinish; retain just those,
+            # never replay progress or output from tests that already passed.
+            lines = [line for line in lines if line.startswith('ERROR:')]
+        if len(lines) > 60:
+            print('[project-test output truncated to last 60 lines]')
+        if lines:
+            print('\n'.join(lines[-60:]))
+    for section in sections:
+        lines = section.splitlines()
+        print('\n'.join(lines[:60]))
+        if len(lines) > 60:
+            print('[failure section truncated after 60 lines]')
+    if report.get('summary'):
+        print(report['summary'])
 
 
 def _reported_command(root, words, report):
@@ -101,7 +127,7 @@ def _reported_command(root, words, report):
         return words  # An unidentifiable runner cannot supply comparison evidence.
     source = (_report_source(report) + '\nimport pytest, sys\n'
               'raise SystemExit(pytest.main(sys.argv[1:], plugins=[sys.modules[__name__]]))\n')
-    return [*python, '-c', source, *_options(pytest_arguments(words), ['-rA'])]
+    return [*python, '-c', source, *_options(pytest_arguments(words), ['-rfE', '--color=no'])]
 
 
 def _selected_command(words, nodes, report):
@@ -109,6 +135,7 @@ def _selected_command(words, nodes, report):
     positions = set(gate.pytest_collection_arguments(record))
     selected = [word for index, word in enumerate(words) if index not in positions]
     selected = pytest_selection.command(selected + list(nodes), nodes)
+    selected = _options(selected, ['-rfE', '--color=no'])
     # Configured addopts can contain more collection paths. Always deselect
     # everything outside the failed nodes, including when no node is present.
     source = (_report_source(report) + '\nimport pytest\n'
@@ -149,10 +176,16 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
     with tempfile.TemporaryDirectory(prefix='workorder-project-') as temporary, s.test_reuse(False):
         current_report = Path(temporary) / 'current.json'
         current_command = _reported_command(root, words, current_report) if pytest else words
-        code, output = gate._run_test(root, current_command, timeout, counts)
+        code, output = gate._run_test(root, current_command, timeout, counts, quiet=pytest)
+        report = _report(current_report) if pytest else {}
         if code == 0:
+            if pytest:
+                summary = f" ({report['summary']})" if report.get('summary') else ''
+                notes.append('the project test passed on this code' + summary)
             return []
-        failed = sorted(node for node, outcome in _outcomes(current_report).items()
+        if pytest:
+            _failure_output(report, output)
+        failed = sorted(node for node, outcome in report.get('outcomes', {}).items()
                         if outcome == 'FAILED') if pytest and code == 1 else []
         if not failed:
             return finding(f'the project test fails on this code (exit {code}); '
@@ -170,7 +203,10 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
                 root, Path(temporary) / 'base', revision, selected, timeout, counts, overlays)
         except (s.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
             return finding(f'the project test fails on this code; could not compare with {display}: {error}')
-        outcomes = _outcomes(base_report) if before in {0, 1} else {}
+        report = _report(base_report)
+        if report.get('summary'):
+            notes.append(f"the project test on {display} ({report['summary']})")
+        outcomes = report.get('outcomes', {}) if before in {0, 1} else {}
 
     problems = []
     for node in failed:

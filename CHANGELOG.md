@@ -2,6 +2,11 @@
 
 ## 0.16.0 (unreleased)
 
+- Keep pytest project-test output concise in done and pull-request checks:
+  one passing note with pytest's counts, or failing-test summaries and failure
+  sections capped at 60 lines each. Show only counts for the base rerun;
+  read exact test outcomes from the report plugin, including parameter IDs.
+
 - Require an approving review or the task's reviewer label when a task is
   written and finished in the same pull request. Recommend landing its
   definition first; done explains the review needed before merging.

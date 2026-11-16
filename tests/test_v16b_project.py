@@ -147,7 +147,7 @@ def test_identical_task_and_project_command_runs_project_once_after_own_test(loc
     own = root / 'tests/test_own.py'
     own.write_text('from pathlib import Path\nimport app, sys\n\n'
                    'def test_own():\n'
-                   '    phase = "project" if "-rA" in sys.argv else "own"\n'
+                   '    phase = "project" if "-rfE" in sys.argv else "own"\n'
                    f'    with Path({str(log)!r}).open("a") as output:\n'
                    '        output.write(phase + ":" + str(app.feature) + "\\n")\n'
                    '    assert app.feature is True\n')
@@ -281,7 +281,9 @@ def test_project_base_classifies_each_failure_separately(local_repo):
     notes = []
     problems = helper.run(root, base='origin/main', notes=notes)
     assert len(problems) == 1 and '::test_regression (passes on origin/main)' in problems[0]
-    assert len(notes) == 1 and '::test_project' in notes[0] and 'origin/main' in notes[0]
+    assert len(notes) == 2
+    assert notes[0].startswith('the project test on origin/main (1 failed, 1 passed in ')
+    assert '::test_project' in notes[1] and 'origin/main' in notes[1]
 
 
 @pytest.mark.parametrize('payload', ['{', '[]', '{"project_test": []}', '{"project_test": ""}'])

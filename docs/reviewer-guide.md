@@ -70,6 +70,7 @@ Test material is classified first: declared paths, recognized test-command files
 <!-- refusal-family project-test -->
 ## The optional project test finds a regression
 **Meaning:** The project test failed. Workorder reruns identifiable failing pytest tests on the base: an old failure is a note, a newly failing test refuses, and an unavailable result stays explicit. Other test tools cannot supply this per-test distinction.
+Passing pytest project tests print one note with pytest's counts. Failures show the failed-test summary, up to 60 lines per failing test (with a truncation notice), and counts; base reruns show only counts. Passing-test output is omitted. Startup and interrupted-run diagnostics remain visible; unreadable or missing reports cannot establish a base comparison.
 **Clear:** Fix the regression or test environment. A reviewer may accept a project finding with `workorder-allow:tests` or an approving review; task-current failures still refuse. Old project failures need no label. Set the command with `workorder init --project-test "python -m pytest"`; without one, the note says only declared task tests ran. Pre-commit does not run this optional command.
 
 <!-- refusal-family renewal -->
@@ -95,7 +96,8 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/cli.py 8df5a614a95a749215bfd128fe745033bb2bb9ca84139459f648ff5d4d297d40 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
 <!-- refusal-inventory workorder/gate.py d3b3581206388a9249c1062f8304d30e77ea4691e8fb4cdc3f2d2e6ab448794e code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 4c890e78327bd094ac6f84882d7e42640cb88130f5232d92f7f23bbea6502a79 evidence,current-tests,test-edits,pending,renewal -->
-<!-- refusal-inventory workorder/project_tests.py f375ce7f7e6808c4713593edcd26a0eee07c56d9d720d93d2cf5aca346700b47 project-test,records -->
+<!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
+<!-- refusal-inventory workorder/project_tests.py 61889b0b64e84644085569b9d8e1b565711dd34b5af40ada01792ae8aaab4f82 project-test,records -->
 <!-- refusal-inventory workorder/pytest_selection.py bcff8a23918c0320f921d46b229359bc41237be3055be093a6e746860395d35b weak-tests,imports -->
 <!-- refusal-inventory workorder/python_imports.py ee0ebad65460ad32b67aaaee80f13d6eff8fc4533d02035cef7edfbb36df7507 imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
