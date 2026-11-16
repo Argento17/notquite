@@ -1,6 +1,7 @@
 """A comparison verifies pytest imports in its actual test interpreter."""
 import os
 from pathlib import Path
+import shlex
 import subprocess
 
 import pytest
@@ -40,7 +41,12 @@ def test_fresh_pytest_comparison_uses_one_interpreter(local_repo, tmp_path, monk
     root = local_repo
     destination = comparison(root, tmp_path, extra='\ndef test_other():\n    assert False\n'
                              if runner == 'selected-I' else '')
-    command = ([str(Path(PYTHON).parent / ('pytest.exe' if os.name == 'nt' else 'pytest'))]
+    if runner == 'console':
+        # Windows installs entry points in Scripts, beside the base
+        # interpreter only for a virtualenv. Ask the selected interpreter.
+        scripts = subprocess.check_output(
+            [PYTHON, '-c', 'import sysconfig; print(sysconfig.get_path("scripts"))'], text=True).strip()
+    command = ([str(Path(scripts) / ('pytest.exe' if os.name == 'nt' else 'pytest'))]
                if runner == 'console' else
                [PYTHON, *([runner] if runner in {'-I', '-E'} else ['-I'] if runner == 'selected-I' else []),
                 '-m', 'pytest']) + ['-q', 'tests/test_calc.py']
@@ -62,12 +68,14 @@ def test_fresh_pytest_comparison_uses_one_interpreter(local_repo, tmp_path, monk
 @pytest.mark.parametrize('flag', ['', '-I', '-E'])
 def test_wrong_import_is_refused_before_conftest_or_tests(local_repo, tmp_path, flag):
     root = local_repo
-    foreign = tmp_path / 'foreign'
+    foreign = tmp_path / 'foreign path'
     foreign.mkdir()
     (foreign / 'calc.py').write_text('def value():\n    return 3\n')
     conftest_ran, test_ran = tmp_path / 'conftest-ran', tmp_path / 'test-ran'
     (root / 'conftest.py').write_text(f'from pathlib import Path\nPath({str(conftest_ran)!r}).touch()\n')
-    destination = comparison(root, tmp_path, config=f'[pytest]\npythonpath = {foreign}\n',
+    # Pytest shell-splits this ini setting on Windows too: raw backslashes
+    # disappear, and unquoted spaces split a single foreign directory.
+    destination = comparison(root, tmp_path, config=f'[pytest]\npythonpath = {shlex.quote(foreign.as_posix())}\n',
                              extra=f'\nfrom pathlib import Path\nPath({str(test_ran)!r}).touch()\n')
     command = [PYTHON, *([flag] if flag else []), '-m', 'pytest', '-q', 'tests/test_calc.py']
     run = store.cached_test(command, destination, cache_root=root, fresh=True)

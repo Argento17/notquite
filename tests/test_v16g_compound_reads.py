@@ -22,6 +22,7 @@ def selection_repo(local_repo):
     'merge_target', 'source_tree', 'same_source_code',
     'repository_test_files', 'recorded_branch_code', 'comparison_base',
 ])
+@pytest.mark.usefixtures('observable_git_environment')
 def test_compound_read_observes_state_once_per_call(selection_repo, monkeypatch, helper):
     root, base, record = selection_repo
     monkeypatch.delenv('WORKORDER_GIT_CACHE', raising=False)

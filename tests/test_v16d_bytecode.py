@@ -104,6 +104,10 @@ def test_public_checks_refuse_stale_pass(local_repo, monkeypatch, runner, kind, 
     warm(root, words)
     log.unlink()
     edit(root, kind)
+    # The deliberate size/mtime collision can also fool Windows Git's stat
+    # cache. Force hashing so the staged/committed copy contains the edit,
+    # without invalidating the stale Python bytecode we are testing.
+    git(root, 'add', '--renormalize', '--', 'a.py' if kind == 'code' else 'tests/test_a.py')
     # Keep the task's source edit committed for done/PR; hooks get the same
     # bytes staged. CI disables Workorder's result reuse, not Python bytecode.
     monkeypatch.setenv('CI', 'true')
@@ -149,6 +153,9 @@ def test_project_test_refuses_stale_pass(local_repo, runner, kind):
     ok(root, 'check', '--base', 'origin/main', '--run-tests')
     warm(root, words)
     edit(root, kind)
+    # Bypass Git's stat shortcut while retaining the source timestamp that
+    # makes the warmed Python bytecode appear current.
+    git(root, 'add', '--renormalize', '--', 'a.py' if kind == 'code' else 'tests/test_a.py')
     commit_all(root)
     result = cli(root, 'check', '--base', 'origin/main', '--run-tests')
     output = result.stdout + result.stderr

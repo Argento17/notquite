@@ -32,6 +32,7 @@ def finished(root, tid='TASK-1', status='DONE', test=None):
     return commit_all(root)
 
 
+@pytest.mark.usefixtures('observable_git_environment')
 def test_git_subprocess_budget_for_finished_tasks(local_repo, monkeypatch):
     monkeypatch.delenv('WORKORDER_GIT_CACHE', raising=False)  # this test measures reuse
     # Unique code/claim commits per task, two valid receipts each. Count real

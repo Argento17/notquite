@@ -1,5 +1,6 @@
 """Second-pass round-19 checks, using public commands in local repositories."""
 import json
+import sys
 import pytest
 
 from workorder import gate, store
@@ -265,8 +266,8 @@ def test_shared_test_origin_names_only_new_tests(local_repo):
 
 
 @pytest.mark.parametrize('marker,refused', [
-    ('skipif(sys.platform == "win32", reason="Windows")', False),
-    ('xfail(sys.platform == "win32", reason="Windows")', False),
+    ('skipif(sys.platform == "win32", reason="Windows")', sys.platform == 'win32'),
+    ('xfail(sys.platform == "win32", reason="Windows")', sys.platform == 'win32'),
     ('skip(reason="later")', True),
     ('skipif(True, reason="later")', True),
     ('xfail(True, reason="later")', True),

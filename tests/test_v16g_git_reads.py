@@ -97,6 +97,7 @@ def test_unchanged_state_does_not_reread_file_contents(local_repo, monkeypatch):
 
 
 @pytest.mark.parametrize('helper', ['test_files', 'strict_test_files', 'refactor_test_files', 'selected_test_files'])
+@pytest.mark.usefixtures('observable_git_environment')
 def test_compound_test_selection_checks_state_once(local_repo, monkeypatch, helper):
     from workorder import gate, git_reads, store
     from test_workorder import PYTHON, task
@@ -253,6 +254,7 @@ def test_unchanged_observed_files_do_not_rehash_repository(tmp_path, monkeypatch
         assert first and len(hashes) == first
 
 
+@pytest.mark.usefixtures('observable_git_environment')
 def test_external_command_keeps_queries_when_observed_state_is_unchanged(local_repo, monkeypatch):
     import subprocess
     from workorder import store

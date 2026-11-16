@@ -7,6 +7,7 @@ from test_v05 import commit_all, finished
 
 
 @pytest.mark.parametrize('staged', [False, True])
+@pytest.mark.usefixtures('observable_git_environment')
 def test_finished_code_change_checks_repository_once(local_repo, monkeypatch, staged):
     monkeypatch.delenv('WORKORDER_GIT_CACHE', raising=False)
     base = store.head(local_repo)
@@ -54,6 +55,7 @@ def test_finished_code_change_observes_code_index_and_record(local_repo, monkeyp
 
 @pytest.mark.parametrize('helper', ['inherited_claim', 'completion_changed'])
 @pytest.mark.parametrize('staged', [False, True])
+@pytest.mark.usefixtures('observable_git_environment')
 def test_claim_read_checks_repository_once(local_repo, monkeypatch, helper, staged):
     monkeypatch.delenv('WORKORDER_GIT_CACHE', raising=False)
     task(local_repo, status='DONE')
@@ -120,6 +122,7 @@ def test_completion_changed_observes_reopen_history_and_record_changes(local_rep
 
 
 @pytest.mark.parametrize('staged', [False, True])
+@pytest.mark.usefixtures('observable_git_environment')
 def test_changed_paths_checks_repository_once(local_repo, monkeypatch, staged):
     monkeypatch.delenv('WORKORDER_GIT_CACHE', raising=False)
     root = local_repo

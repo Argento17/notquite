@@ -2,6 +2,9 @@
 
 ## 0.16.0 (16 Nov 2026)
 
+- Wait for briefly locked comparison import reports instead of aborting valid
+  tests; missing, unreadable, or invalid import evidence still refuses the run.
+
 - Keep Git reads reusable with ordinary LFS registrations, included configuration,
   and external ignore and attributes files; track their dependencies and use fresh
   reads for active helpers whose inputs cannot be inspected. Recognize squashed

@@ -552,7 +552,10 @@ class _ImportGuard:
         try:
             value = json.loads(self.report.read_text(encoding='utf-8'))
             return value if isinstance(value, dict) else {'error': 'invalid import guard report'}
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):
+            # Windows can deny a read while the child publishes the report.
+            # Keep waiting within the startup deadline; finish still refuses
+            # a report that remains inaccessible when the child exits.
             return None
         except (OSError, ValueError):
             return {'error': 'unreadable import guard report'}
