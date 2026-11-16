@@ -134,7 +134,14 @@ A new `done --refactor` declaration with changed test files refuses with
 refactor, passing test edits are notes in pre-commit and Stop. After committing,
 run `workorder renew --task ID --no-refactor` or
 `workorder done --task ID --needs-review`. The pull request needs
-`workorder-allow:ID`; a failing edit still refuses.
+`workorder-allow:ID` or an approving review; a failing edit still refuses.
+An already finished task does not own later Python additions: new test
+functions or classes, fixtures, and imports leave its existing tests unchanged.
+Appending cases to a literal `pytest.mark.parametrize` list also leaves them
+unchanged when the old cases, other decorator arguments and body stay the same.
+These additions need no note, label or renewal, including for a declared refactor.
+Changing or removing an existing function, fixture, class member or module
+statement still needs review. Conftest and non-Python files keep their rules.
 Python test files whose syntax trees are unchanged, such as comment and blank-line
 edits, count as unchanged in hooks, completion, renewal and base checks. Other
 edits retain their review rules.
@@ -448,6 +455,15 @@ inspect merge parents. This does not excuse reopening a task and making a new
 claim on changed code. If your own claim becomes stale after merging main,
 run `workorder renew --task ID` on the branch before pushing; the later squash
 can then match the code tested after that merge.
+For a task finished in the pull request, the check refuses later changes to its
+`code_paths`, or the implementation receipt's files when code paths are absent:
+
+```text
+TASK-1: its code changed after it was finished (calc.py); run workorder renew --task TASK-1 and commit the receipts, so its evidence matches this code and survives a squash merge
+```
+
+The pre-commit hook prints the same advice as a note during a merge. Commit the
+merge, renew the task, and commit its receipts before the pull-request check.
 
 `check <id>` adds a note when HEAD's code differs, and a `Command:` line naming
 the command behind the deciding test run. Code that lands after a task is DONE
@@ -563,6 +579,7 @@ current failures still refuse in both modes.
 
 | Change or result | Default | Reviewer acceptance |
 |---|---|---|
+| Pure Python additions to a finished task's tests, including appended parameter cases with old cases and body unchanged | Passes; the finished task's tests still run | No label or renewal needed |
 | Only added test lines, new test files, or added Python import names preserving existing bindings, when the base tests passed | Passes if the current test fails on base code | `--strict-tests` reviews additions too |
 | Any change to a test whose base tests already failed, including an added line | Refused | `--allow ID`; `--allow tests` does not accept this |
 | Removed or changed test lines, including a rename | Refused | `--allow tests` or any owning task accepts the one finding for that file |
@@ -582,6 +599,15 @@ test files. A passing run there refuses completion:
 ```text
 TASK-2: its test passes on origin/main's code too, so it does not show the change works; make the test check the new behaviour
 ```
+
+For pytest on Python test files, both this check and the stub check below select
+the task's new or changed test functions, comparing their syntax including
+decorators with the base. Comment-only changes do not select a function.
+Pytest runs all selected functions together once per check, including their
+parameter cases. At least one must fail on base code and at least one under
+stubs. Refusals name these tests. A base failure may be an ImportError or
+AttributeError when a function is new. If no selected test function changed,
+the checks keep the whole command, including its existing filters.
 
 The diagnostic also gives `--allow TASK-2` advice for a reviewed refactor or
 verification task. `--allow tests` alone does not accept it. `--review warn`
@@ -617,8 +643,10 @@ material is excluded, and source files in the checkout are never rewritten.
 Only functions inside the task's declared `code_paths` are replaced. Without
 that declaration, functions inside other tasks' declared code paths are excluded.
 If no changed function belongs to the task, there is no stub check or note.
-If the command still passes, it does not exercise the changed functions and
-completion is refused. The diagnostic names those functions and files.
+If the selected tests still pass, they do not exercise the changed functions
+and completion is refused. The diagnostic names the tests, functions and files.
+If some selected tests pass under stubs while another fails, one Note lists the
+passing tests. Without new or changed test functions, the whole command decides.
 Only the task's explicit reviewer label accepts this finding in a base check;
 an approving review, `--allow tests` and `--review warn` do not. Locally,
 `done --needs-review` records the finding and writes DONE pending that label.
@@ -715,8 +743,12 @@ TASK-1: its tests from origin/main fail on this code; a reviewer accepts it with
 A task owns the files its test command names, the folders it names, and
 `test_paths`. A folder includes every file below it. It also owns `conftest.py`
 and pytest configuration on the path to those files. A named file does not
-include its siblings, and a command that names no path does not own every
-folder called `tests`. `workorder new --test` writes `test_paths` when the
+include its siblings. A pytest command without collection paths uses files under
+`testpaths` in pytest.ini, pyproject.toml, tox.ini or setup.cfg. Without testpaths,
+it uses every test file Workorder recognizes in the repository. `new`, `done`,
+hooks and pull-request checks use this discovery. If no files are found, `new`
+refuses before writing and asks for `--test-paths`.
+`workorder new --test` writes `test_paths` when the
 command names files or folders that exist in the repository and is not a wrapper. A word such as
 `test` in `make test` or `npm test` does not supply a path unless it exists.
 Helpers and data outside the recognised test material need explicit `test_paths`. A test file at the repository root
@@ -969,7 +1001,7 @@ jobs:
         with: {python-version: '3.12'}
       - name: Install project test dependencies
         run: python -m pip install -e '.[test]'
-      - run: python -m pip install workorder==0.15.0
+      - run: python -m pip install workorder==0.16.0
       - name: Check tasks after merge
         if: github.event_name == 'push'
         run: workorder check --run-tests --all-tests
@@ -1320,7 +1352,7 @@ test dependencies first, choosing and reporting the first match:
 It then installs Workorder at exactly the running version. For a Git installation,
 PEP 610 direct_url.json supplies the URL and resolved commit:
 `python -m pip install 'git+<url>@<commit>'`. A recorded subdirectory is retained.
-Other installations use `workorder==0.15.0` for this release.
+Other installations use `workorder==0.16.0` for this release.
 It runs `workorder check --base "origin/<base>" --run-tests --all-tests --require-task`,
 passing task ids and the special values `tests`, `no-task` and `workflow` from
 `workorder-allow:` labels added by someone other than the author to `--allow`.

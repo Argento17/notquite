@@ -301,14 +301,14 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         print(filled["Acceptance"])
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         results = {}
-        stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results)
+        notes = []
+        stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results, notes=notes)
         if stub and needs_review and gate._accepts_allow_label(stub):
             pending_findings.append(stub)
         elif stub:
             done_refusal(tid, status, [f'  Missing:  {stub}'], needs_review=needs_review)
             return 1
         if base:
-            notes = []
             revision, label = gate.comparison_base(root, base)
             records = gate.records(root, errors={})
             declared = {}
@@ -455,6 +455,14 @@ def main(argv=None):
                                 'so changes to its tests are reviewed')
             named = (options.test_paths if options.test_paths is not None else
                      gate.paths_named_by_command(options.test, root) if options.test else None)
+            definition = {'id': options.prefix + '-1', 'test': options.test}
+            if (options.test_paths is None and gate.uses_pytest(definition)
+                    and not gate.pytest_collection_paths(definition)):
+                inferred = gate.default_pytest_files(root, definition, 'HEAD')
+                if not inferred:
+                    raise s.Refused('no test files are known for this pytest command; pass --test-paths PATH [PATH ...]')
+                if options.test_first:
+                    named = sorted(inferred)
             requested = (options.test_paths if options.test_paths is not None else
                          gate.paths_named_by_command(options.test, root, include_missing=True) if options.test else [])
             for path in requested:

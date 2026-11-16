@@ -119,7 +119,7 @@ def test_calling_other_tasks_function_does_not_prove_own_change(local_repo, unsc
         result = check(root) if action == 'check' else hooked_commit(root) if action == 'precommit' else stop(root)
     output = result.stdout + result.stderr
     assert result.returncode == (1 if action in {'done', 'check'} else 0), output
-    assert 'stubbed out (beta in beta.py)' in output
+    assert 'stubbed out (test_beta)' in output and 'beta in beta.py' in output
     assert 'gamma in gamma.py' not in output
 
 
@@ -148,12 +148,7 @@ def test_new_tests_with_new_conftest_have_no_base_findings(local_repo, helper_at
     commit_all(root)
     result = check(root)
     output += result.stdout + result.stderr
-    if selection == 'discovery' and helper_at_base:
-        # The existing file-ownership rule still asks this command to name its
-        # tests. Do not hide that separate finding by changing the task fixture.
-        assert result.returncode == 1 and 'no test files are known for its test; set test_paths' in output, output
-    else:
-        assert result.returncode == 0, output
+    assert result.returncode == 0, output
     for wrong in ('configuration changed', 'already fail', 'from origin/main fail', 'REF comparison skipped', 'workorder-allow:'):
         assert wrong not in output, output
 

@@ -69,7 +69,7 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
     pin = shlex.quote(bootstrap.workorder_install())
     generated = snapshot[3].decode()
     assert pin in generated
-    assert generated.strip().replace(pin, 'workorder==0.15.0') in reference.replace(
+    assert generated.strip().replace(pin, 'workorder==0.16.0') in reference.replace(
         example_dependencies, placeholder)
 
 
@@ -487,9 +487,9 @@ def test_strict_pytest_default_discovery_protects_added_tests(local_repo):
     (root / 'test_new.py').write_text('def test_new(): assert 1 == 1\n')
     commit_all(root)
     result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
-    # A pathless pytest command does not own a newly added test file.
-    assert result.returncode == 1 and 'workorder-allow:tests' in result.stdout
-    ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'tests')
+    # Whole-suite discovery owns the new test, including its assertion finding.
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
+    ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'TASK-1')
 
 
 def test_claim_local_progress_is_not_stale(clones):
@@ -515,7 +515,7 @@ def test_acceptance_summary_counts_only_supported_contractless_claims(local_repo
 def test_docs_state_review_rights_and_opt_in_policies():
     text = (PACKAGE / 'docs/reference.md').read_text()
     for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
-                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.15.0'):
+                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.16.0'):
         assert phrase in text
     readme = (PACKAGE / 'README.md').read_text()
     for target in ('docs/reference.md', 'docs/guarantees.md', 'docs/shortcuts.md'):
@@ -561,8 +561,8 @@ def test_strict_pytest_configuration_keeps_default_discovery(local_repo, config,
     probe.write_text('import sys; sys.exit(0)\n' + probe.read_text())
     commit_all(root)
     result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
-    # python_files still marks the file as a test. A pathless command does not own it.
-    assert result.returncode == 1 and 'workorder-allow:tests' in result.stdout
+    # Whole-suite discovery includes configured Python filenames.
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
     ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'tests')
 
 
@@ -590,6 +590,6 @@ def test_strict_pytest_custom_config_and_globs(local_repo, config, option):
     probe.write_text('import sys; sys.exit(0)\n' + probe.read_text())
     commit_all(root)
     result = cli(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests')
-    # A custom discovery pattern still marks the file. The pathless command does not own it.
-    assert result.returncode == 1 and 'workorder-allow:tests' in result.stdout
+    # Whole-suite discovery includes custom configuration and filename patterns.
+    assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
     ok(root, 'check', '--review', 'refuse', '--base', base, '--strict-tests', '--allow', 'tests')

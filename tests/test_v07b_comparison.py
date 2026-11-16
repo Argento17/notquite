@@ -133,7 +133,7 @@ def test_pytest_configuration_needs_acceptance_without_strict(local_repo, config
 
 @pytest.mark.parametrize('status', ['DONE', 'CLOSED'])
 @pytest.mark.parametrize('all_tests', [False, True])
-def test_finished_shared_test_users_need_acceptance_in_strict_mode(local_repo, status, all_tests):
+def test_finished_shared_test_users_allow_additions_in_strict_mode(local_repo, status, all_tests):
     root = local_repo
     probe, _ = setup_tests(root, 'def test_one():\n    assert int(1) == 1\n')
     for tid in ('TASK-1', 'TASK-2'):
@@ -141,9 +141,9 @@ def test_finished_shared_test_users_need_acceptance_in_strict_mode(local_repo, s
     base = commit_all(root, 'Finished shared test users')
     probe.write_text(probe.read_text() + '\ndef test_two():\n    assert int(1) == 1\n')
     result = checked(root, base, '--strict-tests', *(['--all-tests'] if all_tests else []))
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert 'TASK-1, TASK-2:' in result.stdout
-    assert result.stdout.count('its test files or pytest configuration changed') == 1
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'workorder-allow:' not in result.stdout
+    assert 'its test files or pytest configuration changed' not in result.stdout
     assert '1 passed' not in result.stdout  # successful REF output stays quiet
     assert '2 passed' in result.stdout
     accepted = checked(root, base, '--strict-tests', '--allow', 'TASK-2')
@@ -183,7 +183,7 @@ def test_pytest_default_discovery_compares_changed_tests(local_repo):
     result = checked(root, base)
     assert result.returncode == 0, result.stdout + result.stderr
     assert '2 passed' in result.stdout and '1 passed' not in result.stdout
-    # The pathless command runs the new test. It does not own the file, so there is no REF replay.
+    # Current tests run; successful comparisons stay quiet.
     assert "ran 1 task's declared test" in result.stdout
 
 

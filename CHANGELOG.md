@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.16.0 (unreleased)
+
+- For pytest commands, check new or changed test functions together against
+  stubbed functions and base code. Older tests in a shared file cannot supply
+  their failure. Name the selected tests in refusals and list tests that still
+  pass under stubs in one Note when another selected test fails. Keep the whole
+  command when no selected test function changed.
+- Let finished tasks share Python test files: new tests, classes, fixtures and
+  imports, and appended parameter cases, need no review when existing tests
+  stay unchanged. Existing test edits still need review; task labels and
+  approving reviews accept them for declared refactors too. Merge hooks give
+  passing edits the same review note as other commits.
+- Refuse a pull request when a task finished in that change has later edits
+  to its code paths or recorded implementation files. Tell the agent to renew
+  and commit the receipts before a squash. A merge hook prints that advice as
+  a note so the merge can be committed.
+- Discover files for pytest commands without paths from testpaths, or from
+  recognized repository tests when testpaths is absent. Use the same discovery
+  for task creation, completion, hooks and pull-request checks. If no files
+  are known, new requests --test-paths before writing anything.
+- Keep existing task files and receipts readable. Set the package and current
+  installation examples to 0.16.0.
+
 ## 0.15.0 (15 Nov 2026)
 
 - Limit --no-code-change to the task's declared code paths and test files.

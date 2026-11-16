@@ -48,7 +48,7 @@ def test_stub_refuses_test_that_does_not_call_changed_function(local_repo, body,
         claim(root)
         result = check(root)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert 'TASK-2: its test still passes with the changed functions stubbed out (div in calc.py); it does not exercise the change' in result.stdout
+    assert 'TASK-2: its new or changed tests still pass with the changed functions stubbed out (test_div); it does not exercise the change' in result.stdout
     if action == 'check':
         assert 'or an approving review' not in next(line for line in result.stdout.splitlines() if 'stubbed out' in line)
         assert check(root, '--allow', 'TASK-2').returncode == 0
