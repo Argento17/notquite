@@ -28,8 +28,8 @@ git init -q -b main
 git config user.name "Your Name"
 git config user.email you@example.com
 workorder init
+git add AGENTS.md CLAUDE.md .github/workflows/workorder.yml && git commit -m 'Set up Workorder'
 printf '__pycache__/\n' > .gitignore
-
 workorder new --title "Add calc" --owner you --test "python3 test_calc.py" --code-paths calc.py
 ```
 
@@ -50,7 +50,7 @@ Land the task on main first, as below, then do the work on a branch. A task writ
 and finished in one pull request always needs a reviewer label or approving review:
 
 ```sh
-git add . && git commit -qm "Workorder setup and TASK-1"
+git add . && git commit -qm "Define TASK-1"
 git switch -c add-calc
 
 printf 'def add(a, b):\n    return a + b\n' > calc.py
@@ -82,8 +82,7 @@ Only the project's own packages must resolve inside the copy; editable dependenc
 ## Working with coding agents
 
 Run `workorder init` in every clone: Git does not clone hooks. It adds the block
-below to AGENTS.md and CLAUDE.md, installs the pre-commit hook, and writes a
-workflow when one is absent. It lists the files written and an exact commit command; the local hook is listed but never staged.
+below to AGENTS.md and CLAUDE.md, installs pre-commit and pre-merge-commit hooks, and writes a workflow when one is absent. It lists the files written and an exact commit command; the local hooks are listed but never staged.
 
 ```markdown
 ## Tasks
@@ -93,6 +92,7 @@ workflow when one is absent. It lists the files written and an exact commit comm
 - Confirm every Acceptance item, commit code, fetch origin if present, then run `workorder done --task <id> --note "<what was done>"`. Workorder checks test evidence, not Acceptance. Report refusals and warnings; do not claim completion after them.
 - Use `done --task <id> --refactor` for unchanged tests passing before and after; use `done --task <id> --needs-review` for intended test edits. Report pending review: the pull request needs the task's label or approval. Refused done writes no notes or receipts; use `workorder note` for handover.
 - Keep unfinished progress with `workorder note --task <id> --next "<next step>" "<progress>"`; done clears next. Before stopping, commit tasks/ and .workorder/ with the work and push.
+- Put build and cache files (`__pycache__/`, `*.egg-info/`) in .gitignore.
 - Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`. Commit its receipts. After merge, run `workorder check <id>` on main; renew and test again if needed.
 ```
 
@@ -106,7 +106,7 @@ Stop checks relevant completion claims and writes refusals to stderr with exit 2
 For test-first work, write a failing test, run `new --test-first --test "..."`, and land the task and test on main before implementation.
 Use `init --test-first` to add `check --require-test-first`; tests added or changed with the work need the task's explicit reviewer label.
 
-The pre-commit hook checks staged work; finished-task command repairs get review notes if they pass. With a local target, `done` also tests affected finished tasks. Another task's own test edits and recorded findings stop blocking only after its own `done --needs-review` in this change covers its current tests. Other findings still block plain `done`; all appear once in `Other:`. Fetch origin before `done`.
+The pre-commit and pre-merge-commit hooks check staged work; finished-task command repairs get review notes if they pass. With a local target, `done` also tests affected finished tasks. Another task's own test edits and recorded findings stop blocking only after its own `done --needs-review` in this change covers its current tests. Other findings still block plain `done`; all appear once in `Other:`. Fetch origin before `done`.
 
 A new or reopened completion must show its change with tests that fail on the target's merge-base code. Renewing a finished claim already on the target does not owe new base-code or stub proof. `--refactor` accepts unchanged tests passing on both versions; `--no-code-change` checks the task's code paths and tests. Without code paths, other tasks' new receipts exclude their recorded changes. A false exemption needs the task label.
 
@@ -123,7 +123,7 @@ An APPROVED current-head review by someone other than the author accepts ordinar
 `workorder-allow:scope:<ID>` (or an approving review) accepts scope findings; `workorder-allow:<ID>` accepts that task's test findings; `workorder-allow:tests` accepts changed test lines; `workorder-allow:no-task` accepts only the code-to-task requirement. `workorder-allow:workflow` accepts changes to the default or renamed generated workflow.
 Shared test and configuration files produce one finding naming their owners. Current failures for completed tasks and runs reporting no passed tests still refuse. Author-added labels are ignored. [Review rules](docs/reference.md#checks-against-a-base).
 
-`init --check` reports missing setup without changing it. `init --update-workflow` shows a diff and refreshes the workflow. `--force` keeps a different hook as `pre-commit.workorder-previous` and calls it first.
+`init --check` reports missing setup without changing it. `init --update-workflow` shows a diff and refreshes the workflow. `--force` saves each different hook with a `.workorder-previous` suffix and calls it first.
 Generated workflows install detected test dependencies and pin the running Workorder version or installed Git commit. With no detected test dependencies, they install no extra test tools and print a warning. [Team setup](docs/reference.md#team-setup).
 Existing task files and receipts need no migration. Before a squash, the pull-request check requires a task finished in that change to renew if its code changed after completion; `done` and pre-commit print that advice as a Note. Local task IDs respect reservation tags already fetched.
 

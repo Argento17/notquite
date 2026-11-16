@@ -18,6 +18,7 @@ AGENT_BLOCK = r"""## Tasks
 - Confirm every Acceptance item, commit code, fetch origin if present, then run `workorder done --task <id> --note "<what was done>"`. Workorder checks test evidence, not Acceptance. Report refusals and warnings; do not claim completion after them.
 - Use `done --task <id> --refactor` for unchanged tests passing before and after; use `done --task <id> --needs-review` for intended test edits. Report pending review: the pull request needs the task's label or approval. Refused done writes no notes or receipts; use `workorder note` for handover.
 - Keep unfinished progress with `workorder note --task <id> --next "<next step>" "<progress>"`; done clears next. Before stopping, commit tasks/ and .workorder/ with the work and push.
+- Put build and cache files (`__pycache__/`, `*.egg-info/`) in .gitignore.
 - Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`. Commit its receipts. After merge, run `workorder check <id>` on main; renew and test again if needed.
 """
 
@@ -214,22 +215,27 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         print('src layout: installed ' + ', '.join(installed) + '; comparison copies put src/ first and verify imports.')
     settings = claude_settings(root) if claude else None
     written = []
-    hook = root / s.git(root, 'rev-parse', '--git-path', 'hooks/pre-commit').stdout.strip()
-    hook_name = '.git/hooks/pre-commit'
-    hook_exists = hook.exists()
-    different = hook_exists and hook.read_text(encoding='utf-8') != HOOK
-    previous = hook.with_name('pre-commit.workorder-previous')
-    if different and not check and not force:
-        raise s.Refused(f'{hook_name} is different; refusing to overwrite it without --force')
-    if different and not check and previous.exists():
-        raise s.Refused(f'{previous.name} already exists; keep both existing hooks before installing another')
-    if not hook_exists and any(
-            AGENT_BLOCK.strip() in s.git(root, 'show', f'HEAD:{name}', required=False).stdout
-            for name in ('AGENTS.md', 'CLAUDE.md')):
-        if check:
-            print('Hooks are not cloned; run workorder init in every clone.')
-        else:
-            print('Hooks are not cloned; setting up the pre-commit hook in this clone.')
+    hooks = []
+    # Validate both hooks before writing any setup files.
+    for name in ('pre-commit', 'pre-merge-commit'):
+        hook = root / s.git(root, 'rev-parse', '--git-path', f'hooks/{name}').stdout.strip()
+        hook_name = f'.git/hooks/{name}'
+        content = HOOK.replace('pre-commit', name)
+        hook_exists = hook.exists()
+        different = hook_exists and hook.read_text(encoding='utf-8') != content
+        previous = hook.with_name(name + '.workorder-previous')
+        if different and not check and not force:
+            raise s.Refused(f'{hook_name} is different; refusing to overwrite it without --force')
+        if different and not check and previous.exists():
+            raise s.Refused(f'{previous.name} already exists; keep both existing hooks before installing another')
+        if not hook_exists and any(
+                AGENT_BLOCK.strip() in s.git(root, 'show', f'HEAD:{name}', required=False).stdout
+                for name in ('AGENTS.md', 'CLAUDE.md')):
+            if check:
+                print('Hooks are not cloned; run workorder init in every clone.')
+            else:
+                print(f'Hooks are not cloned; setting up the {name} hook in this clone.')
+        hooks.append((hook, hook_name, content, hook_exists, different, previous))
     missing = False
     for name in ('AGENTS.md', 'CLAUDE.md'):
         path = s.local_path(root, name)
@@ -244,26 +250,27 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
                             encoding='utf-8', newline='\n')
             written.append(name)
             print(f'{name}: added agent block')
-    # Git for Windows runs hooks without an executable bit; elsewhere the bit is required.
-    runnable = hook_exists and (os.name == 'nt' or bool(hook.stat().st_mode & 0o111))
-    if hook_exists and not different and runnable:
-        print(f'{hook_name}: already installed')
-    elif check:
-        missing = True
-        detail = 'different hook (use --force to chain)' if different else 'missing or not executable'
-        print(f'{hook_name}: {detail}')
-    else:
-        hook.parent.mkdir(parents=True, exist_ok=True)
-        if different:
-            hook.rename(previous)
-            print(f'{hook_name}: kept as {previous.name}; the new hook calls it first')
-        hook.write_text(HOOK, encoding='utf-8', newline='\n')
-        hook.chmod(hook.stat().st_mode | 0o111)
-        written.append(hook_name)
-        print(f'{hook_name}: installed')
+    for hook, hook_name, content, hook_exists, different, previous in hooks:
+        # Git for Windows runs hooks without an executable bit; elsewhere the bit is required.
+        runnable = hook_exists and (os.name == 'nt' or bool(hook.stat().st_mode & 0o111))
+        if hook_exists and not different and runnable:
+            print(f'{hook_name}: already installed')
+        elif check:
+            missing = True
+            detail = 'different hook (use --force to chain)' if different else 'missing or not executable'
+            print(f'{hook_name}: {detail}')
+        else:
+            hook.parent.mkdir(parents=True, exist_ok=True)
+            if different:
+                hook.rename(previous)
+                print(f'{hook_name}: kept as {previous.name}; the new hook calls it first')
+            hook.write_text(content, encoding='utf-8', newline='\n')
+            hook.chmod(hook.stat().st_mode | 0o111)
+            written.append(hook_name)
+            print(f'{hook_name}: installed')
     path = s.local_path(root, '.github/workflows/workorder.yml')
     if path.exists() and not update_workflow:
-        print('.github/workflows/workorder.yml: already present; skipped')
+        print('.github/workflows/workorder.yml: already present; skipped; use workorder init --update-workflow to change it')
     elif check and not update_workflow:
         missing = True
         print('.github/workflows/workorder.yml: missing')
@@ -321,7 +328,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         print('Files written:' if written else 'No files written.')
         for name in written:
             print(f'  {name}')
-        tracked = [name for name in written if name != hook_name]
+        tracked = [name for name in written if name not in {hook[1] for hook in hooks}]
         if tracked:
             print('git add ' + shlex.join(tracked) + " && git commit -m 'Set up Workorder'")
     return int(missing)

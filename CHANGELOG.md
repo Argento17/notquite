@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.0 (unreleased)
+
+- Treat a task's declared code paths as code even inside its test folder, keeping
+  them out of current-test overlays and including them in stub comparisons.
+  Neighboring test helpers keep their existing treatment.
+- Install pre-merge-commit alongside pre-commit, with the same existing-hook
+  preservation, --force chaining, and init --check reporting.
+- Align the quick start with init's setup commit, remind unfinished tasks to work
+  on a branch, point existing workflows to init --update-workflow, explain that
+  import configuration must reach the base branch, and add build/cache ignore
+  advice to the generated agent instructions.
+- Set the active version and installation examples to 0.17.0. Existing task files
+  and receipts need no migration.
+
 ## 0.16.0 (16 Nov 2026)
 
 - Run test evidence, comparisons and import probes with checkout bytecode

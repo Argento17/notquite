@@ -884,7 +884,7 @@ def test_files(root, record, base, staged=False):
                 continue
             found |= {p for p in candidates if (path == "." or p == path or p.startswith(path + "/"))
                       and ('test_paths' in definition or not p.startswith(('tasks/', '.workorder/', '.notquite/')))}
-    return found
+    return without_declared_code(record, found)
 
 
 LANGUAGE_TEST_PATTERNS = ('test_*.py', '*_test.py', '*_test.go', '*.test.*', '*.spec.*', '*_spec.*', '*_tests.*',
@@ -1214,7 +1214,7 @@ def strict_test_files(root, record, base, staged=False):
                 continue
     paths |= {path for path in on_path if not path.endswith('.toml')}
     if not any(uses_pytest(definition) for definition in definitions):
-        return paths & candidates
+        return without_declared_code(record, paths & candidates)
     paths |= configs
     # Even when passed with -c, only pytest sections of TOML belong to this policy.
     if all('test_paths' not in definition for definition in definitions):
@@ -1234,7 +1234,7 @@ def strict_test_files(root, record, base, staged=False):
             current = ""
         if pytest_sections(old, native=name != 'pyproject.toml') != pytest_sections(current, native=name != 'pyproject.toml'):
             paths.add(path)
-    return paths
+    return without_declared_code(record, paths)
 
 
 class _TestSyntax(ast.NodeTransformer):
@@ -1556,7 +1556,7 @@ def assertion_problems(root, base, record, staged=False, paths=None, material=No
     if paths is None:
         paths = strict_test_files(root, record, base, staged)
     if material is None:
-        material = repository_test_files(root, base, records(root, staged, errors={}), staged) | paths
+        material = repository_test_files(root, base, records(root, staged, errors={}), staged, owner=record) | paths
     scanner = _AssertionScan(root, material, staged)
     problems = []
 
@@ -1737,8 +1737,8 @@ def test_file_changes(root, base, record, staged=False, strict=False, protected=
     return None
 
 
-def repository_test_files(root, base, all_records, staged=False):
-    """Repository-wide review also covers tests with no task and their supporting files."""
+def repository_test_files(root, base, all_records, staged=False, *, owner=None):
+    """Find test material, excluding declared code for this task or unowned review."""
     candidates = repository_files(root, base) | repository_files(root) | raw_changed_paths(root, base, staged)
     candidates = {p for p in candidates if not s.generated_path(p)
                   and not p.startswith(('tasks/', '.workorder/', '.notquite/'))}
@@ -1771,7 +1771,10 @@ def repository_test_files(root, base, all_records, staged=False):
                     found.add(path)
             else:
                 found.add(path)
-    return found | {p for p in candidates if _under_test_root(p, roots)}
+    found |= {p for p in candidates if _under_test_root(p, roots)}
+    for record in (owner,) if owner is not None else all_records.values():
+        found = without_declared_code(record, found)
+    return found
 
 
 def _pytest_ini_sections(text):
@@ -2437,6 +2440,11 @@ def declared_code_paths(record, paths):
                                          for scope in scopes)}
 
 
+def without_declared_code(record, paths):
+    """A task's explicit code scope takes precedence over test-folder detection."""
+    return paths - declared_code_paths(record, paths) if 'code_paths' in record else paths
+
+
 def other_recorded_paths(root, record, base, changed, staged=False, end=None):
     """Only other tasks' new receipts covering these exact file versions narrow verification."""
     covered = set()
@@ -2810,7 +2818,7 @@ def task_code_paths(root, record, base, staged=False):
 
 
 def task_change_touched(root, base, record, staged=False):
-    material = repository_test_files(root, base, records(root, staged, errors={}), staged)
+    material = repository_test_files(root, base, records(root, staged, errors={}), staged, owner=record)
     code = task_code_paths(root, record, base, staged) - material
     return bool(changed_paths(root, base, staged) & code or
                 changed_test_paths(root, base, task_test_paths(root, record, base, staged), staged))
@@ -2870,7 +2878,7 @@ def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None,
     command = selected_pytest_command(record, tests)
     from .python_stubs import changed_functions
     all_records = records(root, staged, errors={})
-    material = repository_test_files(root, base, all_records, staged)
+    material = repository_test_files(root, base, all_records, staged, owner=record)
     material |= strict_test_files(root, record, base, staged)
     if 'code_paths' in record:
         candidates = task_code_paths(root, record, base, staged)
@@ -3208,7 +3216,8 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                 overlays = {}
                 # Shared helpers and fixtures must be current too: an import of
                 # a new helper from an old file is not evidence about base code.
-                material = protected | repository_test_files(root, base, records(root, staged, errors={}), staged)
+                material = protected | repository_test_files(root, base, records(root, staged, errors={}),
+                                                              staged, owner=record)
                 for path in sorted(material & changed_paths(root, base, staged)):
                     content = _test_bytes(root, path, staged=staged)
                     mode = None
@@ -4190,7 +4199,7 @@ def next_step(item, record, code_changed=False, root=None, finish=False):
                     f' then run workorder done --task {tid}')
         if (item == "implementation" or item.startswith("a passing test on")
                 or item == "evidence for the uncommitted code changes"):
-            return "finish the Acceptance items and commit the code, then " + done_step(record)
+            return "on a branch, finish the Acceptance items and commit the code, then " + done_step(record)
     if item == "implementation":
         return f"commit the code, then: workorder receipt implemented --task {tid}"
     if item == "a declared test":

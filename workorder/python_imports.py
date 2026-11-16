@@ -399,6 +399,7 @@ def import_advice(name, root, source):
             package = base / name
             if (base / (name + '.py')).is_file() or package.is_dir() and any(package.rglob('*.py')):
                 return (f'add pythonpath = ["{relative}"] under [tool.pytest.ini_options] '
+                        'on the base branch too (a branch-only setting is absent from the base copy), '
                         'or install the project non-editable')
     return "install the project non-editable or run the tests so they import this checkout's code"
 

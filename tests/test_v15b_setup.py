@@ -15,7 +15,7 @@ def test_init_lists_written_files_and_prints_a_working_commit_command(local_repo
     result = cli(local_repo, 'init', *(['--claude'] if claude else []))
     assert result.returncode == 0, result.stdout + result.stderr
     lines = result.stdout.splitlines()
-    expected = ['AGENTS.md', 'CLAUDE.md', '.git/hooks/pre-commit',
+    expected = ['AGENTS.md', 'CLAUDE.md', '.git/hooks/pre-commit', '.git/hooks/pre-merge-commit',
                 '.github/workflows/workorder.yml']
     if claude:
         expected.append('.claude/settings.json')
@@ -25,7 +25,7 @@ def test_init_lists_written_files_and_prints_a_working_commit_command(local_repo
     separator = command.index('&&')
     assert command[:2] == ['git', 'add']
     assert command[separator + 1:separator + 4] == ['git', 'commit', '-m']
-    tracked = [name for name in expected if name != '.git/hooks/pre-commit']
+    tracked = [name for name in expected if not name.startswith('.git/hooks/')]
     assert command[2:separator] == tracked
     # The same Git arguments printed to the user must stage and commit every file.
     git(local_repo, *command[1:separator])

@@ -10,7 +10,7 @@ Install: `pipx install workorder`.
 
 | Command | What it does |
 |---|---|
-| `workorder init [--check] [--force] [--claude] [--update-workflow] [--light] [--test-first] [--project-test CMD]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs the hook, and writes the workflow if absent. --project-test stores an optional repository test command in .workorder/config.json. --update-workflow rewrites the workflow with a diff; combined with --check it only previews changes. With --force a different hook is saved as pre-commit.workorder-previous and called first; --check reports missing setup without writes and exits 1 if incomplete. --claude merges project hooks into .claude/settings.json |
+| `workorder init [--check] [--force] [--claude] [--update-workflow] [--light] [--test-first] [--project-test CMD]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs pre-commit and pre-merge-commit hooks, and writes the workflow if absent. --project-test stores an optional repository test command in .workorder/config.json. --update-workflow rewrites the workflow with a diff; combined with --check it only previews changes. With --force a different hook is saved with a .workorder-previous suffix and called first; --check reports missing setup without writes and exits 1 if incomplete. --claude merges project hooks into .claude/settings.json |
 | `workorder done --task ID [--note TEXT] [--timeout SECONDS] [--jobs N] [--needs-review] [--no-code-change] [--refactor] [--require-test-first]` | Refuses uncommitted code or empty Scope/Acceptance; runs the declared test and prints Acceptance for human confirmation. Writes DONE, receipts and the note together when supported; a refusal preserves the record. Never commits or pushes |
 | `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple] [--test COMMAND] [--test-paths PATH ...] [--code-paths PATH ...] [--local] [--test-first]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote or with `--local` (no tag is pushed); writes `tasks/<id>.md` (extended by default; `simple` starts with the seven required fields). `ships` defaults to `none`; supplied paths are optional members in either template |
 | `workorder receipt implemented --task ID` | Records the current commit as the implementation; refuses uncommitted or untracked code |
@@ -345,6 +345,9 @@ may be used; any other field (except `x-` fields) is refused, so typos are caugh
   future files or folders. The wrapper script alone does not describe its tests.
 - `code_paths`: optional files or folders, for example `["src/calc.py", "src/math"]`.
   `new --code-paths src/calc.py src/math` writes this member in either template.
+  These files are code for this task even inside its test folder: comparison
+  copies keep base code or replace changed function bodies, instead of copying
+  the current file as a test. Other helpers in that folder remain test material.
   Under `--require-task`, when every task adding a receipt
   declares this field, changed code must fall within their combined paths.
   An empty list covers no code. If any such task omits it, the usual rule applies.
@@ -1038,7 +1041,7 @@ jobs:
         with: {python-version: '3.12'}
       - name: Install project test dependencies
         run: python -m pip install -e '.[test]'
-      - run: python -m pip install workorder==0.16.0
+      - run: python -m pip install workorder==0.17.0
       - name: Check tasks after merge
         if: github.event_name == 'push'
         run: |
@@ -1373,7 +1376,7 @@ read-only `--check` still advises running init if the hook is absent.
 After writing setup, `init` lists the files it wrote and ends with an exact
 `git add ... && git commit -m 'Set up Workorder'` command for those repository
 files. With `--claude`, newly written `.claude/settings.json` is included. The
-local `.git/hooks/pre-commit` is listed but never included in `git add`.
+local `.git/hooks/pre-commit` and `.git/hooks/pre-merge-commit` are listed but never included in `git add`.
 An unchanged setup reports `No files written.` without a commit command.
 `--check` writes nothing and prints no commit instruction.
 `init --light` writes a trial workflow with `--review warn` and without
@@ -1381,6 +1384,7 @@ An unchanged setup reports `No files written.` without a commit command.
 workflow comment explains how to restore defaults: `workorder init --update-workflow`.
 Use `--light --update-workflow` to switch an existing workflow to the trial;
 adding `--check` previews either change without writing.
+When a workflow is already present, init points to `workorder init --update-workflow`.
 Existing workflows are left untouched unless `init --update-workflow` is used.
 That option prints a unified diff and writes the new workflow; adding --check
 shows the diff without writing and exits 1 if an update is needed.
@@ -1400,18 +1404,22 @@ test dependencies first, choosing and reporting the first match:
 It then installs Workorder at exactly the running version. For a Git installation,
 PEP 610 direct_url.json supplies the URL and resolved commit:
 `python -m pip install 'git+<url>@<commit>'`. A recorded subdirectory is retained.
-Other installations use `workorder==0.16.0` for this release.
+Other installations use `workorder==0.17.0` for this release.
 It runs `workorder check --base "origin/<base>" --run-tests --all-tests --require-task`,
 passing task ids and the special values `tests`, `no-task` and `workflow` from
 `workorder-allow:` labels added by someone other than the author to `--allow`.
 Current-head approving reviews supply `--approving-review` separately. Pushes to the default branch run
 `workorder check --run-tests --all-tests` without a base. See the runtime
 trade-off above. Install additional non-Python dependencies in the workflow as
-needed. The agent block says to work on a branch, open a pull request, and after
+needed. The agent block says to put build and cache files (`__pycache__/`, `*.egg-info/`) in .gitignore, work on a branch, open a pull request, and after
 the merge run `workorder check <ID>` on main. Start with `git fetch origin`;
 use `git pull --rebase origin main` only on main. On a feature branch, merge or
 rebase main as needed, then renew only if the task's own code or test files changed. It also says: "If `done` refuses
 or prints a warning, report it; do not say the task is done."
+
+Both installed Git hooks run `workorder check --staged`. A plain `git merge` runs
+pre-merge-commit: it prints renewal notes and refuses failing finished-task tests
+just as pre-commit does. Each hook calls its own preserved hook first.
 
 The installed pre-commit hook is:
 
@@ -1429,7 +1437,8 @@ exit 0
 ```
 
 To install it manually, save the block as `.git/hooks/pre-commit` and run
-`chmod +x .git/hooks/pre-commit`.
+`chmod +x .git/hooks/pre-commit`. For the merge hook, replace `pre-commit` with
+`pre-merge-commit` throughout, save it as `.git/hooks/pre-merge-commit`, and make it executable.
 
 The pre-commit hook prints one warning when Workorder is missing from PATH and
 exits 0, so teammates without it can still commit. When Workorder becomes available it runs `check --staged`; empty staged
@@ -1508,7 +1517,7 @@ line when its Python environment can find an installed package belonging to a sr
 An outside import reports, for example:
 
 ```text
-TASK-1: could not compare with origin/main: the tests import click from /checkout/src/click, outside the comparison copy; add pythonpath = ["src"] under [tool.pytest.ini_options] or install the project non-editable
+TASK-1: could not compare with origin/main: the tests import click from /checkout/src/click, outside the comparison copy; add pythonpath = ["src"] under [tool.pytest.ini_options] on the base branch too (a branch-only setting is absent from the base copy), or install the project non-editable
 ```
 
 `could not compare` appears when one of the project's own names resolves outside

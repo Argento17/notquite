@@ -7,7 +7,7 @@ Labels below must come from someone other than the pull request author. An appro
 <!-- refusal-family records -->
 ## Record, configuration or dependency cannot be read
 **Meaning:** A malformed task, missing field, invalid value/path/command, unreadable configuration or receipt, missing dependency, dependency cycle, or contradictory `blocks` prevents checking the record. A missing Git ref or merge base also prevents a usable check.
-**Clear:** Correct the named file or value, restore missing dependencies, remove cycles, or fetch the target ref; rerun `workorder check ID` and the original check. Labels do not repair malformed records. Set wrappers' `test_paths` to the actual test files; a changed definition needs the acceptance below.
+**Clear:** Correct the named file or value, restore missing dependencies, remove cycles, or fetch the target ref; rerun `workorder check ID` and the original check. Labels do not repair malformed records. Set wrappers' `test_paths` to the actual test files; a changed definition needs the acceptance below. `init --check` reports both pre-commit and pre-merge-commit; use `init --force` to preserve and chain a different hook. Build and cache files such as `__pycache__/` and `*.egg-info/` belong in .gitignore.
 
 <!-- refusal-family evidence -->
 ## Finished claim lacks evidence
@@ -25,12 +25,12 @@ Test subprocesses refresh checkout bytecode on every run, so edits with the same
 <!-- refusal-family definitions -->
 ## New or changed task requirements
 **Meaning:** `was written and finished in this pull request` requires definition review whenever a new task claims DONE/CLOSED, even if its test demonstrates the change. A new unfinished task supplying required code receipts keeps the earlier `is new in this pull request` rule: review is needed unless its test fails on base code and passes now. Scope/Acceptance edits, changed tests/contracts, removed dependencies, cancellation and unsupported reopening also change the agreement.
-**Clear:** Prefer landing the task definition first, then implement it in another change. Otherwise a reviewer accepts the definition with `workorder-allow:ID` or an approving review. Restore unintended requirement edits. Fill empty Scope and Acceptance before `done`; acceptance review never supplies missing test evidence.
+**Clear:** Prefer landing the task definition first, then implement it in another change. Otherwise a reviewer accepts the definition with `workorder-allow:ID` or an approving review. Restore unintended requirement edits. Fill empty Scope and Acceptance before `done`; acceptance review never supplies missing test evidence. For an unimplemented task, `show` says to finish Acceptance and commit code on a branch before running `done`.
 
 <!-- refusal-family test-edits -->
 ## Test files, selection or outcomes changed
 **Meaning:** `test changed`, `test_paths changed`, edited/removed tests, changed fixtures/configuration, fewer passes or more skips/xfails/deselections need review. Added tests also need review with `--strict-tests` or when their old tests already failed. A new skip/xfail that actually suppresses a test counts; a false condition does not.
-Test material is classified first: declared paths, recognized test-command files, test folders, helpers and fixtures stay protected regardless of suffix, including .txt and Markdown files or files under doc/docs.
+A task's declared `code_paths` are code for that task, including files inside its test folder. Its edits count as code changes, and base/stub comparisons keep base code or replace changed function bodies. Other declared test paths, recognized test-command files, test folders, helpers and fixtures stay protected regardless of suffix, including .txt and Markdown files or files under doc/docs. A neighboring helper outside the task's code paths keeps its existing test treatment, including current content in base comparisons.
 **Clear:** Restore unintended edits, or have a reviewer accept them with the owning task's label or an approving review. `workorder-allow:tests` accepts shared/unowned file edits, not a task's command, selection or outcome finding. Unchanged Python tests may gain new functions, fixtures, imports or appended parameter cases without review. A refactor with edited tests needs `done --needs-review` or `renew --no-refactor` and review.
 
 <!-- refusal-family old-tests -->
@@ -61,23 +61,23 @@ Test material is classified first: declared paths, recognized test-command files
 <!-- refusal-family imports -->
 ## The test could not run against the intended copy
 **Meaning:** `could not compare` can name an external project import, an unidentified interpreter, an unavailable dependency, an invalid pytest setup or a failed temporary-copy operation. It proves neither weakness nor a passing refactor.
-**Clear:** Install dependencies and make the tests import this checkout's project, using a suitable pytest `pythonpath` or non-editable install; fetch missing refs and fix the named command/setup error. Recheck isolated Python commands too. An unavailable project-import check requires `workorder-allow:ID`; approval and warning mode do not suffice. Other execution/setup failures need correction, not a claimed passing test.
+**Clear:** Install dependencies and make the tests import this checkout's project, using a suitable pytest `pythonpath` or non-editable install. The setting must land on the base branch too: a branch-only setting is absent from the base copy. Fetch missing refs and fix the named command/setup error. Recheck isolated Python commands too. An unavailable project-import check requires `workorder-allow:ID`; approval and warning mode do not suffice. Other execution/setup failures need correction, not a claimed passing test.
 
 <!-- refusal-family workflow -->
 ## Workorder workflow changed
 **Meaning:** The default workflow or a renamed generated workflow changed, including its removal.
-**Clear:** Restore it, or have a reviewer inspect the change and add `workorder-allow:workflow`. Reviewer approval alone or warning mode does not accept it. `workorder init --update-workflow` previews and refreshes generated setup; review and commit the resulting file.
+**Clear:** Restore it, or have a reviewer inspect the change and add `workorder-allow:workflow`. Reviewer approval alone or warning mode does not accept it. `workorder init --update-workflow` previews and refreshes generated setup; review and commit the resulting file. Any init that skips an existing workflow points to this command.
 
 <!-- refusal-family project-test -->
 ## The optional project test finds a regression
 **Meaning:** The project test failed. Workorder reruns identifiable failing pytest tests on the base: an old failure is a note, a newly failing test refuses, and an unavailable result stays explicit. Other test tools cannot supply this per-test distinction.
 Passing pytest project tests print one note with pytest's counts. Failures show the failed-test summary, up to 60 lines per failing test (with a truncation notice), and counts; base reruns show only counts. Passing-test output is omitted. Startup and interrupted-run diagnostics remain visible; unreadable or missing reports cannot establish a base comparison.
-**Clear:** Fix the regression or test environment. A reviewer may accept a project finding with `workorder-allow:tests` or an approving review; task-current failures still refuse. Old project failures need no label. Set the command with `workorder init --project-test "python -m pytest"`; without one, the note says only declared task tests ran. Pre-commit does not run this optional command.
+**Clear:** Fix the regression or test environment. A reviewer may accept a project finding with `workorder-allow:tests` or an approving review; task-current failures still refuse. Old project failures need no label. Set the command with `workorder init --project-test "python -m pytest"`; without one, the note says only declared task tests ran. The pre-commit and pre-merge-commit hooks do not run this optional command.
 
 <!-- refusal-family renewal -->
 ## Evidence predates a later code change
 **Meaning:** `its code changed after it was finished` identifies a new completion whose recorded implementation differs from the code about to land. A separate message can say main moved since the task was tested.
-**Clear:** Commit the updated code, merge/rebase the current target when requested, run `workorder renew --task ID`, and commit the receipts. `done` and pre-commit show renewal advice as a Note; the pull-request check requires current evidence. Renewing an unchanged finished claim already on the target does not owe fresh base-code or stub proof. Reopening and finishing it again makes a new claim.
+**Clear:** Commit the updated code, merge/rebase the current target when requested, run `workorder renew --task ID`, and commit the receipts. `done`, pre-commit and pre-merge-commit show renewal advice as a Note; the pull-request check requires current evidence. Renewing an unchanged finished claim already on the target does not owe fresh base-code or stub proof. Reopening and finishing it again makes a new claim. A plain `git merge` runs the merge hook: renewal notes allow the merge commit, but a failing finished-task test refuses it.
 
 <!-- refusal-family removal -->
 ## Task or receipt history was removed or changed
@@ -91,16 +91,16 @@ Passing pytest project tests print one note with pytest's counts. Failures show 
 
 The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and records a hash of each Python module's executable messages, conditions and returned findings. A new or changed refusal requires guide review before updating those hashes. The check also catches some unrelated code edits; comments and docstrings are ignored. It detects changes, but cannot judge whether an explanation is correct.
 
-<!-- refusal-inventory workorder/__init__.py e40c386dfd6e2fdf2c7d161d61b6a08b82cd5fd784f38ea4195132fa8e56932e records -->
+<!-- refusal-inventory workorder/__init__.py c98fe59586516c5a002b3bd50cc92e0e258a1dd45a0f0eb5ed923b719d699afb records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
-<!-- refusal-inventory workorder/bootstrap.py a0d707075dd646d1dff075a0b77d19d23aa6642b581f0898a7205e07eb873afa records,workflow,project-test -->
-<!-- refusal-inventory workorder/cli.py 8df5a614a95a749215bfd128fe745033bb2bb9ca84139459f648ff5d4d297d40 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
-<!-- refusal-inventory workorder/gate.py 4ca037eb64876e103c414d5129869c2b6044fea173ec63f74f21e8aad64d715b code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
+<!-- refusal-inventory workorder/bootstrap.py 25131968fbbd8e21fe4bd06a97e2ce77a4f27d524b9bdbea3a117d38e199bc9c records,workflow,project-test -->
+<!-- refusal-inventory workorder/cli.py 810489a7c177f86f8526a54e96ad3c3be9626d56f917f97a9cad32a87239f1ac records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
+<!-- refusal-inventory workorder/gate.py 91119e080ac999e078e02b39b35953ef467f5bc8009dd9c088ea1746fdec45dd code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 4c890e78327bd094ac6f84882d7e42640cb88130f5232d92f7f23bbea6502a79 evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
 <!-- refusal-inventory workorder/project_tests.py 61889b0b64e84644085569b9d8e1b565711dd34b5af40ada01792ae8aaab4f82 project-test,records -->
 <!-- refusal-inventory workorder/pytest_selection.py bcff8a23918c0320f921d46b229359bc41237be3055be093a6e746860395d35b weak-tests,imports -->
-<!-- refusal-inventory workorder/python_imports.py 7c23cdd30e97d11faac363844eaa7a8c7748d82f4b38fbddbc6ff4eacf3427f7 imports -->
+<!-- refusal-inventory workorder/python_imports.py 5357504703660ec0af3dc0dc1a46317d3bc1aaf3f4b31578be0cd2b50d0f21a6 imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
