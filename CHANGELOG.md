@@ -2,6 +2,8 @@
 
 ## 0.18.0 (unreleased)
 
+- The project-import check waits up to 60 s for a cold interpreter (was 10 s), so a slow machine no
+  longer turns an honest comparison into "could not compare".
 - An honest change to what an old test expects commits as work in progress with a note; `done` refuses it until
   `done --needs-review` records it, and the task's own label `workorder-allow:ID` then accepts what that run
   recorded, so one label clears the change. Local hooks refuse such findings only alongside a new DONE claim.
