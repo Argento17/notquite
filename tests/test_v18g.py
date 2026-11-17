@@ -97,7 +97,12 @@ def test_retirement_is_a_finding_a_label_or_approval_clears(local_repo):
     assert 'workorder-allow:TASK-1' in result.stdout
     assert 'regression:' not in result.stdout and 'no test passed' not in result.stdout
     assert '(0 claimed DONE or CLOSED, 1 retired)' in result.stdout
-    for flags in (['--allow', 'TASK-1'], ['--approving-review']):
+    # Removing the retired task's test file edits existing tests: approval alone is not enough.
+    result = check(root, '--all-tests', '--require-task', '--approving-review')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'an approving review is not enough: it edits existing tests' in result.stdout
+    assert 'accepted by an approving review: TASK-1 (status changed: DONE -> RETIRED)' in result.stdout
+    for flags in (['--allow', 'TASK-1'], ['--allow', 'TASK-1', '--approving-review']):
         result = check(root, '--all-tests', '--require-task', *flags)
         assert result.returncode == 0, result.stdout + result.stderr
 

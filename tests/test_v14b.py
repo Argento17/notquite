@@ -46,10 +46,12 @@ def test_test_first_requires_task_label_even_with_approval(local_repo, change):
     (root / 'tests/test_div.py').write_text(TEST + '    assert div(8, 2) == 4\n')
     commit_all(root)
     claim(root)
-    result = check(root, '--require-test-first', '--approving-review', '--allow', 'tests')
+    result = check(root, '--require-test-first', '--allow', 'tests')
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'test must land on origin/main, failing, before the work' in result.stdout
-    assert 'approval did not cover' in result.stdout
+    # 0.18 one review rule: an approving review clears the test-first finding.
+    result = check(root, '--require-test-first', '--approving-review', '--allow', 'tests')
+    assert 'test must land on' not in result.stdout.split('Note:')[0], result.stdout
     accepted = check(root, '--require-test-first', '--approving-review', '--allow', 'TASK-2')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
 

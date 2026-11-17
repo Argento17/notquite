@@ -59,13 +59,13 @@ def test_compound_review_validates_once_per_read(local_repo, monkeypatch, helper
             if helper.startswith('changed_'):
                 assert result == {'test_value.py'}
             elif helper == 'test_origin':
-                assert result == (False, "TASK-1's test was written in this change")
+                assert result == (False, "TASK-1's test file was edited in this change (test_value.py)")
             elif helper == 'assertion_problems':
                 assert len(result) == 1
                 assert type(result[0]) is gate.AssertionProblem
                 assert result[0].path == 'test_value.py'
                 assert result[0].line == 1
-                assert result[0].label_only
+                assert not result[0].label_only  # 0.18: an approving review clears it
                 result[0].path = 'caller annotation'
                 result[0].line = 99
                 result[0].label_only = False
@@ -128,7 +128,7 @@ def test_review_reads_observe_external_edits(local_repo, monkeypatch, cache, sta
             assert bool(problems) is changed
             if problems:
                 assert problems[0].path == 'test_value.py'
-                assert problems[0].label_only
+                assert not problems[0].label_only
 
 
 @pytest.mark.parametrize('helper', ['base_problems', 'stale_claim', 'pending_review', 'local_test_update'])

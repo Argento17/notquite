@@ -254,7 +254,7 @@ def test_base_test_timeout_refuses_and_preserves_files(local_repo, capsys):
     problems = gate.check(root, base=base, run_tests=True, allow={'TASK-1'}, timeout=10, notes=notes)
     assert not problems
     assert 'current completed' in capsys.readouterr().out
-    assert any(f'could not compare its tests on {base}' in line and 'allowed by explicit label' in line
+    assert any(f'could not compare its tests on {base}' in line and '(allowed)' in line
                for line in notes)
     assert not any('its tests already fail' in line for line in notes)
     assert probe.read_text() == 'print("current completed")\n'

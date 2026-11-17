@@ -112,13 +112,15 @@ def test_label_only_findings_have_done_route(local_repo, test_text, finding):
     assert store.record(root, 'TASK-1')['status'] == 'DONE'
     run = store.entries(root, 'TASK-1')[-1]
     assert run['pending_review'] is True
-    assert any(finding in item['message'] and item['label_only'] for item in run['pending_findings'])
+    # 0.18 one review rule: an approving review clears assertion and stub findings.
+    assert any(finding in item['message'] and not item['label_only'] for item in run['pending_findings'])
     for result in (stop(root),):
         assert result.returncode == 0, result.stdout + result.stderr
         review_lines = [line for line in result.stdout.splitlines() if 'pending review:' in line]
-        assert review_lines and all('or an approving review' not in line for line in review_lines), result.stdout
+        assert review_lines and all('or an approving review' in line for line in review_lines), result.stdout
     commit_with_hook(root)
-    assert_review(root, label_only=True)
+    assert_review(root)
+    assert pr(root, '--approving-review').returncode == 0
     output = ok(root, 'check', 'TASK-1')
     assert finding in output, output
 
@@ -310,14 +312,15 @@ def test_pending_comparison_finding_is_recorded_and_displayed(local_repo, tmp_pa
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-1', '--needs-review')
     run = store.entries(root, 'TASK-1')[-1]
-    assert any('could not compare' in item['message'] and item['label_only'] for item in run['pending_findings'])
+    assert any('could not compare' in item['message'] and not item['label_only'] for item in run['pending_findings'])
     output = ok(root, 'show', '--task', 'TASK-1')
     assert 'Pending:' in output and 'could not compare' in output, output
     commit_all(root)
-    for flags in ([], ['--approving-review'], ['--review', 'warn']):
+    for flags in ([], ['--review', 'warn']):
         result = cli(root, 'check', '--base', 'origin/main', '--run-tests', *flags)
         assert result.returncode == 1 and 'Pending:' in result.stdout, result.stdout + result.stderr
     ok(root, 'check', '--base', 'origin/main', '--run-tests', '--allow', 'TASK-1')
+    ok(root, 'check', '--base', 'origin/main', '--run-tests', '--approving-review')  # 0.18 one review rule
 
 
 @pytest.mark.parametrize('blocker', ['failure', 'command', 'dependency', 'evidence'])

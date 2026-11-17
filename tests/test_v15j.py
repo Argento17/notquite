@@ -135,10 +135,13 @@ def test_verification_own_changes_refuse_but_task_label_accepts_legacy_claim(loc
                  ('kind', 'commit', 'code', 'command', 'exit_code', 'valid')} | {'no_code_change': True})
     store.set_task_field(root, 'TASK-1', 'status', 'DONE')
     commit_all(root)
-    for flags in ([], ['--approving-review'], ['--review', 'warn'], ['--allow', 'tests,TASK-2']):
+    for flags in ([], ['--review', 'warn'], ['--allow', 'tests,TASK-2']):
         refused = check(root, *flags)
         assert refused.returncode == 1, refused.stdout + refused.stderr
         assert f'TASK-1: code changed ({path})' in refused.stdout
+    # 0.18 one review rule: approval clears a false no-code-change exemption, not a scope-free edit of tests.
+    approved = check(root, '--approving-review')
+    assert f'TASK-1: code changed ({path})' not in approved.stdout.split('Note:')[0]
     accepted = check(root, '--allow', 'TASK-1,scope:TASK-2')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert 'workorder-allow:TASK-1' in refused.stdout
@@ -175,7 +178,8 @@ def test_done_refactor_leaves_other_tasks_review_pending(local_repo, label_only)
     refused = check(root)
     assert refused.returncode == 1 and 'workorder-allow:TASK-2' in refused.stdout
     approved = check(root, '--approving-review')
-    assert approved.returncode == int(label_only), approved.stdout + approved.stderr
+    # 0.18: approval clears the assertion finding but not an edit of an existing test.
+    assert approved.returncode == int(not label_only), approved.stdout + approved.stderr
     accepted = check(root, '--allow', 'TASK-2')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
 

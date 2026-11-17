@@ -116,10 +116,13 @@ def test_unusual_assertion_needs_its_task_label(local_repo):
     (root / 'tests/test_div.py').write_text('from calc import div, equal\ndef test_div():\n    equal(div(6, 3), 2)\n')
     commit_all(root)
     claim(root)
-    for options in [[], ['--approving-review'], ['--review', 'warn'], ['--allow', 'tests']]:
+    for options in [[], ['--review', 'warn'], ['--allow', 'tests']]:
         refused = check(root, *options)
         assert refused.returncode == 1, refused.stdout
         assert 'workorder-allow:TASK-2' in refused.stdout
+    # 0.18 one review rule: an approving review clears an assertion finding.
+    approved = check(root, '--approving-review')
+    assert approved.returncode == 0, approved.stdout + approved.stderr
     accepted = check(root, '--allow', 'TASK-2')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
 

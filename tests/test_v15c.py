@@ -118,7 +118,7 @@ def test_test_label_cannot_accept_scope(local_repo):
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'workorder-allow:scope:TASK-2' in result.stdout
     assert check(root, '--allow', 'TASK-2,scope:TASK-2').returncode == 0
-    assert check(root, '--approving-review').returncode == 1
+    assert check(root, '--approving-review').returncode == 0  # 0.18: approval clears scope
 
 
 def test_scope_label_parser_keeps_reviewer_boundary():

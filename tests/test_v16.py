@@ -325,9 +325,10 @@ def test_finished_folder_two_clone_merge(local_repo, edit):
     assert result.returncode == int(edit), result.stdout + result.stderr
     if edit:
         assert 'workorder-allow:TASK-1' in result.stdout
-        for flag in [('--allow', 'TASK-1,TASK-2'), ('--allow', 'TASK-2', '--approving-review')]:
-            accepted = check(other, *flag)
-            assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+        accepted = check(other, '--allow', 'TASK-1,TASK-2')
+        assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+        # 0.18 one review rule: an edit of TASK-1's existing test needs its label, not only approval.
+        assert check(other, '--allow', 'TASK-2', '--approving-review').returncode == 1
     else:
         assert 'workorder-allow:TASK-1' not in result.stdout
 

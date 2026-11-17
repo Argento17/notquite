@@ -230,7 +230,7 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
         if 'tests' in allow:
             notes.append(message + ' (accepted by review)')
             return []
-        return [gate.reviewer_label(message, 'tests')]
+        return [gate.reviewer_label(message, 'tests', True, gate.TEST_EXPECTATION)]
 
     pytest = _pytest(words)
     with s.temporary_checkout(prefix='workorder-project-') as temporary, s.test_reuse(False):

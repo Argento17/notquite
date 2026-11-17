@@ -50,9 +50,10 @@ def test_stub_refuses_test_that_does_not_call_changed_function(local_repo, body,
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'TASK-2: its new or changed tests still pass with the changed functions stubbed out (test_div); it does not exercise the change' in result.stdout
     if action == 'check':
-        assert 'or an approving review' not in next(line for line in result.stdout.splitlines() if 'stubbed out' in line)
+        # 0.18 one review rule: an approving review clears a stub finding.
+        assert 'an approving review clears this' in next(line for line in result.stdout.splitlines() if 'stubbed out' in line)
         assert check(root, '--allow', 'TASK-2').returncode == 0
-        assert check(root, '--approving-review').returncode == 1
+        assert check(root, '--approving-review').returncode == 0
         assert check(root, '--review', 'warn').returncode == 1
 
 
@@ -90,11 +91,11 @@ def test_reopened_finished_failure_needs_task_label(local_repo, status):
     def reopened_check(*flags):
         return cli(root, 'check', '--base', 'origin/main', '--run-tests', '--all-tests', *flags)
     result = reopened_check()
-    expected = 'TASK-1 was reopened while its test fails on this code; a reviewer accepts it with the label workorder-allow:TASK-1'
+    expected = ('TASK-1 was reopened while its test fails on this code; an approving review clears this, '
+                'or a reviewer accepts it with the label workorder-allow:TASK-1')
     assert result.returncode == 1 and expected in result.stdout
-    assert 'or an approving review' not in next(line for line in result.stdout.splitlines() if 'was reopened' in line)
     assert reopened_check('--allow', 'TASK-1').returncode == 0
-    assert reopened_check('--approving-review').returncode == 1
+    assert reopened_check('--approving-review').returncode == 0  # 0.18 one review rule
     assert reopened_check('--review', 'warn').returncode == 1
 
 

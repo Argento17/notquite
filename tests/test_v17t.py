@@ -39,11 +39,13 @@ def test_staged_unavailable_comparison_needs_pending_review(local_repo, tmp_path
     for flags in ([], ['--run-tests'], ['--run-tests', '--all-tests']):
         result = cli(root, 'check', '--staged', *flags)
         assert result.returncode == 0, result.stdout + result.stderr
-    for flags in ([], ['--approving-review'], ['--review', 'warn'],
-                  ['--approving-review', '--review', 'warn'], ['--allow', 'tests']):
+    for flags in ([], ['--review', 'warn'], ['--allow', 'tests']):
         result = check(root, '--all-tests', '--require-task', *flags)
         assert result.returncode == 1, result.stdout + result.stderr
         assert 'workorder-allow:TASK-1' in result.stdout
+    for flags in (['--approving-review'], ['--approving-review', '--review', 'warn']):
+        result = check(root, '--all-tests', '--require-task', *flags)  # 0.18: approval clears it
+        assert result.returncode == 0, result.stdout + result.stderr
     result = check(root, '--all-tests', '--require-task', '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -82,10 +84,9 @@ def test_done_and_staged_exemptions_explain_label_once(local_repo, completion, k
     assert [len(notes) for notes in label_notes] == [0 if declaration == 'matching' else 1] * 2, (output, staged)
     for notes in label_notes:
         if notes:
-            assert 'the pull request needs workorder-allow:TASK-1' in notes[0]
-            assert 'approv' not in notes[0]
+            assert 'the pull request needs workorder-allow:TASK-1 or an approving review' in notes[0]
     result = check(root, '--approving-review', '--review', 'warn')
-    assert result.returncode == (0 if declaration == 'matching' else 1), result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr  # 0.18: approval clears it
     assert check(root, '--allow', 'TASK-1').returncode == 0
 
 

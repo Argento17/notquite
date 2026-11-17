@@ -225,8 +225,8 @@ def test_parallel_squash_commits_with_installed_hook(local_repo, tmp_path):
 
 def test_review_advice_is_one_sentence():
     output = gate.reviewer_label('TASK-1: changed test; a reviewer accepts it with --allow TASK-1', 'TASK-1')
-    assert output == ('TASK-1: changed test; a reviewer accepts it with the label '
-                      'workorder-allow:TASK-1 (or an approving review)')
+    assert output == ('TASK-1: changed test; an approving review clears this, or a reviewer accepts it '
+                      'with the label workorder-allow:TASK-1')
 
 
 def test_reused_time_printed_once(capsys):
@@ -234,7 +234,7 @@ def test_reused_time_printed_once(capsys):
     with store.test_output_session():
         gate.test_result(run, {})
         gate.test_result(run, {})
-    assert capsys.readouterr().out.count('(reused from 12:34 UTC)') == 1
+    assert capsys.readouterr().out.count('(result reused from the run at 12:34 UTC; nothing it covers changed since)') == 1
 
 
 def code_path_task(root, paths):

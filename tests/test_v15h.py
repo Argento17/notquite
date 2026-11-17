@@ -201,7 +201,7 @@ def test_done_next_names_real_review_route_for_unusual_tests(local_repo, kind):
     output = ok(root, 'done', '--task', 'TASK-1', '--needs-review')
     assert 'TASK-1 DONE, pending review' in output
     assert check(root).returncode == 1
-    assert check(root, '--approving-review').returncode == 1
+    assert check(root, '--approving-review').returncode == 0  # 0.18: approval clears assertion/stub findings
     accepted = check(root, '--allow', 'TASK-1')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
 
@@ -223,7 +223,8 @@ def test_done_next_for_unavailable_comparison_accepts_needs_review(local_repo, t
     output = ok(root, 'done', '--task', 'TASK-1', '--needs-review')
     assert 'DONE, pending review' in output
     commit_all(root)
-    assert check(root, '--approving-review').returncode == 1
+    assert check(root).returncode == 1
+    assert check(root, '--approving-review').returncode == 0  # 0.18: approval clears an unavailable comparison
     accepted = check(root, '--allow', 'TASK-1')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
 
