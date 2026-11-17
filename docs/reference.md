@@ -852,18 +852,16 @@ own test:
   and the stubbed-out run when no new or changed tests are selected. The others run in full.
 - Comparison copies share the object store (`git clone --shared`); files, index and Git
   directory stay separate.
-- Most real repositories are too large for the read cache to observe in full. Reads
-  that cannot change are then still shared within one command: objects named by a full
-  ID, listings of a commit, index listings while the index file is unchanged, each Python
-  source's normalized form, and the work tree's changed paths within one comparison
-  (unless a `post-index-change` hook or `core.fsmonitor` could run). Replacement refs
-  turn object sharing off; a split index turns index listings off.
+- In repositories too large for the read cache, reads that cannot change are still
+  shared within one command: objects by full ID, commit listings, index listings while
+  the index is unchanged, parsed Python sources, and changed work-tree paths (unless a
+  `post-index-change` hook or `core.fsmonitor` could run). Replacement refs or a split
+  index turn the matching sharing off.
 - The pre-commit hook returns at once, silently, when only documentation is staged
   (outside `tasks/` and the receipt folders) and no task file names it, its folder or
   its suffix pattern; problems already committed are left to the pull-request check.
-- Measured on rich 15.0 (560 files, a 0.06 s task test): `done` 12.6 s before, 3.1 to
-  3.7 s now; the receipts commit 13 s before, 2.8 to 3.9 s now; a commit with only
-  documentation or nothing staged 7.6 s before, 0.2 s now.
+- On rich 15.0 (560 files, a 0.06 s task test): `done` about 3.5 s, the receipts
+  commit about 3.5 s, a documentation-only commit 0.2 s.
 
 `done` and `check --run-tests` end with one stderr line, for example `Time: 3.3s: setup
 0.6s, new code 2.3s, base code 1.0s, stubbed 2.1s, project test not run, runs overlapped`.
@@ -1010,7 +1008,7 @@ jobs:
         with: {python-version: '3.12'}
       - name: Install project test dependencies
         run: python -m pip install -e '.[test]'
-      - run: python -m pip install workorder==0.18.0
+      - run: python -m pip install workorder==1.0.0
       - name: Check tasks after merge
         if: github.event_name == 'push'
         run: |
@@ -1326,7 +1324,7 @@ use `uv pip install --group tests -e .`, or install the group's requirements, th
 
 It then installs Workorder at exactly the running version: a Git install's PEP 610 direct_url.json
 gives `python -m pip install 'git+<url>@<commit>'` (with any subdirectory), otherwise
-`workorder==0.18.0`. Pull requests run
+`workorder==1.0.0`. Pull requests run
 `workorder check --base "origin/<base>" --run-tests --all-tests --require-task` with labels added by
 someone other than the author (task ids, `scope:<ID>`, `tests`, `no-task`, `workflow`) as `--allow`,
 and `--approving-review` for a current-head approval. Pushes run `workorder check --run-tests --all-tests`.

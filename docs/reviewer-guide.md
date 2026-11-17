@@ -126,7 +126,7 @@ Diagnostics escape characters the console cannot encode, preserving test IDs and
 
 The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and records a hash of each Python module's executable messages, conditions and returned findings. A new or changed refusal requires guide review before updating those hashes. The check also catches some unrelated code edits; comments and docstrings are ignored. It detects changes, but cannot judge whether an explanation is correct.
 
-<!-- refusal-inventory workorder/__init__.py 51c6a4d75952a2c005eb33acda81f0834b2f1e0dffae215a7d9cd26f48759af2 records -->
+<!-- refusal-inventory workorder/__init__.py 471c11c395aac0e41ca692d0f5a023515c37594572c415d16f71dbd54c3b9926 records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
 <!-- refusal-inventory workorder/bootstrap.py a3ccdd7adfe6f449e3825405f400b58e209d42575aff6744f44664da201d4395 records,workflow,project-test -->
 <!-- refusal-inventory workorder/cli.py fde74f9e4460095c3dfa67414a05914d7e7e5927db7bdb9e8469a288bad1b2d3 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->

@@ -1,3 +1,3 @@
 """Workorder: checks whether DONE actually means done."""
 
-__version__ = "0.18.0"
+__version__ = "1.0.0"
