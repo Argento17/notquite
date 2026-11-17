@@ -253,3 +253,25 @@ def test_hooks_refuse_a_removed_test_of_a_finished_task_without_a_code_change(tm
     assert 'its test files lost or changed' in result.stderr
     monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     assert stop(root).returncode == 0
+
+
+def test_renew_after_done_on_the_same_branch_still_commits(tmp_path):
+    """done, then a further test edit and the documented renew: the done run in this change counts."""
+    root = repo(tmp_path, {'calc.py': 'def mul(a, b):\n    return 0\n'})
+    new_task(root, 'tests/test_mul.py')
+    git(root, 'switch', '-qc', 'work')
+    (root / 'calc.py').write_text('def mul(a, b):\n    return a * b\n')
+    (root / 'tests/test_mul.py').write_text('from calc import mul\n\n\ndef test_mul():\n    assert mul(3, 4) == 12\n')
+    commit(root, 'work')
+    ok(root, 'done', '--task', 'TASK-1')
+    commit(root, 'done')
+    (root / 'tests/test_mul.py').write_text('from calc import mul\n\n\ndef test_mul():\n    assert mul(3, 4) == 12\n'
+                                            '    assert mul(2, 5) == 10\n')
+    commit(root, 'more test')
+    ok(root, 'renew', '--task', 'TASK-1')
+    git(root, 'add', '-A')
+    result = staged(root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'without a workorder done completion record' not in result.stdout + result.stderr
+    git(root, 'commit', '-qm', 'renew')
+    assert stop(root).returncode == 0

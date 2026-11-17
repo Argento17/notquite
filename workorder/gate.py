@@ -3079,7 +3079,13 @@ def missing_completion_problem(root, revision, record, staged=False, target=None
         return None
     if claim_from_target(root, record, target, staged):
         return None  # imported from the target, for example while merging it
-    if latest_test_run(root, record, staged).get('completion') or not task_change_touched(root, revision, record, staged):
+    if not task_change_touched(root, revision, record, staged):
+        return None
+    # Any done run recorded in this change counts: renew after a later test edit or a
+    # rebase records a new run without the comparisons, and the pull-request check judges that edit.
+    carried = {entry['hash'] for entry in s.entries(root, tid, rev=revision)}
+    if any(entry['kind'] == 'test' and entry.get('completion') is True and entry['hash'] not in carried
+           for entry in s.entries(root, tid, staged)):
         return None
     return (f'{tid}: says {record["status"]} without a workorder done completion record for this change; '
             f'set status back to IN_PROGRESS and run workorder done --task {tid} '
