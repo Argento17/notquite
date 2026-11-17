@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.18.0 (unreleased)
+
 ## 0.17.0 (17 Nov 2026)
 
 - Let pending-review "could not compare" claims commit with a Note while the
