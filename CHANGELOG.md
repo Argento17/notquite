@@ -2,6 +2,22 @@
 
 ## 0.18.0 (unreleased)
 
+- One review rule: an approving review clears every finding except edits,
+  deletions, new skips/xfails or weakening of existing tests, and changes to the
+  Workorder workflow file; those need a label (`workorder-allow:tests` or
+  `workorder-allow:ID`, and `workorder-allow:workflow`). Approval now also clears
+  code with no task, scope findings, assertion/stub findings, test-first
+  exceptions, reopened failing tasks, unavailable comparisons and refactor or
+  verification completions not predeclared on the base. Edits of existing tests
+  that approval used to clear now need the label. Refusals say which applies.
+- A task written and finished in one pull request: the refusal says an approving
+  review clears it and no second pull request is needed; `done` says the
+  pull-request check will ask for an approving review.
+- Plainer notes: a long-existing test file with an edited line is "edited in
+  this change", not "written"; new tests in a shared test file are attributed to
+  the tasks this change works on ("shared by ..." when several); a reused test
+  result says "(result reused from the run at HH:MM UTC; nothing it covers changed since)".
+
 ## 0.17.0 (17 Nov 2026)
 
 - Let pending-review "could not compare" claims commit with a Note while the

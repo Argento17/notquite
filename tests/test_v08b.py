@@ -75,7 +75,8 @@ def test_local_commands_review_test_changes(local_repo, monkeypatch, capsys, act
     if action != 'done':
         assert 'Note:' in output and 'NOT DONE' not in output
     assert reason in output
-    assert 'a reviewer accepts it with the label workorder-allow:TASK-1 (or an approving review)' in output
+    # 0.18: edits and weakening of existing tests need the label; approval is not enough.
+    assert 'a reviewer accepts it with the label workorder-allow:TASK-1 (an approving review is not enough: it' in output
 
 
 def test_precommit_compares_index_not_working_tests(local_repo):
@@ -190,7 +191,7 @@ def test_cancellation_needs_review_but_reopening_is_honest_work(local_repo, befo
     assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
     assert f'status changed: {before} -> {after}' in result.stdout
     if after == 'CANCELLED':
-        assert 'a reviewer accepts it with the label workorder-allow:TASK-1 (or an approving review)' in result.stdout
+        assert 'an approving review clears this, or a reviewer accepts it with the label workorder-allow:TASK-1' in result.stdout
     assert cli(root, 'check', '--base', base, '--allow', 'TASK-1').returncode == 0
 
 

@@ -212,7 +212,7 @@ def test_require_task_needs_a_task_from_the_merge_base_or_allow(local_repo):
     store.receipt(root, 'TASK-9', 'implemented')
     refused = cli(root, 'check', '--base', base, '--require-task')
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert 'TASK-9 is new in this pull request:' in refused.stdout
+    assert 'TASK-9 is new in this pull request; an approving review clears this' in refused.stdout
     assert 'no task records it' not in refused.stdout
     allowed = cli(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-9')
     assert allowed.returncode == 0, allowed.stdout + allowed.stderr

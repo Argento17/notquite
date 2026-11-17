@@ -1340,7 +1340,7 @@ def annotate_pending_review(root, tid, findings):
         raise Refused('pending findings need a proposed test receipt')
     item = pending[-1]
     item['pending_findings'] = [
-        {'message': str(line), 'label_only': '(or an approving review)' not in line}
+        {'message': str(line), 'label_only': 'an approving review clears this' not in line}
         for line in dict.fromkeys(findings)]
     item.pop('hash')
     item['hash'] = digest(packed(item).encode())

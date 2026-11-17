@@ -848,7 +848,7 @@ A reviewer accepts a combined task-and-code change with the task label or an
 approving review. The check names that requirement directly:
 
 ```text
-TASK-4 was written and finished in this pull request; a reviewer reads its definition and accepts it with an approving review or workorder-allow:TASK-4
+TASK-4 was written and finished in this pull request; an approving review clears this (the reviewer reads its definition; a second pull request is not needed), or the label workorder-allow:TASK-4
 ```
 
 A new unfinished task supplying required code receipts keeps its earlier rule:
@@ -917,7 +917,7 @@ retain their own temporary copies.
 
 `done`, `receipt test`, `renew` and explicit `check --run-tests` execute tests
 freshly. Receipts always describe a run executed by that command. Only implicit
-hook runs may reuse a local result, with `(reused from HH:MM UTC)` in the output.
+hook runs may reuse a local result, with `(result reused from the run at HH:MM UTC; nothing it covers changed since)` in the output.
 Plain `check` reads evidence without requesting a test run.
 
 The reuse key covers tracked and untracked non-ignored file contents, paths,
@@ -1029,8 +1029,8 @@ A recorded implementation covers its task's declared `code_paths`. When tasks
 adding implementation/test receipts declare scopes, code outside their combined
 files and folders is refused, including without `--require-task` (light mode).
 For example: `src/unrelated.py is outside the code paths of TASK-2`.
-Only a contributing task's `workorder-allow:scope:TASK-2` label accepts it;
-approval, warning mode, `workorder-allow:TASK-2` and `workorder-allow:no-task` do not.
+An approving review or a contributing task's `workorder-allow:scope:TASK-2` label accepts it;
+warning mode, `workorder-allow:TASK-2` and `workorder-allow:no-task` do not.
 `--require-task-ignore` does not waive scope. An unrelated merge/deployment receipt or an unscoped co-task cannot turn declared
 scopes off. Changes claimed only by legacy tasks without scopes retain their
 existing behavior. Files match exactly; folders include descendants, not siblings.
@@ -1115,12 +1115,17 @@ The check accepts ordinary findings through the review and reports them, for exa
 accepted by an approving review: TASK-3 (new task), tests/test_calc.py (changed lines)
 ```
 
-Approval does not cover old-test failures on new code, assertion findings,
-tests that still pass with changed functions replaced, test-first exceptions,
-reopened tasks whose tests fail, unavailable comparisons, scope findings,
-refactor/verification exemptions not predeclared on the base, or Workorder workflow changes.
-The output names these with `approval did not cover:` and gives the required
-task label (`tests` for an unowned file, `scope:ID` for scope, or `workflow`). Failed current tests and unsupported
+The rule is one sentence: an approving review clears every finding except
+(a) edits, deletions, new skips/xfails or weakening of existing tests (including
+old-test failures on new code) and (b) changes to the Workorder workflow file;
+those two need a label (`workorder-allow:tests` or the narrower `workorder-allow:ID`
+for (a), `workorder-allow:workflow` for (b)). So approval also clears code with no
+task, scope findings, a task written and finished in the same change, assertion
+and stub findings, test-first exceptions, reopened tasks whose tests fail,
+unavailable comparisons and refactor/verification completions not predeclared on
+the base. Each refusal says which applies: `an approving review clears this` or
+`a reviewer accepts it with the label workorder-allow:ID (an approving review is not enough: it edits existing tests)`.
+The output names label-only findings with `approval did not cover:`. Failed current tests and unsupported
 claims still refuse. The checkout uses the event's head commit, so a review for
 an earlier head cannot accept changes on a later head.
 

@@ -202,17 +202,18 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
     steps = [line for line in lines if line.startswith('  Next:')]
     if any('test changed:' in reason for reason in own):
         steps = [f'  Next:     commit the test change, then run workorder renew --task {tid}; '
-                 f'the pull request needs workorder-allow:{tid}']
+                 f'the pull request needs workorder-allow:{tid} (an approving review is not enough: {gate.TEST_EDIT})']
     elif own and not other and all('asserts nothing that can fail' in reason or
-                                  reason.endswith(f'; a reviewer accepts it with the label workorder-allow:{tid}')
+                                  reason.endswith('; ' + gate.label_advice(tid))
                                   for reason in own):
         if any('its test must land on' in reason for reason in own):
             steps = [f'  Next:     land the failing test before the work; to request an exception, '
                      f'run workorder receipt implemented --task {tid} and workorder receipt test --task {tid}, '
-                     f'then set status: DONE in tasks/{tid}.md; the pull request needs workorder-allow:{tid}']
+                     f'then set status: DONE in tasks/{tid}.md; the pull request needs workorder-allow:{tid} '
+                     'or an approving review']
         elif not needs_review:
             steps = [f'  Next:     fix the test, or run workorder done --task {tid} --needs-review; '
-                     f'the pull request needs workorder-allow:{tid}']
+                     f'the pull request needs workorder-allow:{tid} or an approving review']
     print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
 
 
@@ -411,8 +412,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             if exemption:
                 print(f'Note: {exemption}')
         if base and gate.fields_at(root, tid, revision) is None:
-            lines.append(f'  Next:     the pull request needs an approving review or workorder-allow:{tid}; '
-                         'a reviewer reads and accepts the task definition')
+            lines.append('  Next:     the pull-request check will ask for an approving review: this task is new '
+                         f'in this change (the reviewer reads its definition; or the label workorder-allow:{tid}); '
+                         'a second pull request is not needed')
         print("\n".join(lines))
         _, owed, delivery = gate.verdict(root, s.record(root, tid))
         debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""

@@ -48,7 +48,7 @@ def test_implicit_check_reuse_names_original_time(local_repo):
     git(root, 'add', 'tasks', '.workorder')
     result = cli(root, 'check', '--staged')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert re.search(r'\(reused from \d{2}:\d{2} UTC\)', result.stdout), result.stdout
+    assert re.search(r'\(result reused from the run at \d{2}:\d{2} UTC; nothing it covers changed since\)', result.stdout), result.stdout
 
 
 def parallel_pull_requests(root, tmp_path):

@@ -318,7 +318,7 @@ def verdict(root, record, staged=False, *, allow_no_code_change=False):
             problem = no_code_change_problem(root, record, base,
                                              end=implemented.get('seen_on', implemented['commit']))
             if problem and not allow_no_code_change:
-                done.append(reviewer_label(ReviewProblem(problem, f'tasks/{tid}.md', label_only=True), tid))
+                done.append(reviewer_label(ReviewProblem(problem, f'tasks/{tid}.md'), tid))
         if runs and runs[-1].get('no_tests_passed'):
             done.append(f"its test ran but no test passed ({runs[-1]['no_tests_passed']})")
         elif not runs or runs[-1]["exit_code"] != 0 or not runs[-1]["valid"]:
@@ -1469,28 +1469,41 @@ def test_names(tests):
     return ', '.join(dict.fromkeys(test.split('::', 1)[1] for test in tests))
 
 
-@s.cached_read
 def test_origin(root, record, base, label, staged=False):
+    unchanged, text, _ = test_origin_detail(root, record, base, label, staged)
+    return unchanged, text
+
+
+@s.cached_read
+def test_origin_detail(root, record, base, label, staged=False):
+    """Whether the task's test predates the change, a note saying so, and the tests or files it names."""
     paths = selected_test_files(root, record, base, staged)
     existing = paths & repository_files(root, base)
     unchanged = bool(existing) and not changed_test_paths(root, base, paths, staged)
     command = declared_test(record)
+    tid = record['id']
     # An inline test lives in the task's command, rather than in a test file.
     if not paths and command and '-c' in command:
-        unchanged = command == declared_test(fields_at(root, record['id'], base) or {})
-    tid = record['id']
+        before = declared_test(fields_at(root, tid, base) or {})
+        unchanged = command == before
+        if not unchanged and before:
+            return False, f"{tid}'s test command was edited in this change", ()
     if unchanged:
-        return True, f"{tid}'s test landed on {label} before this change and is unchanged"
+        return True, f"{tid}'s test landed on {label} before this change and is unchanged", ()
     additions = [test for test in changed_pytest_tests(root, record, base, staged)
                  if test.split('::', 1)[0] in existing]
-    if additions and not changed_existing_test_paths(root, base, existing, staged):
-        return False, f"{tid}'s new tests were written in this change ({test_names(additions)})"
-    return False, f"{tid}'s test was written in this change"
+    edited = sorted(changed_existing_test_paths(root, base, existing, staged))
+    if additions and not edited:
+        return False, f"{tid}'s new tests were written in this change ({test_names(additions)})", tuple(additions)
+    if edited:
+        # Say what happened: a long-existing file with an edited line was not written here.
+        files = 'test file was' if len(edited) == 1 else 'test files were'
+        return False, f"{tid}'s {files} edited in this change ({', '.join(edited)})", tuple(edited)
+    return False, f"{tid}'s test was written in this change", ()
 
 
 def test_first_problem(tid, label):
-    return (f"{tid}: its test must land on {label}, failing, before the work; "
-            f"a reviewer accepts it with the label workorder-allow:{tid}")
+    return reviewer_label(f"{tid}: its test must land on {label}, failing, before the work", tid, False)
 
 
 ASSERTION_PREFIXES = ('assert', 'verify', 'check', 'expect', 'ensure')
@@ -1690,7 +1703,7 @@ def assertion_problems(root, base, record, staged=False, paths=None, material=No
             if not any(scanner.assertion(node, path, bindings) for node in function.body):
                 problems.append(AssertionProblem(
                     f"{record['id']}: {function.name} in {path} asserts nothing that can fail",
-                    path, function.lineno, label_only=True))
+                    path, function.lineno))
     return problems
 
 
@@ -2021,7 +2034,7 @@ def _run_test(root, command, timeout, counts, *, quiet=False, cache_root=None, l
 
 def test_result(run, counts, *, quiet=False, failures_only=False):
     if run.cached:
-        s.print_once(f"(reused from {run.reused_at} UTC)")
+        s.print_once(f"(result reused from the run at {run.reused_at} UTC; nothing it covers changed since)")
     if not quiet and isinstance(run.returncode, int) and (not failures_only or run.returncode):
         s.print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0)
     if counts is not None:
@@ -2102,9 +2115,8 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
     from .python_imports import ImportFailure
     if isinstance(code, ImportFailure):
         ref = local_test_base(root, record) or 'the target'
-        finding = ComparisonProblem(f'{tid}: could not compare with {ref}: {code}',
-                                    f'tasks/{tid}.md', label_only=True)
-        return ComparisonProblem(reviewer_label(finding, tid), finding.path, label_only=True)
+        finding = ComparisonProblem(f'{tid}: could not compare with {ref}: {code}', f'tasks/{tid}.md')
+        return ComparisonProblem(reviewer_label(finding, tid), finding.path)
     missing = s.missing_test_dependency(declared, code, output, root=root)
     if missing:
         advice = '' if missing.startswith('cannot import') else '; install the test dependencies and run the check again'
@@ -2603,8 +2615,8 @@ class ComparisonProblem(ReviewProblem):
 
 
 def comparison_problem(message, tid, path=None):
-    finding = ComparisonProblem(message, path or f'tasks/{tid}.md', label_only=True)
-    return ComparisonProblem(reviewer_label(finding, tid), finding.path, label_only=True)
+    finding = ComparisonProblem(message, path or f'tasks/{tid}.md')
+    return ComparisonProblem(reviewer_label(finding, tid), finding.path)
 
 
 def test_exit_meaning(code, command):
@@ -2645,15 +2657,39 @@ def comparison_message(line, revision, ref, label):
     return type(line)(text, line.path, line.line, line.label_only) if isinstance(line, ReviewProblem) else text
 
 
-def reviewer_label(problem, tid):
-    approval = '' if getattr(problem, 'label_only', False) else ' (or an approving review)'
-    return problem.split('; a reviewer ', 1)[0] + (
-        f'; a reviewer accepts it with the label workorder-allow:{tid}' + approval)
+# One rule: an approving review clears every finding except edits to existing
+# tests (or their weakening) and Workorder workflow changes; those need a label.
+TEST_EDIT = 'it edits existing tests'
+TEST_WEAKENED = 'it weakens existing tests'
+TEST_EXPECTATION = 'it changes what existing tests expect'
+REVIEW_ADVICE = re.compile(r'; (?:a reviewer |an approving review clears this)')
+
+
+def advice_head(problem):
+    """The finding without its reviewer advice."""
+    match = REVIEW_ADVICE.search(str(problem))
+    return str(problem)[:match.start()] if match else str(problem)
+
+
+def label_advice(label, label_only=False, reason=TEST_EDIT):
+    if label_only:
+        return f'a reviewer accepts it with the label workorder-allow:{label} (an approving review is not enough: {reason})'
+    return f'an approving review clears this, or a reviewer accepts it with the label workorder-allow:{label}'
+
+
+def reviewer_label(problem, tid, label_only=None, reason=None):
+    if label_only is None:
+        label_only = getattr(problem, 'label_only', False)
+    if reason is None:
+        # Relabelling keeps the reason a finding already gives.
+        given = re.search(r'\(an approving review is not enough: ([^()]*)\)$', str(problem))
+        reason = given[1] if given else TEST_EDIT
+    return advice_head(problem) + '; ' + label_advice(tid, label_only, reason)
 
 
 def _accepts_allow_label(problem):
     """A failing current test is refused outright; no label accepts it."""
-    return '; a reviewer accepts ' in problem
+    return re.search(r'; (?:a reviewer accepts |an approving review clears this)', str(problem)) is not None
 
 
 def local_command_problems(root, base, record, staged=False, *, allow_finished=False,
@@ -2663,7 +2699,7 @@ def local_command_problems(root, base, record, staged=False, *, allow_finished=F
             and not s.entries(root, record['id'], rev=base)
             and not [entry for entry in s.entries(root, record['id'], staged) if entry['hash'] not in pending]):
         return []
-    problems = [reviewer_label(f"{record['id']}: {change} since {base}", record['id'])
+    problems = [reviewer_label(f"{record['id']}: {change} since {base}", record['id'], True)
                 for change in requirement_changes(root, base, record, staged)
                 if change.startswith('test changed:')]
     if (not problems or not allow_finished or record['status'] not in FINISHED
@@ -2691,7 +2727,7 @@ def test_update_note(tid, what, refactor=False, renewed=False):
               f'(or workorder done --task {tid} --needs-review)' if refactor
               else f'after committing run workorder renew --task {tid}')
     return (f'{tid}: {what} changed and passes on this code; ' + ('' if renewed else repair + '; ') +
-            f'the pull request needs workorder-allow:{tid}')
+            f'the pull request needs workorder-allow:{tid} (an approving review is not enough: {TEST_EDIT})')
 
 
 def current_test_receipt(root, record, staged=False):
@@ -2805,7 +2841,7 @@ def local_test_problems(root, base, record, *, pending_review=False, command_not
     shared = repository_review_problems(root, base, records(root, kwargs.get('staged', False), errors={}),
         staged=kwargs.get('staged', False), config_only=True)
     compared = test_change_problems(root, base, record, review_configs=False, **kwargs)
-    refactor_edit = reviewer_label(f"{record['id']}: its test files changed; use --needs-review", record['id'])
+    refactor_edit = reviewer_label(f"{record['id']}: its test files changed; use --needs-review", record['id'], True)
     result = kwargs['results'].get(_test_key(record, kwargs.get('timeout')))
     run = latest_test_run(root, record, staged)
     if (command_notes and refactor_edit in compared and record['status'] in FINISHED
@@ -2849,9 +2885,23 @@ def verification_task(root, record, staged=False):
     return latest_test_run(root, record, staged).get('no_code_change') is True
 
 
+# Findings that --review warn never downgrades (assertion, stub, exemption and comparison
+# findings). Before 0.18 they were exactly the label-only ones; an approving review now
+# clears them, but warning mode still does not.
+WARN_EXEMPT = ('could not compare', 'asserts nothing that can fail', 'stubbed out', 'completion needs review',
+               'was reopened while its test fails', 'before the work', 'is outside the code paths of',
+               ': code changed (', 'could not run its test with changed functions')
+
+
+def warn_exempt_finding(message):
+    return any(marker in message for marker in WARN_EXEMPT)
+
+
 def pending_review_message(tid, findings=()):
-    approval = '' if any(item['label_only'] for item in findings) else ' or an approving review'
-    return f'pending review: the pull request needs workorder-allow:{tid}' + approval
+    if any(item['label_only'] for item in findings):
+        return (f'pending review: the pull request needs workorder-allow:{tid} '
+                '(an approving review is not enough: it changes existing tests)')
+    return f'pending review: the pull request needs workorder-allow:{tid} or an approving review'
 
 
 def pending_findings(root, record, base=None, staged=False):
@@ -3002,8 +3052,8 @@ def completion_kind_problem(root, base, record, staged=False):
         return None
     tid = record['id']
     text = f'{tid}: {kind} completion needs review; its definition on the base did not declare kind: {kind}'
-    finding = AssertionProblem(text, f'tasks/{tid}.md', label_only=True)
-    return AssertionProblem(reviewer_label(finding, tid), finding.path, label_only=True)
+    finding = AssertionProblem(text, f'tasks/{tid}.md')
+    return AssertionProblem(reviewer_label(finding, tid), finding.path)
 
 
 def completion_kind_note(root, base, record, staged=False):
@@ -3014,8 +3064,8 @@ def completion_kind_note(root, base, record, staged=False):
         return None
     problem = completion_kind_problem(root, base, record, staged)
     if problem:
-        return (str(problem).split('; a reviewer ', 1)[0]
-                + f"; the pull request needs workorder-allow:{record['id']}")
+        return (advice_head(problem)
+                + f"; the pull request needs workorder-allow:{record['id']} or an approving review")
     return None
 
 
@@ -3093,8 +3143,8 @@ def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None,
     if isinstance(code, ImportFailure):
         ref = local_test_base(root, record) or base
         finding = ComparisonProblem(f"{record['id']}: could not compare with {ref}: {code}",
-                                    f"tasks/{record['id']}.md", label_only=True)
-        return ComparisonProblem(reviewer_label(finding, record['id']), finding.path, label_only=True)
+                                    f"tasks/{record['id']}.md")
+        return ComparisonProblem(reviewer_label(finding, record['id']), finding.path)
     if isinstance(code, str) or code in {5, 124, 127} or uses_pytest(record) and code in {3, 4}:
         return f"{record['id']}: could not run its test with changed functions stubbed out: {test_exit_meaning(code, command)}"
     if code == 0:
@@ -3104,8 +3154,8 @@ def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None,
                 f"({names}); it does not exercise the change")
         if tests:
             text += f"; changed functions: {'; '.join(descriptions)}"
-        finding = AssertionProblem(text, next(iter(overlays)), label_only=True)
-        return AssertionProblem(reviewer_label(finding, record['id']), finding.path, label_only=True)
+        finding = AssertionProblem(text, next(iter(overlays)))
+        return AssertionProblem(reviewer_label(finding, record['id']), finding.path)
     if tests and notes is not None:
         passed = re.findall(r'^PASSED (.+)$', output, re.M)
         passing = [test for test in tests if any(node == test or node.startswith(test + '[') for node in passed)]
@@ -3229,14 +3279,15 @@ def run_ref_test(root, destination, revision, command, timeout, counts, overlays
 def test_change_problems(root, base, record, timeout=None, *, staged=False, strict=False, allow=False,
                          allow_lines=False, run_tests=True, counts=None, notes=None, results=None,
                          completed=False, review_files=True, proven=None, prove_change=False, base_label=None,
-                         allow_failure=None, review_configs=True):
+                         allow_failure=None, review_configs=True, approved=None):
     """Keep comparison errors attached to their task so other tasks are still checked."""
     try:
         return _test_change_problems(root, base, record, timeout, staged=staged, strict=strict, allow=allow,
                                      allow_lines=allow_lines, run_tests=run_tests, counts=counts, notes=notes,
                                      results=results, completed=completed, review_files=review_files,
                                      proven=proven, prove_change=prove_change, base_label=base_label,
-                                     allow_failure=allow_failure, review_configs=review_configs)
+                                     allow_failure=allow_failure, review_configs=review_configs,
+                                     approved=approved)
     except (OSError, s.Refused, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as error:
         if notes is not None:
             notes.append(f"{record['id']}: REF comparison skipped against {base}: {error}")
@@ -3247,16 +3298,19 @@ def test_change_problems(root, base, record, timeout=None, *, staged=False, stri
 def _test_change_problems(root, base, record, timeout=None, *, staged=False, strict=False, allow=False,
                           allow_lines=False, run_tests=True, counts=None, notes=None, results=None,
                           completed=False, review_files=True, proven=None, prove_change=False, base_label=None,
-                          allow_failure=None, review_configs=True):
+                          allow_failure=None, review_configs=True, approved=None):
     """Review changed tests and compare both versions on current code without writing receipts.
 
-    Allow accepts reviewed edits, REF failures and outcome changes, never a current-test failure.
-    allow_lines accepts every changed test line, including lines owned by a task.
+    Allow (the task's label) accepts reviewed edits, REF failures and outcome changes, never a
+    current-test failure. allow_lines accepts every changed test line, including lines owned by a task.
+    approved (the label or an approving review) accepts the other findings: weak tests, exemptions
+    and unavailable comparisons. It defaults to allow.
     """
     notes = [] if notes is None else notes
     results = {} if results is None else results
     tid = record['id']
     base_label = base_label or base
+    approved = (allow if allow_failure is None else allow_failure) if approved is None else approved
     with s.read_scope(root):
         protected = strict_test_files(root, record, base, staged)
         paths = sorted(changed_test_paths(root, base, protected, staged))
@@ -3291,15 +3345,15 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
         if run.get('no_code_change') is True and not identities & carried:
             exemption_problem = no_code_change_problem(root, record, base, staged)
             if exemption_problem:
-                if allow if allow_failure is None else allow_failure:
-                    notes.append(exemption_problem + ' (allowed by workorder-allow:' + tid + ')')
+                if approved:
+                    notes.append(exemption_problem + ' (allowed)')
                 else:
-                    problems.append(reviewer_label(ReviewProblem(exemption_problem, f'tasks/{tid}.md', label_only=True), tid))
+                    problems.append(reviewer_label(ReviewProblem(exemption_problem, f'tasks/{tid}.md'), tid))
         for problem in assertions if review_files else []:
-            if allow if allow_failure is None else allow_failure:
-                notes.append(str(problem) + ' (allowed by workorder-allow:' + tid + ')')
+            if approved:
+                notes.append(str(problem) + ' (allowed)')
             else:
-                problems.append(AssertionProblem(reviewer_label(problem, tid), problem.path, problem.line, True))
+                problems.append(AssertionProblem(reviewer_label(problem, tid), problem.path, problem.line))
         refactor = latest_test_run(root, record, staged).get('refactor') is True
         compare = changed_existing_test_paths if existing_only else changed_test_paths
         refactor_changes = refactor and compare(root, base, refactor_test_files(root, record, base, staged), staged)
@@ -3313,26 +3367,29 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
         finishing = completed or record['status'] in FINISHED
         new_completion = completed or completion_changed(root, base, record, staged)
 
-        def review(line, what='it', lines=False, label_only=False):
-            accepted = (allow if allow_failure is None else allow_failure) if label_only else allow or (allow_lines and lines)
+        def review(line, what='it', lines=False, reason=TEST_EDIT, approvable=False):
+            # Edits and weakening of existing tests need a label; other findings clear with approval.
+            label_only = not approvable
+            accepted = approved if approvable else (
+                (allow if allow_failure is None else allow or allow_failure) or (allow_lines and lines))
             if accepted:
                 notes.append(line + ' (allowed)')
                 notes.append(f'accepted: {tid} ({what if what != "it" else "test review"})')
             else:
                 path = next(iter(paths or sorted(protected)), f'tasks/{tid}.md')
                 finding = review_problem(root, base, line, path, staged, label_only)
-                problems.append(ReviewProblem(reviewer_label(finding, tid), finding.path, finding.line, label_only))
+                problems.append(ReviewProblem(reviewer_label(finding, tid, reason=reason), finding.path,
+                                              finding.line, label_only))
 
         def unavailable(code):
             from .python_imports import ImportFailure
             if not isinstance(code, ImportFailure):
                 return False
-            if allow if allow_failure is None else allow_failure:
+            if approved:
                 notes.append(f'{tid}: could not compare with {base}: {code} (allowed)')
             else:
-                finding = ComparisonProblem(f'{tid}: could not compare with {base}: {code}',
-                                            f'tasks/{tid}.md', label_only=True)
-                problems.append(ComparisonProblem(reviewer_label(finding, tid), finding.path, label_only=True))
+                finding = ComparisonProblem(f'{tid}: could not compare with {base}: {code}', f'tasks/{tid}.md')
+                problems.append(ComparisonProblem(reviewer_label(finding, tid), finding.path))
             return True
 
         def addition_rule():
@@ -3370,7 +3427,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             if failed:
                 test_failure(failed)
             for line in pytest_skip_problems(root, base, record, paths, staged, timeout=timeout, counts=counts):
-                review(line, lines=True)
+                review(line, lines=True, reason=TEST_WEAKENED)
             base_command = declared_test(before) if before else None
 
             def ref_code_result(ref_command, overlays=None):
@@ -3388,8 +3445,8 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                 stub = stub_problem(root, base, record, staged=staged, timeout=timeout, counts=counts,
                                     results=results, notes=notes)
                 if stub:
-                    if allow if allow_failure is None else allow_failure:
-                        notes.append(str(stub) + ' (allowed by workorder-allow:' + tid + ')')
+                    if approved:
+                        notes.append(str(stub) + ' (allowed)')
                     else:
                         problems.append(stub)
             if ((new_completion or prove_change) and task_change_touched(root, base, record, staged)
@@ -3443,7 +3500,8 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                 elif own_code == 0:
                     subject = (f'its new or changed tests ({test_names(tests)}) pass' if tests else 'its test passes')
                     review(f"{tid}: {subject} on {base}'s code too, so it does not show the change works; "
-                           'make the test check the new behaviour', 'this refactor or verification task')
+                           'make the test check the new behaviour', 'this refactor or verification task',
+                           approvable=True)
                 elif not assertions and own_code != 5 and proven is not None:
                     proven.add(tid)
             # There is nothing to rerun when all selected test files are new.
@@ -3500,7 +3558,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                     if finishing:
                         s.print_test_output(base_output, failed=True, label=f'Tests from {base_label} on this code:')
                         review(f'{tid}: its tests from {base} fail on this code',
-                               'this intended behavior change or test rename', label_only=True)
+                               'this intended behavior change or test rename', reason=TEST_EXPECTATION)
                     else:
                         notes.append(f'{tid}: its tests already fail on {base} code; this change is not blamed for that failure')
                     return problems
@@ -3508,7 +3566,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                     s.print_test_output(base_output, failed=True, label=f'Tests from {base_label} on this code:')
                 if paths or finishing:
                     review(f'{tid}: its tests from {base} fail on this code',
-                           'this intended behavior change or test rename', label_only=True)
+                           'this intended behavior change or test rename', reason=TEST_EXPECTATION)
                 else:
                     test_failure(f'{tid}: its tests from {base} fail on this code')
                 return problems
@@ -3528,11 +3586,11 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                 else:
                     if new_counts['passed'] < old_counts['passed']:
                         review(f"{tid}: fewer tests pass than at {base} ({old_counts['passed']} -> {new_counts['passed']})",
-                               'this reduced pass count')
+                               'this reduced pass count', reason=TEST_WEAKENED)
                     for outcome in ('skipped', 'xfailed', 'deselected'):
                         if new_counts[outcome] > old_counts[outcome]:
                             review(f'{tid}: more tests are {outcome} than at {base} ({old_counts[outcome]} -> {new_counts[outcome]})',
-                                   f'this increase in {outcome} tests')
+                                   f'this increase in {outcome} tests', reason=TEST_WEAKENED)
     except (OSError, s.Refused, ValueError, subprocess.SubprocessError) as error:
         notes.append(f'{tid}: REF comparison skipped against {base}: {error}')
         problems.append(comparison_problem(f'{tid}: could not compare its changed tests with {base}: {error}', tid))
@@ -3766,6 +3824,38 @@ def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all
     return line
 
 
+def attribute_origins(notes, origins, worked):
+    """Attribute new or edited tests in a shared test file to the tasks this change works on.
+
+    Every task whose command selects a shared file names the same tests; a task this change does
+    not touch keeps its note only when no touched task names them. Remaining tasks naming the
+    same tests share one note.
+    """
+    claimed = {test for tid, (_, tests) in origins.items() if tid in worked for test in tests}
+    kept = {tid: origin for tid, (origin, tests) in origins.items()
+            if tid in worked or not tests or not set(tests) <= claimed}
+    groups = {}
+    for tid, (origin, tests) in origins.items():
+        if tid in kept and tests:
+            groups.setdefault((origin.removeprefix(tid), tests), []).append(tid)
+    replace = {}
+    for (rest, tests), owners in groups.items():
+        if len(owners) > 1:
+            shared = ', '.join(owners)
+            text = rest.removeprefix("'s ")
+            replace[owners[0]] = f'{text[:1].upper()}{text[1:]}; shared by {shared}'
+            for other in owners[1:]:
+                replace[other] = None
+    result = []
+    for note in notes:
+        owner = next((tid for tid, (origin, _) in origins.items() if note == origin), None)
+        if owner is None:
+            result.append(note)
+        elif owner in kept and replace.get(owner, note) is not None:
+            result.append(replace.get(owner, note))
+    return result
+
+
 def summarize_notes(notes, verbose=False):
     """Group identical kinds of task notes, retaining the full lines with --verbose."""
     notes = list(dict.fromkeys(notes))
@@ -3862,15 +3952,16 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
                                                  timeout=timeout, counts=counts)
         if config_only and not any('pytest configuration changed' in line for line in config_lines):
             continue
+        # Labels accept edits of existing tests; an approving review (in allow) accepts the rest.
         labels = set(allow if explicit_allow is None else explicit_allow)
-        accepted_assertion = bool(set(named) & labels) if named else 'tests' in labels
+        accepted_assertion = bool(set(named) & set(allow)) if named else 'tests' in allow
         for problem in assertion_problems(root, base, tests_record, staged, paths={path}, material=material):
             if accepted_assertion:
                 if notes is not None:
-                    notes.append(str(problem) + ' (allowed by explicit label)')
+                    notes.append(str(problem) + ' (allowed)')
             else:
                 problems.append(AssertionProblem(reviewer_label(problem, named[0] if named else 'tests'),
-                                                 path, problem.line, True))
+                                                 path, problem.line))
         is_config = any('pytest configuration changed' in line for line in config_lines)
         finished = any((fields_at(root, tid, base) or {}).get('status') in FINISHED for tid in named)
         edits = None if is_config else test_file_changes(root, base, tests_record, staged, strict_tests,
@@ -3879,17 +3970,17 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
             try:
                 failure = unowned_test_failure(root, base, path, material, staged, timeout, counts)
             except (s.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
-                if 'tests' in labels:
+                if 'tests' in allow:
                     if notes is not None:
                         notes.append(str(error) + ' (allowed by workorder-allow:tests)')
                 else:
                     problems.append(comparison_problem(str(error), 'tests', path))
                 failure = None
             if failure:
-                labels = allow if explicit_allow is None else explicit_allow
                 if 'tests' not in labels:
                     finding = review_problem(root, base, failure, path, staged, label_only=True)
-                    problems.append(ReviewProblem(reviewer_label(finding, 'tests'), path, finding.line, True))
+                    problems.append(ReviewProblem(reviewer_label(finding, 'tests', reason=TEST_EXPECTATION),
+                                                  path, finding.line, True))
                 elif notes is not None:
                     notes.append(f'{failure} (allowed by workorder-allow:tests)')
                 edits = None
@@ -3898,9 +3989,10 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
             line_owners = config_named if line in config_lines and 'pytest configuration changed' in line else named
             if line_owners != named:
                 line = (', '.join(line_owners) or 'tests') + line[len(label):]
-            if 'tests' not in allow and not set(line_owners) & set(allow):
+            if 'tests' not in labels and not set(line_owners) & labels:
                 problems.append(review_problem(root, base,
-                    reviewer_label(line, line_owners[0] if line_owners else 'tests'), path, staged))
+                    reviewer_label(line, line_owners[0] if line_owners else 'tests', True), path, staged,
+                    label_only=True))
             elif notes is not None:
                 notes.append(f'accepted: {path} (changed lines)')
     return problems
@@ -3930,10 +4022,8 @@ def code_path_problems(root, base, changed, code, all_records, staged, allow, no
         if {'scope:' + tid for tid in scoped} & set(allow):
             notes.append(f'accepted: {path} (outside code paths of {", ".join(scoped)})')
         else:
-            finding = AssertionProblem(f'{path} is outside the code paths of {", ".join(scoped)}', path,
-                                       label_only=True)
-            problems.append(AssertionProblem(reviewer_label(finding, 'scope:' + scoped[0]), path,
-                                             label_only=True))
+            finding = AssertionProblem(f'{path} is outside the code paths of {", ".join(scoped)}', path)
+            problems.append(AssertionProblem(reviewer_label(finding, 'scope:' + scoped[0]), path))
     return problems
 
 
@@ -3975,8 +4065,8 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
         notes += ['approval did not cover: ' + str(problem) for problem in problems
                   if getattr(problem, 'label_only', False)]
     accepted_comparisons = [problem for problem in problems
-                           if isinstance(problem, ComparisonProblem) and problem.split(':', 1)[0] in explicit_allow]
-    notes += [str(problem) + ' (allowed by explicit label)' for problem in accepted_comparisons]
+                           if isinstance(problem, ComparisonProblem) and problem.split(':', 1)[0] in allow]
+    notes += [str(problem) + ' (allowed)' for problem in accepted_comparisons]
     problems = [problem for problem in problems if problem not in accepted_comparisons]
     warnings = [problem for problem in problems if isinstance(problem, ReviewProblem)
                 and not isinstance(problem, (TestFirstProblem, AssertionProblem, ComparisonProblem))] if base and review == 'warn' else []
@@ -4050,7 +4140,8 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             current = _test_bytes(root, path, staged=staged) or b''
             if (path == '.github/workflows/workorder.yml'
                     or b'python -m workorder.review_labels' in previous + current):
-                text = f'{path}: Workorder workflow changed; a reviewer accepts it with the label workorder-allow:workflow'
+                text = (f'{path}: Workorder workflow changed; '
+                        + label_advice('workflow', True, 'it changes the Workorder workflow'))
                 if 'workflow' in explicit_allow:
                     notes.append(text + ' (allowed)')
                 else:
@@ -4072,12 +4163,13 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 new_tasks.clear()
             elif code and not recorded and not new_tasks:
                 problems.append('this change edits code but no task records it with a new implemented or test receipt; '
-                                'run workorder receipt implemented --task ID or workorder receipt test --task ID')
+                                'run workorder receipt implemented --task ID or workorder receipt test --task ID; '
+                                + label_advice('no-task'))
                 advice = renewal_advice(root, base, changed, staged)
                 if advice:
                     problems.append(advice)
         if scope_code:
-            problems += code_path_problems(root, base, changed, scope_code, all_records, staged, explicit_allow, notes)
+            problems += code_path_problems(root, base, changed, scope_code, all_records, staged, allow, notes)
     stray = [path for path in s.files(root, "tasks", staged) if not path.endswith(".md")
              and (changed is None or path in changed)]
     problems += [f"{path}: only task files belong in tasks/; a file here is outside the code fingerprint,"
@@ -4108,7 +4200,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             problems.append(f'{tid}: no test files are known for its test; set test_paths')
         problems += repository_review_problems(root, base, all_records, staged, allow, strict_tests, errors, notes,
                                                run_tests, timeout, counts, explicit_allow)
-    views = Views(root, all_records, staged, allow_no_code_change=explicit_allow if base else ())
+    views = Views(root, all_records, staged, allow_no_code_change=allow if base else ())
     # Include removed receipts and ledgers whose task file was also removed.
     paths = set(s.receipt_paths(root, rev="HEAD")) | set(s.receipt_paths(root, staged))
     tids = {s.receipt_task(path) for path in paths
@@ -4165,6 +4257,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         visiting.remove(tid)
         visited.add(tid)
 
+    origins = {}
     for tid, record in sorted(all_records.items()):
         if tid not in selected or tid in errors:
             continue
@@ -4202,7 +4295,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         if base:
             exemption = completion_kind_problem(root, base, record, staged)
             if exemption:
-                if tid in explicit_allow:
+                if tid in allow:
                     notes.append(str(exemption) + ' (allowed)')
                 else:
                     problems.append(exemption)
@@ -4213,29 +4306,30 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 failure = (run_declared_test(root, record, counts, notes, results=results, timeout=timeout)
                            if declared_test(record) else None)
                 if failure:
-                    text = (f'{tid} was reopened while its test fails on this code; '
-                            f'a reviewer accepts it with the label workorder-allow:{tid}')
-                    if tid in explicit_allow:
+                    text = f'{tid} was reopened while its test fails on this code; ' + label_advice(tid)
+                    if tid in allow:
                         notes.append(text + ' (allowed)')
                     else:
-                        problems.append(AssertionProblem(text, f'tasks/{tid}.md', label_only=True))
+                        problems.append(AssertionProblem(text, f'tasks/{tid}.md'))
             if record['status'] in FINISHED:
-                unchanged, origin = test_origin(root, record, base, base_label or base, staged)
+                unchanged, origin, origin_tests = test_origin_detail(root, record, base, base_label or base, staged)
                 notes.append(origin)
-                if require_test_first and not unchanged and tid not in explicit_allow:
+                origins[tid] = origin, origin_tests
+                if require_test_first and not unchanged and tid not in allow:
                     problems.append(TestFirstProblem(test_first_problem(tid, base_label or base),
-                                                     f'tasks/{tid}.md', label_only=True))
+                                                     f'tasks/{tid}.md'))
             if (tid in worked or strict_test_files(root, record, base, staged) & changed
                     or record['status'] in FINISHED and task_change_touched(root, base, record, staged)):
                 problems += test_change_problems(root, base, record, timeout, staged=staged,
-                                                 strict=strict_tests, allow=tid in allow,
-                                                 allow_lines='tests' in allow, run_tests=run_tests,
+                                                 strict=strict_tests, allow=tid in explicit_allow,
+                                                 allow_lines='tests' in explicit_allow, run_tests=run_tests,
                                                  counts=counts, notes=notes, results=results, review_files=False,
                                                  proven=proven, prove_change=tid in new_tasks, base_label=base_label,
-                                                 allow_failure=tid in explicit_allow)
+                                                 allow_failure=tid in explicit_allow, approved=tid in allow)
             if fields_at(root, tid, base) is None and record["status"] in FINISHED:
-                line = (f'{tid} was written and finished in this pull request; a reviewer reads its definition '
-                        f'and accepts it with an approving review or workorder-allow:{tid}')
+                line = (f'{tid} was written and finished in this pull request; an approving review clears this '
+                        f'(the reviewer reads its definition; a second pull request is not needed), '
+                        f'or the label workorder-allow:{tid}')
                 if tid in allow:
                     notes.append(line + " (definition allowed)")
                     notes.append(f'accepted: {tid} (new task)')
@@ -4244,8 +4338,8 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             elif fields_at(root, tid, base) is None and tid in new_tasks:
                 # Keep the existing receipt rule for unfinished tasks. Only a
                 # new finished claim always needs definition acceptance.
-                line = (f'{tid} is new in this pull request: a reviewer accepts its definition with the label '
-                        f'workorder-allow:{tid} (or an approving review)')
+                line = (f'{tid} is new in this pull request; an approving review clears this (the reviewer '
+                        f'reads its definition), or the label workorder-allow:{tid}')
                 if tid in proven:
                     notes.append(f'{tid} is new in this pull request; its test fails on {base} and passes now')
                 elif tid in allow:
@@ -4262,19 +4356,20 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                     notes.append(f'accepted: {tid} (pending review)')
                 else:
                     counts.setdefault('_pending_findings', []).extend(item['message'] for item in findings)
-                    if label_only:
-                        problems.append(AssertionProblem(line, f'tasks/{tid}.md', label_only=True))
+                    if label_only or any(warn_exempt_finding(item['message']) for item in findings):
+                        problems.append(AssertionProblem(line, f'tasks/{tid}.md', label_only=label_only))
                     else:
                         problems.append(review_problem(root, base, line, f'tasks/{tid}.md', staged))
             for change in requirement_changes(root, base, record, staged):
                 line = f"{tid}: {change} since {base}"
-                if tid in allow:
+                test_edit = change.startswith(('test changed:', 'test_paths changed'))
+                if tid in (explicit_allow if test_edit else allow):
                     notes.append(line + " (allowed)")
                     notes.append(f'accepted: {tid} ({change})')
                 else:
-                    problem = reviewer_label(line, tid)
-                    if change.startswith(('test changed:', 'test_paths changed')):
-                        problem = review_problem(root, base, problem, f'tasks/{tid}.md', staged)
+                    problem = reviewer_label(line, tid, test_edit)
+                    if test_edit:
+                        problem = review_problem(root, base, problem, f'tasks/{tid}.md', staged, label_only=True)
                     problems.append(problem)
         elif staged:
             if waiting_for_review(root, record, staged):
@@ -4314,6 +4409,8 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             failed = run_declared_test(root, record, counts, notes, strict_tests, results, timeout=timeout)
             if failed:
                 problems.append(failed)
+    if origins:
+        notes[:] = attribute_origins(notes, origins, worked)
     if all_tests:
         for record in all_records.values():
             if record['status'] in FINISHED:
