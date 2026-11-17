@@ -155,7 +155,7 @@ def test_identical_task_and_project_command_runs_project_once_after_own_test(loc
                    '    assert app.feature is True\n')
     settings(root, 'python -m pytest -q tests/test_own.py')
     commit_all(root)
-    output = ok(root, 'done', '--task', 'TASK-1', '--needs-review')
+    output = ok(root, 'done', '--task', 'TASK-1', '--needs-review', '--project-test')
     assert store.record(root, 'TASK-1')['status'] == 'DONE', output
     lines = log.read_text().splitlines()
     assert lines[:2] == ['own:True', 'project:True'], lines
@@ -165,7 +165,7 @@ def test_identical_task_and_project_command_runs_project_once_after_own_test(loc
 def test_done_refuses_project_regression_after_own_test_and_rolls_back(local_repo):
     root = local_repo
     log = project(root, with_task=True)
-    result = cli(root, 'done', '--task', 'TASK-1')
+    result = cli(root, 'done', '--task', 'TASK-1', '--project-test')
     output = result.stdout + result.stderr
     assert result.returncode == 1, output
     assert FAILURE in output
@@ -177,7 +177,7 @@ def test_done_refuses_project_regression_after_own_test_and_rolls_back(local_rep
 def test_done_runs_a_passing_project_command_once(local_repo):
     root = local_repo
     log = project(root, with_task=True, broken_head=False)
-    output = ok(root, 'done', '--task', 'TASK-1')
+    output = ok(root, 'done', '--task', 'TASK-1', '--project-test')
     assert store.record(root, 'TASK-1')['status'] == 'DONE', output
     assert log.exists(), output
     assert log.read_text().splitlines() == ['project:True', 'unrelated:True']

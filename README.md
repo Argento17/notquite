@@ -109,9 +109,9 @@ Run `workorder init` in every clone: Git does not clone hooks. It installs the p
 
 ## Speed
 
-`done` runs the task's test three times: on the new code, on the code before the change, and with the change stubbed out. The pre-commit hook adds under a second per commit.
+`done` runs only the task's own test: on the new code, the code before the change and the change stubbed out, at the same time (`--jobs`). An unchanged base result is reused. The pre-commit hook adds under a second per commit.
 
-**The whole test suite runs by default.** When `init` finds pytest, it turns on the project test: `done` and the pull-request check also run your full suite once. So every `done` takes at least as long as your suite. If your suite takes minutes, turn it off with `workorder init --no-project-test`, or choose a faster command with `workorder init --project-test "CMD"`.
+**Your whole suite runs once, in the pull-request check.** When `init` finds pytest, it turns on the project test, which `check --run-tests` runs, refusing new failures; `done --project-test` runs it on request. Turn it off with `workorder init --no-project-test`, or choose a faster command with `workorder init --project-test "CMD"`. `done` and the check print a `Time:` line.
 
 ## What it does not do
 

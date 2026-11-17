@@ -5,13 +5,14 @@ from __future__ import annotations
 from .console import print
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 
-from . import __version__, console, gate
+from . import __version__, console, gate, timing
 from . import store as s
 
 
@@ -63,6 +64,8 @@ def parser():
     done.add_argument('--verbose', action='store_true', help='print every finding and all test output instead of a summary')
     done.add_argument('--take-over', action='store_true',
                       help="finish a task another clone has claimed; the takeover is added to its Progress notes")
+    done.add_argument('--project-test', action='store_true',
+                      help="also run the project test (your full suite); by default it runs in the pull-request check")
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
     new.add_argument("--owner", required=True)
@@ -253,9 +256,10 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
 @s.test_output_session()
 @s.completion_transaction
 def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_change=False, refactor=False,
-                require_test_first=False, jobs=None, take_over=False):
+                require_test_first=False, jobs=None, take_over=False, project_test=False):
     """Use the same evidence and claim checks as the individual commands, restoring status on refusal."""
     status = None
+    pool = None
     try:
         record = s.record(root, tid)
         status = record['status']
@@ -351,13 +355,16 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             done_refusal(tid, status, lines, needs_review=needs_review)
             return 1
         from . import project_tests
-        project_notes = []
-        project_problems = project_tests.run(root, base=revision if base else None, label=base,
-                                             notes=project_notes, timeout=timeout)
-        console.print_lines(project_notes, prefix='Note: ')
-        if project_problems:
-            done_refusal(tid, status, [f'  Missing:  {problem}' for problem in project_problems])
-            return 1
+        if project_test:
+            project_notes = []
+            project_problems = project_tests.run(root, base=revision if base else None, label=base,
+                                                 notes=project_notes, timeout=timeout)
+            console.print_lines(project_notes, prefix='Note: ')
+            if project_problems:
+                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in project_problems])
+                return 1
+        else:
+            print('Note: ' + project_tests.deferred_line(root))
         print("Acceptance:")
         print(filled["Acceptance"])
         exempt = refactor or no_code_change or record.get('kind') in ('refactor', 'verification')
@@ -368,8 +375,14 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                             f'then run workorder done --task {tid} again'])
             return 1
         print(tied or "Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
-        results = {}
+        results = gate.ConcurrentResults()
         notes = []
+        if base and (jobs or 3) > 1:
+            # The new-code copy, base-code and stubbed runs are independent: run them at the same time.
+            # Their output is printed in the usual order when each result is read.
+            pool = ThreadPoolExecutor(max_workers=min(jobs or 3, 3) - 1)
+            gate.prefetch_comparison(root, gate.comparison_base(root, base)[0], record, results, pool,
+                                     timeout=timeout)
         stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results, notes=notes)
         if stub and needs_review and gate._accepts_allow_label(stub):
             pending_findings.append(stub)
@@ -399,8 +412,10 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                     # File findings for this task are supplied by its comparison below.
                     if owner != tid:
                         notes.append(line)
-            problems = gate.local_test_problems(root, base, record, timeout=timeout, notes=notes,
-                                                completed=True, pending_review=needs_review, results=results)
+            with s.base_reuse():
+                # The base code does not change while someone works: an unchanged base run is reused.
+                problems = gate.local_test_problems(root, base, record, timeout=timeout, notes=notes,
+                                                    completed=True, pending_review=needs_review, results=results)
             problems += gate.local_regression_problems(root, base, exclude={tid}, timeout=timeout,
                                                        notes=notes, results=results, pending_review=needs_review, jobs=jobs)
             if not needs_review:
@@ -442,6 +457,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 done_refusal(tid, status, [f'  Missing:  {problem}' for problem in changed_command],
                              needs_review=needs_review)
                 return 1
+        if pool is not None:
+            # No background run may still be reading the work tree while the task file changes.
+            pool.shutdown(wait=True)
         if needs_review:
             s.annotate_pending_review(root, tid, pending_findings)
         path = s.local_path(root, f"tasks/{tid}.md")
@@ -488,6 +506,10 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
         done_refusal(tid, status, [f"  Missing:  {error}"], needs_review=needs_review)
         return 1
+    finally:
+        if pool is not None:
+            # A run that a refusal made unnecessary finishes in its own copy and is ignored.
+            pool.shutdown(wait=True, cancel_futures=True)
 
 
 @s.read_session()
@@ -500,8 +522,14 @@ def main(argv=None):
     options = parser().parse_args(args)
     hint = ('set WORKORDER_VERBOSE=1 to print it all' if options.action == 'hook'
             else 'rerun with --verbose to print it all')
-    with console.session(verbose=getattr(options, 'verbose', False), hint=hint) as run:
-        return run_command(options, command, run)
+    timed = options.action == 'done' or options.action == 'check' and options.run_tests
+    with console.session(verbose=getattr(options, 'verbose', False), hint=hint) as run, \
+            timing.session() as clock:
+        code = run_command(options, command, run)
+        if timed and clock.opened:  # a refusal before any run has no time to show
+            # On stderr: a diagnostic about this run, not part of its findings.
+            print(timing.line(clock), file=sys.stderr)
+        return code
 
 
 def run_command(options, command, run):
@@ -541,7 +569,7 @@ def run_command(options, command, run):
         elif options.action == "done":
             return finish_task(root, s.task_id(options.task), options.note, options.timeout,
                                options.needs_review, options.no_code_change, options.refactor, options.require_test_first, options.jobs,
-                               take_over=options.take_over)
+                               take_over=options.take_over, project_test=options.project_test)
         elif options.action == "new":
             shared = s.has_origin(root) and not options.local
             if options.test_paths is None and gate.wrapper_paths({'test': options.test}) is not None:

@@ -43,7 +43,7 @@ def output_project(root, *, broken_head=True, broken_base=False, quiet='-q'):
 
 
 def run_action(root, action):
-    flags = ('done', '--task', 'TASK-1') if action == 'done' else (
+    flags = ('done', '--task', 'TASK-1', '--project-test') if action == 'done' else (
         'check', '--base', 'origin/main', '--run-tests')
     return cli(root, *flags)
 
@@ -91,7 +91,7 @@ def test_passing_project_prints_one_line_with_pytest_counts(local_repo, action, 
     result = run_action(root, action)
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
-    lines = [line for line in output.splitlines() if 'project test' in line]
+    lines = [line for line in output.splitlines() if 'project test' in line and not line.startswith('Time:')]
     assert len(lines) == 1, output
     assert re.fullmatch(r'Note: the project test passed on this code '
                         r'\(61 passed, 1 skipped, 1 xfailed in [\d.]+s\)', lines[0]), output

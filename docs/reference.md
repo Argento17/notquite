@@ -29,7 +29,7 @@ Contents: [Commands](#commands) · [Task files](#task-files) ·
 |---|---|
 | `workorder init [--check] [--force] [--claude] [--update-workflow] [--light] [--test-first] [--project-test CMD \| --no-project-test]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs the pre-commit hook, and writes the workflow if absent. A first init that finds pytest sets the project test `python -m pytest -q` ([project test](#current-runs-cache-and-summaries)); `--project-test` stores another command in `.workorder/config.json`, `--no-project-test` turns it off. `--update-workflow` rewrites the workflow and shows a diff (only a preview with `--check`). `--check` reports missing setup without writing and exits 1 if incomplete. `--force` keeps a different hook as `pre-commit.workorder-previous` and calls it first. `--claude` merges hooks into `.claude/settings.json` |
 | `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple] [--test COMMAND] [--test-paths PATH ...] [--code-paths PATH ...] [--acceptance TEXT ...] [--kind feature\|fix\|refactor\|verification] [--local] [--test-first]` | Reserves the next id on `origin`, or numbers it locally with no `origin` or with `--local` (no tag pushed), and writes `tasks/<id>.md` (extended by default; `simple` writes the seven required fields). `ships` defaults to `none`. `--acceptance` (repeatable) writes Acceptance items; `--kind` writes `kind` (none by default) |
-| `workorder done --task ID [--note TEXT] [--timeout SECONDS] [--jobs N] [--needs-review] [--no-code-change] [--refactor] [--require-test-first] [--take-over] [--verbose]` | Runs the declared test and writes DONE, receipts and the note together when the evidence supports it; a refusal changes nothing. Prints the Acceptance list for confirmation. Never commits or pushes |
+| `workorder done --task ID [--note TEXT] [--timeout SECONDS] [--jobs N] [--needs-review] [--no-code-change] [--refactor] [--require-test-first] [--take-over] [--project-test] [--verbose]` | Runs the declared test and writes DONE, receipts and the note together when the evidence supports it; a refusal changes nothing. Prints the Acceptance list for confirmation. Never commits or pushes |
 | `workorder show --task ID [--verbose]` | The task as a record: claimed and evidence status, what is owed, dependencies, kind, mission, summary, next, body sections, a dated receipt timeline, any computed merge and Progress. Prints a next step for owed evidence or unclaimed Acceptance work |
 | `workorder note --task ID [--next TEXT] [NOTE]` | Sets `next`, adds `- YYYY-MM-DD: NOTE` to Progress, or both |
 | `workorder renew --task ID [--refactor \| --no-refactor] [--timeout SECONDS] [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded |
@@ -828,12 +828,30 @@ block or `project_test` yet) that finds pytest configuration (pyproject.toml
 (`python3` if only that is on PATH; pytest applies `testpaths`) and says so, or leaves it off and says so when
 that interpreter lacks pytest. `init --no-project-test` keeps it off or removes
 it; later plain `init` runs leave it. Commit the configuration. It runs freshly in
-`done` and `check --run-tests`, not pre-commit, and writes no receipt.
+`check --run-tests` (the pull-request check) and in `done --project-test`, not in plain
+`done` or pre-commit, and writes no receipt. Plain `done` says `the project test runs in
+the pull-request check (check --run-tests), not in done; run done --project-test to run it now`.
 
-**Speed.** The project test adds one full run of your suite to every `done` and to
-the pull-request check, so each takes at least as long as the suite. For a suite
-that takes minutes, run `workorder init --no-project-test`, or set a faster command
-with `workorder init --project-test "CMD"`.
+**Speed.** The project test adds one full run of your suite to the pull-request
+check (and to `done --project-test`), so it takes at least as long as the suite. For a
+suite that takes minutes, run `workorder init --no-project-test`, or set a faster
+command with `workorder init --project-test "CMD"`. Plain `done` runs only the task's
+own test:
+
+- The new-code copy, base-code and stubbed-out runs run at the same time, up to
+  `--jobs` (default 3); output keeps the usual order.
+- The base-code result is kept in Git's private directory, keyed by the base commit's
+  tree, the overlaid test files' content, the command, timeout, Git settings and the
+  test interpreter (path, version, `sys.path`, site-packages entries, `.pth` contents,
+  Python and pytest environment variables). A second `done` on the same base reuses it
+  (`result reused from the run at ...`); any differing input, or CI, runs it again.
+- Runs that only show a failure stop at the first one (pytest `-x`): the base-code run,
+  and the stubbed-out run when no new or changed tests are selected. The others run in full.
+- Comparison copies share the object store (`git clone --shared`); files, index and Git
+  directory stay separate.
+
+`done` and `check --run-tests` end with one stderr line, for example `Time: 3.3s: setup
+0.6s, new code 2.3s, base code 1.0s, stubbed 2.1s, project test not run, runs overlapped`.
 
 For a failing pytest command, only the failing nodes rerun on the base: a test
 failing there too is a Note; one that passed there is a new regression. Missing
@@ -853,11 +871,13 @@ With no changed task the summary says `no task changed in this change; ran 2
 finished tasks' declared tests`. New workflows enable `--all-tests`.
 
 `--jobs N` (`check`, `done`) runs distinct current commands concurrently; the
-default is the CPU count (one if unknown). Identical commands and timeouts share
+default is the CPU count (one if unknown). In `done` it also bounds the task's own
+new-code copy, base-code and stubbed-out runs (default 3). Identical commands and timeouts share
 a run; results print in task order; comparisons keep their own copies.
 
 **Reuse.** `done`, `receipt test`, `renew` and explicit `check --run-tests` run
-tests freshly, so receipts describe their own runs. Only implicit hook runs reuse
+tests freshly, so receipts describe their own runs; `done` reuses only an unchanged
+base-code result (see **Speed** above). Only implicit hook runs reuse
 a result, printing `(result reused from the run at HH:MM UTC; nothing it covers
 changed since)` once per time. The key covers non-ignored file contents, paths,
 types and executable bits (not tasks or receipts), the command and timeout; not

@@ -28,6 +28,9 @@ import uuid
 from . import store as s
 from . import pytest_selection
 from . import source
+from . import timing
+from . import console
+from functools import partial
 
 
 def contract_debt(root, record, history, implemented, staged=False):
@@ -1489,6 +1492,22 @@ def changed_pytest_tests(root, record, base, staged=False):
     return sorted(set(found))
 
 
+def stop_at_first_failure(record, command):
+    """A pytest run that only has to show a failure stops at the first one (-x)."""
+    if not uses_pytest(record) or not pytest_arguments_known(command):
+        return command
+    end = command.index('--') if '--' in command else len(command)
+    return [*command[:end], '-x', *command[end:]]
+
+
+def pytest_arguments_known(command):
+    from .python_imports import pytest_arguments
+    try:
+        return pytest_arguments(command) is not None
+    except (ValueError, IndexError):
+        return False
+
+
 def selected_pytest_command(record, tests):
     return pytest_selection.command(declared_test(record), tests)
 
@@ -2415,9 +2434,14 @@ def _link_ignored_dependencies(root, destination, protected, *, isolated=False, 
 
 def _test_snapshot(root, destination, staged=False, protected=()):
     """Copy selected current files, with an independent Git directory and shared dependencies."""
+    with timing.phase('setup'):
+        _make_test_snapshot(root, destination, staged, protected)
+
+
+def _make_test_snapshot(root, destination, staged=False, protected=()):
     # Even --no-checkout can run a reference-transaction hook.
     with s.changing_repository():
-        cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
+        cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--shared', str(root), str(destination)],
                                 capture_output=True, encoding='utf-8', errors='replace', timeout=30,
                                 env=s.copy_environment())
     if cloned.returncode:
@@ -3367,7 +3391,8 @@ def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None,
     if not command:
         return None
     tests = changed_pytest_tests(root, record, base, staged)
-    command = selected_pytest_command(record, tests)
+    # Only a pass is a finding; per-test notes need every result when tests are selected.
+    command = selected_pytest_command(record, tests) if tests else stop_at_first_failure(record, command)
     from .python_stubs import changed_functions
     all_records = records(root, staged, errors={})
     material = repository_test_files(root, base, all_records, staged)
@@ -3399,7 +3424,7 @@ def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None,
     results = {} if results is None else results
     key = ('stub', record['id'], base, staged, _test_key(record, timeout))
     if key not in results:
-        with s.temporary_checkout(prefix='workorder-stub-') as temporary:
+        with s.temporary_checkout(prefix='workorder-stub-') as temporary, timing.phase('stubbed'):
             results[key] = run_snapshot_test(root, Path(temporary) / 'code', command,
                 s.test_timeout(record, timeout), counts, staged=staged, overlays=overlays, quiet=True)
     code, output = results[key]
@@ -3471,9 +3496,64 @@ def local_regression_problems(root, base, *, exclude=(), staged=False, timeout=N
     return problems
 
 
+def _git_mode(mode):
+    if mode is None or not stat.S_ISREG(mode):
+        return mode
+    return 0o100755 if mode & 0o111 else 0o100644
+
+
+_ENVIRONMENT_NAMES = ('PATH', 'PYTHONPATH', 'PYTHONHOME', 'PYTHONSAFEPATH', 'PYTHONNOUSERSITE', 'PYTHONUSERBASE',
+                      'PYTHONSTARTUP', 'VIRTUAL_ENV', 'CONDA_PREFIX', 'PYTEST_ADDOPTS', 'PYTEST_PLUGINS',
+                      'PYTEST_DISABLE_PLUGIN_AUTOLOAD')
+_ENVIRONMENT_SCRIPT = 'import json, sys; print(json.dumps([sys.executable, sys.version, sys.path]))'
+
+
+def interpreter_fingerprint(root, command):
+    """The test interpreter's import setup: its path, version, sys.path and installed distributions.
+
+    Every entry of each site-packages folder counts by name, size and time, and every
+    .pth file by content, so an install, upgrade, removal or editable link changes it.
+    None when the interpreter cannot be identified or asked.
+    """
+    from .python_imports import interpreter
+    env = s.copy_environment()
+    python = interpreter(command, root, env)
+    if python is None:
+        return None
+    try:
+        run = subprocess.run([*python, '-c', _ENVIRONMENT_SCRIPT], cwd=root, env=env, capture_output=True,
+                             encoding='utf-8', errors='replace', timeout=60)
+        executable, version, paths = json.loads(run.stdout) if run.returncode == 0 else (None, None, None)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if executable is None:
+        return None
+    folders = []
+    for path in paths:
+        folder = Path(path) if path else root
+        entries = []
+        if folder.name in {'site-packages', 'dist-packages'}:
+            try:
+                for item in sorted(os.scandir(folder), key=lambda entry: entry.name):
+                    info = item.stat(follow_symlinks=False)
+                    entry = [item.name, info.st_size, info.st_mtime_ns]
+                    if item.name.endswith('.pth') and item.is_file():
+                        entry.append(s.digest(Path(item.path).read_bytes()))
+                    entries.append(entry)
+            except OSError:
+                return None
+        folders.append([path, entries])
+    return [executable, version, folders, [[name, env.get(name)] for name in _ENVIRONMENT_NAMES]]
+
+
 def _ref_test_snapshot(root, destination, commit):
+    with timing.phase('setup'):
+        _make_ref_test_snapshot(root, destination, commit)
+
+
+def _make_ref_test_snapshot(root, destination, commit):
     with s.changing_repository():
-        cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
+        cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--shared', str(root), str(destination)],
                                 capture_output=True, encoding='utf-8', errors='replace', timeout=30,
                                 env=s.copy_environment())
     if cloned.returncode:
@@ -3497,19 +3577,32 @@ def _ref_test_snapshot(root, destination, commit):
 
 
 def run_ref_test(root, destination, revision, command, timeout, counts, overlays=None):
+    with timing.phase('base code'):
+        return _run_ref_test(root, destination, revision, command, timeout, counts, overlays)
+
+
+def _run_ref_test(root, destination, revision, command, timeout, counts, overlays=None):
     # A REF checkout is immutable. Remember the stable result under its revision
     # and checkout settings as well as its byte fingerprint, avoiding a copy just
     # to look up that fingerprint next time. Never save a run that changed files.
     alias = None
     selected = repository_files(root, revision) | set(overlays or {})
-    if not s.ci_environment() and not needs_import_probe(root, selected, command):
+    environment = []
+    if not s.ci_environment() and needs_import_probe(root, selected, command):
+        # The import check depends on the interpreter's installations: key them too.
+        environment = interpreter_fingerprint(root, command)
+    if not s.ci_environment() and environment is not None:
         settings = s.git(root, 'config', '--list').stdout
-        contents = [(path, s.digest(content) if content is not None else None, mode)
+        # Git's view of a mode: a work-tree file's permission bits beyond executable
+        # do not change the run, and a staged overlay reports only 100644 or 100755.
+        contents = [(path, s.digest(content) if content is not None else None, _git_mode(mode))
                     for path, (content, mode) in sorted((overlays or {}).items())]
-        key = s.digest(s.packed(['ref-v4', revision, command, timeout, settings, contents]).encode('ascii'))
+        tree = s.git(root, 'rev-parse', '--verify', f'{revision}^{{tree}}').stdout.strip()
+        key = s.digest(s.packed(['ref-v5', tree, command, timeout, settings, contents,
+                                 environment]).encode('ascii'))
         folder = root / s.git(root, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
         alias = folder / ('ref-' + key + '.json')
-        if s._REUSE_TESTS.get():
+        if s._REUSE_TESTS.get() or s._REUSE_BASE.get():
             run = s.read_test_cache(alias, command)
             if run is not None:
                 return test_result(run, counts, quiet=True)
@@ -3528,11 +3621,16 @@ def run_ref_test(root, destination, revision, command, timeout, counts, overlays
     before = s._test_state(destination, isolated=True) if alias else None
     result = _run_test(destination, copied_command, timeout, counts,
                        quiet=True, cache_root=root, logical_command=command)
-    if before and s._test_state(destination, isolated=True) == before:
+    # Only a completed run is remembered: an import-check refusal or an unstarted run is
+    # not, and an older entry for the same bytes must not stand in for this run.
+    if before and isinstance(result[0], int) and s._test_state(destination, isolated=True) == before:
         cached = s.test_cache_path(root, before[1], command, timeout)
         temporary = alias.with_suffix('.' + uuid.uuid4().hex + '.tmp')
         try:
             # cached_test writes this only after its own stability checks pass.
+            stored = s.read_test_cache(cached, command)
+            if stored is None or (stored.returncode, (stored.stdout or '') + (stored.stderr or '')) != result:
+                raise OSError('no matching stored run')
             temporary.write_bytes(cached.read_bytes())
             os.replace(temporary, alias)
         except OSError:
@@ -3559,6 +3657,132 @@ def test_change_problems(root, base, record, timeout=None, *, staged=False, stri
             notes.append(f"{record['id']}: REF comparison skipped against {base}: {error}")
         return [comparison_problem(f"{record['id']}: could not compare its changed tests with {base}: {error}",
                                    record['id'])]
+
+
+def base_code_plan(root, base, record, protected, staged=False, refactor=False):
+    """The current tests on the base code: their command, overlaid test files and selected tests."""
+    overlays = {}
+    # Shared helpers and fixtures must be current too: an import of
+    # a new helper from an old file is not evidence about base code.
+    material = protected | repository_test_files(root, base, records(root, staged, errors={}), staged)
+    for path in sorted(material & changed_paths(root, base, staged)):
+        content = _test_bytes(root, path, staged=staged)
+        mode = None
+        if content is not None:
+            if staged:
+                info = s.git(root, 'ls-files', '--stage', '--', f':(literal){path}').stdout.split()
+                mode = int(info[0], 8) if info else None
+                if mode and stat.S_ISREG(mode):
+                    content = s.checkout_bytes(root, path)
+            else:
+                mode = (root / path).lstat().st_mode
+                if stat.S_ISLNK(mode):
+                    content = os.fsencode(os.readlink(root / path))
+        overlays[path] = content, mode
+    tests = [] if refactor else changed_pytest_tests(root, record, base, staged)
+    overlays.update(pytest_selection.overlay(tests))
+    # Only showing that the tests fail on the base matters here, not each result.
+    return stop_at_first_failure(record, selected_pytest_command(record, tests)), overlays, tests
+
+
+def ref_code_key(root, base, record, command, overlays, timeout):
+    revision = s.git(root, 'rev-parse', f'{base}^{{commit}}').stdout.strip()
+    contents = tuple((path, s.digest(content) if content is not None else None, mode)
+                     for path, (content, mode) in sorted((overlays or {}).items()))
+    return ('ref-code', revision, tuple(command), s.test_timeout(record, timeout), contents), revision
+
+
+class ConcurrentResults(dict):
+    """Test results, some still running in the background: a lookup waits for its run.
+
+    Output printed by a background run is kept and printed when its result is first
+    read, so the output order does not depend on which run finishes first.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.pending = {}
+
+    def _settle(self, key):
+        future = self.pending.pop(key, None)
+        if future is not None:
+            value, output = future.result()
+            for values, options in output:
+                console.print(*values, **options)
+            if value is not None and not dict.__contains__(self, key):
+                dict.__setitem__(self, key, value)
+
+    def __contains__(self, key):
+        self._settle(key)
+        return dict.__contains__(self, key)
+
+    def __getitem__(self, key):
+        self._settle(key)
+        return dict.__getitem__(self, key)
+
+    def get(self, key, default=None):
+        self._settle(key)
+        return dict.get(self, key, default)
+
+    def settle(self):
+        for key in list(self.pending):
+            self._settle(key)
+
+
+def prefetch_comparison(root, base, record, results, pool, *, timeout=None):
+    """Start done's current-code copy run and base-code run beside the stubbed run.
+
+    Each run uses the arguments, key and isolation of the comparison that reads it.
+    A run that is not needed after all is ignored; any error leaves the comparison
+    to run it itself.
+    """
+    parent = s._READS.get()
+    command = declared_test(record)
+    if not command:
+        return
+
+    def captured(function):
+        def run(seed):
+            token = s._READS.set(None)
+            output = []
+            try:
+                # Close the copy's Git processes before removing it: Windows locks their cwd.
+                with s.temporary_checkout(prefix='workorder-tests-') as temporary, console.capture(output), \
+                        s.read_session(seed=seed), s.base_reuse():
+                    return function(Path(temporary)), output
+            except Exception:  # noqa: BLE001 - the comparison then runs it itself, with its usual errors
+                return None, []
+            finally:
+                s._READS.reset(token)
+        return run
+
+    def current(temporary):
+        return run_snapshot_test(root, temporary / 'current', command, s.test_timeout(record, timeout),
+                                 None, protected=repository_files(root, base))
+
+    def base_code(own_command, overlays, revision, temporary):
+        return run_ref_test(root, temporary / 'ref', revision, own_command,
+                            s.test_timeout(record, timeout), None, overlays)
+
+    try:
+        with s.read_scope(root):
+            if not task_change_touched(root, base, record):
+                plan = None
+            else:
+                refactor = latest_test_run(root, record).get('refactor') is True
+                protected = strict_test_files(root, record, base)
+                own_command, overlays, _ = base_code_plan(root, base, record, protected, refactor=refactor)
+                own_key, revision = ref_code_key(root, base, record, own_command, overlays, timeout)
+                plan = own_key, partial(base_code, own_command, overlays, revision)
+    except (OSError, ValueError, s.Refused, subprocess.SubprocessError):
+        return
+    jobs = [(_test_key(record, timeout), current)]
+    if plan is not None:
+        jobs.append(plan)
+    for key, function in jobs:
+        if not dict.__contains__(results, key) and key not in results.pending:
+            seed = parent.fork() if parent is not None else None
+            results.pending[key] = pool.submit(copy_context().run, captured(function), seed)
 
 
 def _test_change_problems(root, base, record, timeout=None, *, staged=False, strict=False, allow=False,
@@ -3700,10 +3924,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             base_command = declared_test(before) if before else None
 
             def ref_code_result(ref_command, overlays=None):
-                revision = s.git(root, 'rev-parse', f'{base}^{{commit}}').stdout.strip()
-                contents = tuple((path, s.digest(content) if content is not None else None, mode)
-                                 for path, (content, mode) in sorted((overlays or {}).items()))
-                own_key = ('ref-code', revision, tuple(ref_command), s.test_timeout(record, timeout), contents)
+                own_key, revision = ref_code_key(root, base, record, ref_command, overlays, timeout)
                 if own_key not in results:
                     own_root = Path(temporary) / ('ref-' + str(len(results)))
                     results[own_key] = run_ref_test(root, own_root, revision, ref_command,
@@ -3720,27 +3941,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                         problems.append(stub)
             if ((new_completion or prove_change) and task_change_touched(root, base, record, staged)
                     and not failed and (refactor or not verification_task(root, record, staged))):
-                overlays = {}
-                # Shared helpers and fixtures must be current too: an import of
-                # a new helper from an old file is not evidence about base code.
-                material = protected | repository_test_files(root, base, records(root, staged, errors={}), staged)
-                for path in sorted(material & changed_paths(root, base, staged)):
-                    content = _test_bytes(root, path, staged=staged)
-                    mode = None
-                    if content is not None:
-                        if staged:
-                            info = s.git(root, 'ls-files', '--stage', '--', f':(literal){path}').stdout.split()
-                            mode = int(info[0], 8) if info else None
-                            if mode and stat.S_ISREG(mode):
-                                content = s.checkout_bytes(root, path)
-                        else:
-                            mode = (root / path).lstat().st_mode
-                            if stat.S_ISLNK(mode):
-                                content = os.fsencode(os.readlink(root / path))
-                    overlays[path] = content, mode
-                tests = [] if refactor else changed_pytest_tests(root, record, base, staged)
-                own_command = selected_pytest_command(record, tests)
-                overlays.update(pytest_selection.overlay(tests))
+                own_command, overlays, tests = base_code_plan(root, base, record, protected, staged, refactor)
                 own_code, own_output = ref_code_result(own_command, overlays)
                 tests = pytest_selection.selected(own_output, tests)
                 if unavailable(own_code):

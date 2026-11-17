@@ -21,6 +21,17 @@ SHORT = 30         # pytest output this short is printed whole the first time
 LOG = 'workorder/last-output.txt'
 
 _RUN = ContextVar('workorder_output', default=None)
+_CAPTURE = ContextVar('workorder_capture', default=None)
+
+
+@contextmanager
+def capture(output):
+    """Keep this context's prints in `output` as (values, options), to print later in order."""
+    token = _CAPTURE.set(output)
+    try:
+        yield output
+    finally:
+        _CAPTURE.reset(token)
 
 
 class _Run:
@@ -49,6 +60,10 @@ def _represent(text, stream):
 
 def print(*values, sep=' ', end='\n', file=None, flush=False, full=None, dedupe=True):
     """Print like builtins.print; `full` is the complete text when `values` shorten it."""
+    captured = _CAPTURE.get()
+    if captured is not None:
+        captured.append((values, dict(sep=sep, end=end, file=file, flush=flush, full=full, dedupe=dedupe)))
+        return
     stream = sys.stdout if file is None else file
     text = (' ' if sep is None else str(sep)).join(str(value) for value in values) + (
         '\n' if end is None else str(end))
