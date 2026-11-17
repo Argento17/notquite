@@ -6,6 +6,7 @@ from .console import print
 
 import json
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 
@@ -225,12 +226,67 @@ def _reported_command(root, words, report):
     return [*python, '-c', source, *_options(pytest_arguments(words), ['-rfE', '--color=no'])]
 
 
-def _selected_command(words, nodes, report):
+NO_CONFIG = '__workorder_no_config.ini'
+
+
+def _given(words, names):
+    arguments = pytest_arguments(words) or []
+    return any(word == name or word.startswith(name + '=') or (name == '-c' and word.startswith('-c'))
+               for word in arguments for name in names)
+
+
+def _layout(root, words, report, revision):
+    """Pin the current run's rootdir and configuration file for the base rerun.
+
+    Node ids are relative to the rootdir pytest chose. Naming those nodes on the
+    base changes where pytest looks for configuration (a tests/pytest.ini, say),
+    and with it the rootdir and the ids. Returns the rootdir relative to the
+    repository, the options that pin both, and any overlay; None when the run
+    did not report them or chose a rootdir outside the repository. A configuration
+    file the base revision lacks (added in this change) means none on the base.
+    """
+    layout = report.get('layout')
+    if not isinstance(layout, dict):
+        return None
+
+    def inside(value):
+        try:
+            return Path(value).resolve().relative_to(Path(root).resolve()).as_posix()
+        except (OSError, ValueError, RuntimeError):
+            return None
+
+    rootdir = inside(layout['rootdir']) if isinstance(layout.get('rootdir'), str) else None
+    if rootdir is None:
+        return None
+    options, overlays = [], {}
+    if not _given(words, ('--rootdir',)):
+        options.append('--rootdir=' + rootdir)
+    if not _given(words, ('-c', '--config-file')):
+        inifile = layout.get('inifile')
+        config = (inside(inifile) or inifile) if isinstance(inifile, str) else None
+        if config is None or not (Path(config).is_absolute() or config in gate.repository_files(root, revision)):
+            # No configuration file: an empty one stops pytest finding one near the nodes.
+            config = posixpath.normpath(posixpath.join(rootdir, NO_CONFIG))
+            overlays[config] = (b'# Workorder: the project test ran without a pytest configuration file\n', None)
+        options += ['-c', config]
+    return rootdir, options, overlays
+
+
+def _node_argument(node, rootdir):
+    """A node id names its file relative to the rootdir; a command argument, relative to the working folder."""
+    if rootdir in {None, '.'}:
+        return node
+    path, separator, rest = node.partition('::')
+    return posixpath.normpath(posixpath.join(rootdir, path)) + separator + rest
+
+
+def _selected_command(words, nodes, report, layout=None):
     record = {'test': s.join_command(words)}
     positions = set(gate.pytest_collection_arguments(record))
     selected = [word for index, word in enumerate(words) if index not in positions]
-    selected = pytest_selection.command(selected + list(nodes), nodes)
-    selected = _options(selected, ['-rfE', '--color=no'])
+    rootdir, pins, overlays = layout or (None, [], {})
+    selected = pytest_selection.command(selected + [_node_argument(node, rootdir) for node in nodes], nodes)
+    selected = _options(selected, [*pins, '-rfE', '--color=no'])
     # Configured addopts can contain more collection paths. Always deselect
     # everything outside the failed nodes, including when no node is present.
     source = (_report_source(report) + '\nimport pytest\n'
@@ -243,7 +299,7 @@ def _selected_command(words, nodes, report):
               '    items[:] = [item for item in items if item.nodeid in WANTED]\n'
               '    if deselected:\n'
               '        config.hook.pytest_deselected(items=deselected)\n')
-    return selected, {pytest_selection.MODULE + '.py': (source.encode('utf-8'), None)}
+    return selected, {**overlays, pytest_selection.MODULE + '.py': (source.encode('utf-8'), None)}
 
 
 DEFERRED = ('the project test runs in the pull-request check (check --run-tests), not in done; '
@@ -311,9 +367,9 @@ def _run(root, *, base=None, label=None, notes=None, counts=None, allow=(), time
                            + '; could not compare: no target is available locally')
         display = (label or base).removeprefix('refs/remotes/').removeprefix('refs/heads/')
         base_report = Path(temporary) / 'base.json'
-        selected, overlays = _selected_command(words, failed, base_report)
         try:
             revision = s.git(root, 'rev-parse', '--verify', f'{base}^{{commit}}').stdout.strip()
+            selected, overlays = _selected_command(words, failed, base_report, _layout(root, words, report, revision))
             before, before_output = gate.run_ref_test(
                 root, Path(temporary) / 'base', revision, selected, timeout, counts, overlays)
         except (s.Refused, OSError, ValueError, subprocess.SubprocessError) as error:

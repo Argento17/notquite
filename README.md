@@ -123,7 +123,7 @@ Run `workorder init` in every clone (Git does not clone hooks); it also adds thi
 - Never edit a task's status or receipts by hand. Commit tasks/ and .workorder/ with the work.
 - Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`.
 - Before saying done, run `workorder check --base origin/main --run-tests --all-tests --require-task`.
-- Output is shortened; the full text is in `.git/workorder/last-output.txt`.
+- Shortened output is saved in full to `.git/workorder/last-output.txt`.
 ```
 
 `workorder init --claude` also installs [Claude Code hooks](docs/reference.md#agent-hooks) for session start and stop.

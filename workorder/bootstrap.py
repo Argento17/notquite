@@ -21,7 +21,7 @@ AGENT_BLOCK = r"""## Tasks
 - Never edit a task's status or receipts by hand. Commit tasks/ and .workorder/ with the work.
 - Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`.
 - Before saying done, run `workorder check --base origin/main --run-tests --all-tests --require-task`.
-- Output is shortened; the full text is in `.git/workorder/last-output.txt`.
+- Shortened output is saved in full to `.git/workorder/last-output.txt`.
 """
 
 HOOK = r"""#!/bin/sh
@@ -155,19 +155,137 @@ def dependency_group(path):
     return next((name for name in ('test', 'tests', 'dev') if name in groups), None)
 
 
+def _poetry_specifier(text):
+    """Poetry's version constraint as a pip specifier; '' (any version) for what pip cannot say."""
+    if '||' in text:
+        return ''
+    result = []
+    for part in (part.strip() for part in text.split(',')):
+        caret = re.fullmatch(r'([\^~])\s*(\d+(?:\.\d+)*)', part)
+        if part in {'', '*'}:
+            continue
+        if caret:
+            numbers = [int(number) for number in caret[2].split('.')]
+            if caret[1] == '^':  # the leftmost nonzero part may not change
+                index = next((i for i, number in enumerate(numbers) if number), len(numbers) - 1)
+            else:  # ~1.2.3 and ~1.2 allow patch changes, ~1 minor changes
+                index = min(1, len(numbers) - 1)
+            upper = numbers[:index + 1]
+            upper[-1] += 1
+            result += [f'>={caret[2]}', '<' + '.'.join(map(str, upper))]
+        elif re.fullmatch(r'(?:~=|==|!=|>=|<=|>|<)\s*[\w.*+!-]+', part):
+            result.append(part.replace(' ', ''))
+        elif re.fullmatch(r'=?\s*\d+(?:\.\d+)*(?:\.\*)?', part):
+            result.append('==' + part.lstrip('= '))
+        else:
+            return ''
+    return ','.join(result)
+
+
+def _poetry_requirement(name, value):
+    """One Poetry dependency as a pip requirement, or None for Python itself, paths, URLs and Git."""
+    if (not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', name)
+            or name.lower() == 'python'):
+        return None
+    extras = []
+    if isinstance(value, dict):
+        if any(key in value for key in ('git', 'path', 'url', 'file')):
+            return None
+        extras = [extra for extra in value.get('extras', []) if isinstance(extra, str)]
+        value = value.get('version', '*')
+    specifier = _poetry_specifier(value) if isinstance(value, str) else ''
+    return name + (f"[{','.join(extras)}]" if extras else '') + specifier
+
+
+_POETRY_DEV = r"""^\s*\[\s*tool\s*\.\s*poetry\s*\.\s*["']?dev-dependencies["']?\s*\]"""
+_POETRY_GROUP = r"""^\s*\[\s*tool\s*\.\s*poetry\s*\.\s*group\s*\.\s*["']?(test|tests|dev)["']?\s*\.\s*dependencies\s*\]"""
+_TOML_ENTRY = r"""^\s*["']?([A-Za-z0-9][A-Za-z0-9._-]*)["']?\s*=\s*(.*?)\s*(?:#.*)?$"""
+_TOML_STRING = r"""["']([^"']*)["']"""
+
+
+def _poetry_tables(text):
+    """Poetry's test and dev dependency tables by group name, read without tomllib (Python 3.10)."""
+    tables, current = {}, None
+    for line in text.splitlines():
+        if re.match(r'^\s*\[', line):
+            group = re.match(_POETRY_GROUP, line)
+            current = (tables.setdefault('dev', {}) if re.match(_POETRY_DEV, line)
+                       else tables.setdefault(group[1], {}) if group else None)
+            continue
+        entry = re.match(_TOML_ENTRY, line)
+        if current is None or not entry:
+            continue
+        value = entry[2]
+        if value.startswith('{'):
+            if re.search(r'\b(?:git|path|url|file)\s*=', value):
+                value = {'git': True}
+            else:
+                version = re.search(r'\bversion\s*=\s*' + _TOML_STRING, value)
+                extras = re.search(r'\bextras\s*=\s*\[([^\]]*)\]', value)
+                value = {'version': version[1] if version else '*',
+                         'extras': re.findall(_TOML_STRING, extras[1]) if extras else []}
+        else:
+            quoted = re.fullmatch(_TOML_STRING, value)
+            value = quoted[1] if quoted else '*'
+        current[entry[1]] = value
+    return tables
+
+
+def poetry_dependencies(path):
+    """Poetry's test or dev groups ([tool.poetry.group.NAME.dependencies], or the older
+    [tool.poetry.dev-dependencies] as dev) and their packages as pip requirements."""
+    if not path.is_file():
+        return [], []
+    text = path.read_text(encoding='utf-8')
+    try:
+        import tomllib
+    except ImportError:
+        tables = _poetry_tables(text)
+    else:
+        try:
+            poetry = tomllib.loads(text).get('tool', {}).get('poetry', {})
+        except ValueError as error:
+            raise s.Refused(f'pyproject.toml cannot be read: {error}') from None
+        poetry = poetry if isinstance(poetry, dict) else {}
+        found = poetry.get('group', {})
+        tables = {name: group['dependencies'] for name, group in (found.items() if isinstance(found, dict) else ())
+                  if isinstance(group, dict) and isinstance(group.get('dependencies'), dict)}
+        if isinstance(poetry.get('dev-dependencies'), dict):
+            tables['dev'] = {**poetry['dev-dependencies'], **tables.get('dev', {})}
+    groups = [name for name in ('test', 'tests', 'dev') if tables.get(name)]
+    requirements = []
+    for name in groups:
+        for package, value in tables[name].items():
+            requirement = _poetry_requirement(package, value)
+            if requirement and requirement not in requirements:
+                requirements.append(requirement)
+    return groups, requirements
+
+
 def project_install(root):
-    group = dependency_group(s.local_path(root, 'pyproject.toml'))
+    """The workflow's install command for project test dependencies, and where it came from."""
+    path = s.local_path(root, 'pyproject.toml')
+    group = dependency_group(path)
     if group:
-        return f"python -m pip install --upgrade 'pip>=25.1' && python -m pip install --group {group} ."
-    if has_test_extra(s.local_path(root, 'pyproject.toml')):
-        return "python -m pip install -e '.[test]'"
+        return (f"python -m pip install --upgrade 'pip>=25.1' && python -m pip install --group {group} .",
+                f'the {group} group under [dependency-groups] in pyproject.toml')
+    if has_test_extra(path):
+        return "python -m pip install -e '.[test]'", 'the test extra in pyproject.toml'
+    groups, requirements = poetry_dependencies(path)
+    if groups:
+        # pip installs the project's own dependencies through its build backend. Poetry's test
+        # and dev groups are not package metadata, so the workflow names them as pip requirements;
+        # it needs neither Poetry nor a poetry.lock, which may be stale.
+        return (' '.join(['python -m pip install -e .', *map(shlex.quote, requirements)]),
+                'the Poetry ' + ' and '.join(groups) + ' dependencies in pyproject.toml;'
+                ' after changing them, run workorder init --update-workflow')
     for name in ('requirements-dev.txt', 'requirements.txt'):
         if s.local_path(root, name).is_file():
-            return f'python -m pip install -r {name}'
+            return f'python -m pip install -r {name}', name
     from . import gate
     if any(gate.uses_pytest(record) for record in gate.records(root, errors={}).values()):
-        return 'python -m pip install pytest'
-    return None
+        return 'python -m pip install pytest', 'a task test that uses pytest'
+    return None, None
 
 
 def workorder_install():
@@ -322,7 +440,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         missing = True
         print('.github/workflows/workorder.yml: missing')
     else:
-        dependencies = project_install(root)
+        dependencies, source = project_install(root)
         dependency_step = ('      - name: Install project test dependencies\n'
                            f'        run: {dependencies}\n') if dependencies else (
                                '      # Replace this step with your test dependency installation.\n'
@@ -354,7 +472,8 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             path.write_text(workflow, encoding='utf-8', newline='\n')
             written.append('.github/workflows/workorder.yml')
             print('.github/workflows/workorder.yml: written')
-        print('CI dependencies: ' + (dependencies or 'no project test dependencies detected'))
+        print('CI dependencies: ' + (f'{dependencies} (from {source})' if dependencies
+                                     else 'no project test dependencies detected'))
         # The record follows the workflow just written or previewed: solo mode only with --solo.
         if project_tests.set_solo(root, solo, check=True):
             if solo:

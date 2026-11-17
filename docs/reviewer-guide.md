@@ -103,7 +103,7 @@ Temporary comparison copies are removed after their Git processes exit, includin
 
 <!-- refusal-family project-test -->
 ## The optional project test finds a regression
-**Meaning:** The project test failed. Workorder reruns identifiable failing pytest tests on the base: an old failure is a note, a newly failing test refuses, and an unavailable result stays explicit. Other test tools cannot supply this per-test distinction.
+**Meaning:** The project test failed. Workorder reruns identifiable failing pytest tests on the base, with the rootdir and configuration file of the current run: an old failure is a note, a newly failing test refuses, and an unavailable result stays explicit. Other test tools cannot supply this per-test distinction.
 Passing pytest project tests print one note with pytest's counts. Failures show the first 5 FAILED lines, the first 20 lines of the first failure (once per command run), and counts; newly failing tests are one finding line with a count and the first 5 names. `--verbose` prints every line; the full text is also saved in `.git/workorder/last-output.txt`. Base reruns show only counts. Passing-test output is omitted. Startup and interrupted-run diagnostics remain visible; unreadable or missing reports cannot establish a base comparison.
 **Clear:** Fix the regression or test environment. A reviewer accepts a project finding only with `workorder-allow:tests` (an approving review is not enough: existing tests now fail); task-current failures still refuse. Old project failures need no label. A first `workorder init` that finds pytest configuration or a `tests/`/`test/` folder of pytest files turns on `python -m pytest -q` and says so (left off when that `python` cannot import pytest); `init --no-project-test` turns it off. Set another command with `workorder init --project-test "python -m pytest"`; without one, the note says only declared task tests ran. Pre-commit does not run this optional command.
 
@@ -128,12 +128,12 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 
 <!-- refusal-inventory workorder/__init__.py 51c6a4d75952a2c005eb33acda81f0834b2f1e0dffae215a7d9cd26f48759af2 records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
-<!-- refusal-inventory workorder/bootstrap.py 82ee2edd308eea04d12c25ed76558b3bad1964c475df44cbd64541a1574525b5 records,workflow,project-test -->
+<!-- refusal-inventory workorder/bootstrap.py a3ccdd7adfe6f449e3825405f400b58e209d42575aff6744f44664da201d4395 records,workflow,project-test -->
 <!-- refusal-inventory workorder/cli.py c41d1e6084ce940cc779c29686479a6679010b1455b4177c61fa7fac22d0a4e5 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
 <!-- refusal-inventory workorder/gate.py 5de683153a35844cb03c66dc78508913fd012236f27437740dd67ce4726e4ace code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 84c2d9a3f4cb85cc24bccd023e98b2959733d3dcae092541ecc3a82c6bff3d63 evidence,current-tests,test-edits,pending,renewal -->
-<!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
-<!-- refusal-inventory workorder/project_tests.py fc157b3a0b1a14f0dc1c71dd6f027c0192ab771707662535acef5dfa5384a715 project-test,records -->
+<!-- refusal-inventory workorder/project_report.py 966cf398e998321996e0e60827eaadb08c6dbe625a7126a0aa8d08c4fd2460ae project-test -->
+<!-- refusal-inventory workorder/project_tests.py b75e54a8666cf08cc0b09e1b06e78460adf38390277f592b483ab5ac30473b39 project-test,records -->
 <!-- refusal-inventory workorder/pytest_selection.py bcff8a23918c0320f921d46b229359bc41237be3055be093a6e746860395d35b weak-tests,imports -->
 <!-- refusal-inventory workorder/python_imports.py f5509e0980385e3528ad9c4392c976f74485a7ef1a1111a43afb1e25164d7f8b imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
