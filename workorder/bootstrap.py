@@ -16,7 +16,7 @@ from . import store as s
 AGENT_BLOCK = r"""## Tasks
 - Start from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed. Run `workorder show --task <id>` and follow its Scope, Acceptance, test and progress.
 - Set `WORKORDER_AGENT` when sharing a Git identity. Run `workorder claim --task <id>` before work.
-- Do the work with a test that fails without it. Commit, then run `workorder done --task <id> --note "<what was done>"`. Report refusals; do not claim completion after one.
+- Do the work with a test that fails without it. Commit, then run `workorder done --task <id> --note "<what was done>"`. Report refusals; never claim completion after one or run `workorder accept`.
 - Keep unfinished progress with `workorder note --task <id> --next "<next step>" "<progress>"`; done clears next.
 - Never edit a task's status or receipts by hand. Commit tasks/ and .workorder/ with the work.
 - Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`.
@@ -229,6 +229,7 @@ def earlier_agent_block(text):
 
 @s.changing_repository()
 def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False,
+               require_acceptance=False,
                project_test=None, no_project_test=False, solo=False):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
     from .python_imports import installed_src
@@ -332,7 +333,8 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             '@WORKORDER@', shlex.quote(workorder_install())).replace(
             '@DEFAULT_BRANCH@', json.dumps([default_branch(root)])).replace(
             '@REVIEW_OPTIONS@', ('--review warn' if light else '--require-task')
-            + (' --require-test-first' if test_first else '')).replace(
+            + (' --require-test-first' if test_first else '')
+            + (' --require-acceptance' if require_acceptance else '')).replace(
             '@REVIEW_COMMENT@', '# Trial setup: restore defaults with workorder init --update-workflow.' if light
             else "# Solo mode: the owner's own labels count as owner acceptance, never as review; an approval by someone else still counts." if solo
             else '# Test changes are refused unless a reviewer other than the author adds the label or approves this head; --review warn is optional.').replace(

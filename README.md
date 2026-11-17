@@ -97,7 +97,7 @@ Run `workorder init` in every clone: Git does not clone hooks. It installs the p
 ## Tasks
 - Start from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed. Run `workorder show --task <id>` and follow its Scope, Acceptance, test and progress.
 - Set `WORKORDER_AGENT` when sharing a Git identity. Run `workorder claim --task <id>` before work.
-- Do the work with a test that fails without it. Commit, then run `workorder done --task <id> --note "<what was done>"`. Report refusals; do not claim completion after one.
+- Do the work with a test that fails without it. Commit, then run `workorder done --task <id> --note "<what was done>"`. Report refusals; never claim completion after one or run `workorder accept`.
 - Keep unfinished progress with `workorder note --task <id> --next "<next step>" "<progress>"`; done clears next.
 - Never edit a task's status or receipts by hand. Commit tasks/ and .workorder/ with the work.
 - Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`.
@@ -115,7 +115,7 @@ Run `workorder init` in every clone: Git does not clone hooks. It installs the p
 
 ## What it does not do
 
-- It does not check Acceptance items, except those ending `(test: path::name)`, which `done` ties to that pytest test. People or agents confirm the rest.
+- DONE is evidence, not acceptance. Items ending `(test: path::name)` tie to a pytest test `done` checks; a person accepts with `workorder accept` or a review.
 - Per-test findings, tied Acceptance items and the project test's base comparison need pytest; the stubbed-out code check covers Python functions only. Other test commands count as a whole by exit code.
 - Local hooks can be skipped with `git commit --no-verify`. The pull-request check is the one that counts.
 - It does not prove the software works in production or read agent conversations.

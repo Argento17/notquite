@@ -248,7 +248,7 @@ def test_solo_mode_keeps_another_persons_approval(tmp_path):
                             env={**os.environ, 'PYTHONPATH': str(PACKAGE)}, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ['--allow', 'TASK-3,tests', '--owner-accepts', 'TASK-2,no-task',
-                                     '--approving-review']
+                                     '--approving-review', '--approved-by', 'reviewer']
 
 
 def test_owner_notes_read_the_finding_owner_when_no_label_is_cited():

@@ -266,7 +266,7 @@ def test_nothing_to_ship_and_implemented_code_wording(local_repo):
     commit_all(root)
     for arguments in [('check', 'TASK-1'), ('show', '--task', 'TASK-1')]:
         result = cli(root, *arguments)
-        assert 'Evidence: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)' in result.stdout
+        assert 'Evidence: verified: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)' in result.stdout
     (root / 'another.py').write_text('value = 2\n')
     commit_all(root)
     result = cli(root, 'check', 'TASK-1')
