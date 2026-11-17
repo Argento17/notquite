@@ -193,7 +193,7 @@ def test_owner_labels_need_solo_mode_on_the_base_and_a_base(local_repo, turned_o
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'owner labels not used (TASK-3, no-task, tests): solo mode is not recorded' in result.stdout
     assert 'workorder-allow:TASK-3' in result.stdout and OWNER not in result.stdout
-    assert 'solo mode:' not in result.stdout.strip().splitlines()[-1]
+    assert 'solo mode:' not in result.stdout.strip().splitlines()[-2]  # the summary, above the verdict line
     result = cli(root, 'check', '--owner-accepts', 'TASK-3')
     assert result.returncode == 1 and '--owner-accepts' in result.stderr
 
@@ -224,6 +224,8 @@ def test_owner_workflow_label_is_label_only_as_before(local_repo):
     workflow = root / '.github/workflows/workorder.yml'
     workflow.parent.mkdir(parents=True)
     workflow.write_text('name: Workorder\n')
+    base = commit_all(root)  # an existing workflow: adding the first one needs no label
+    workflow.write_text('name: Workorder changed\n')
     commit_all(root)
     refused = cli(root, 'check', '--base', base, '--approving-review')
     assert refused.returncode == 1 and 'Workorder workflow changed' in refused.stdout

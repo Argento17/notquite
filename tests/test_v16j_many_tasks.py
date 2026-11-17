@@ -218,7 +218,7 @@ def test_task_review_preparation_validates_as_one_read(local_repo, monkeypatch):
         notes = []
         problems = gate.test_change_problems(root, base, record, run_tests=False, notes=notes)
         assert any('asserts nothing that can fail' in str(problem) for problem in problems)
-        assert any('REF comparison skipped' in note for note in notes)
+        assert any(note.split(': ', 1)[-1].startswith('comparison with ') and ' skipped' in note for note in notes)
     assert len(calls) == 1
 
 

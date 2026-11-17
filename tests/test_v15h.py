@@ -156,7 +156,7 @@ def test_new_tests_with_new_conftest_have_no_base_findings(local_repo, helper_at
     result = check(root)
     output += result.stdout + result.stderr
     assert result.returncode == 0, output
-    for wrong in ('configuration changed', 'already fail', 'from origin/main fail', 'REF comparison skipped', 'workorder-allow:'):
+    for wrong in ('configuration changed', 'already fail', 'from origin/main fail', ' skipped: ', 'workorder-allow:'):
         assert wrong not in output, output
 
 
@@ -261,7 +261,7 @@ def test_new_script_test_does_not_print_skipped_base_comparison(local_repo):
     commit_all(root)
     output = ok(root, 'done', '--task', 'TASK-1')
     assert "TASK-1's test was written in this change" in output
-    assert 'REF comparison skipped' not in output
+    assert ' skipped: ' not in output
 
 
 def test_new_parent_conftest_does_not_count_old_child_conftest_as_test(local_repo):

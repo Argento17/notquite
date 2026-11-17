@@ -474,12 +474,12 @@ def test_ready_keeps_work_nobody_has_claimed_finished(clones, ships):
     task(one, ships=ships)
     implement(one)
     received = passed(one)
-    assert "still owes: its Acceptance items, then status DONE" in received
+    assert "still owes: its Acceptance items, then workorder done" in received
     assert "still owes: nothing" not in received
     listed = ok(one, "ready")
     assert "TASK-1 free" in listed and "waiting for delivery" not in listed
     shown = ok(one, "show", "--task", "TASK-1")
-    assert "still owes: its Acceptance items, then status DONE" in shown
+    assert "still owes: its Acceptance items, then workorder done" in shown
     task(one, status="DONE", ships=ships)  # claimed: now the evidence decides
     listed = ok(one, "ready")
     if ships == "none":
@@ -893,7 +893,7 @@ def test_without_a_remote_tasks_are_local_and_checks_work(local_repo):
     assert "TASK-2 opened" in ok(local_repo, "new", "--title", "More", "--owner", "solo")
     ok(local_repo, "receipt", "implemented", "--task", "TASK-1")
     ok(local_repo, "receipt", "test", "--task", "TASK-1", "--", PYTHON, "-c", "pass")
-    assert "IN_PROGRESS (not claimed finished); its test evidence is in place" in ok(local_repo, "show", "--task", "TASK-1")
+    assert "IN_PROGRESS (not claimed finished); its recorded test run passed; done has not shown the test proves the change" in ok(local_repo, "show", "--task", "TASK-1")
     assert ok(local_repo, "check").splitlines()[0] == "check: OK"
     assert "TASK-2 free" in ok(local_repo, "ready")
 
@@ -2056,7 +2056,7 @@ def test_a_half_done_task_with_passing_tests_is_not_presented_as_finished(local_
     ok(local_repo, "new", "--title", "Calc", "--owner", "solo", "--test", f"{PYTHON} -c pass")
     finish_with_evidence(local_repo, "TASK-1")
     shown = ok(local_repo, "show", "--task", "TASK-1")
-    assert "IN_PROGRESS (not claimed finished); its test evidence is in place" in shown
+    assert "IN_PROGRESS (not claimed finished); its recorded test run passed; done has not shown the test proves the change" in shown
     assert "Evidence: CLOSED" not in shown
     assert "note:     the evidence covers the task's test only, not its Acceptance list" in shown
     assert "not its Acceptance list" in ok(local_repo, "check", "TASK-1")

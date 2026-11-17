@@ -40,7 +40,7 @@ Contents: [Commands](#commands) · [Task files](#task-files) ·
 | `workorder receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to |
 | `workorder receipt deployed --task ID --target NAME -- CMD...` | Runs a read-back command; valid only if it exits 0 and prints the full commit ID |
 | `workorder receipt live --task ID --target NAME -- CMD...` | The same, recorded after the deployment |
-| `workorder check [ID]` / `check --task ID` | No argument: every task, one line per problem, or `check: OK`. With a task (or `tasks/ID.md`): that task explained. `--require-acceptance` also refuses finished tasks no person has accepted |
+| `workorder check [ID]` / `check --task ID` | No argument: every task, one line per problem and `check: NOT OK (N findings)`, or `check: OK`. With a task (or `tasks/ID.md`): that task explained. `--require-acceptance` also refuses finished tasks no person has accepted |
 | `workorder check --staged` | The pre-commit hook: checks the staged tasks this commit touches (task file, receipts, contract or its evidence) and their dependents. Refuses a commit that newly claims DONE or CLOSED on code other than the implemented code, and command changes on unfinished tasks |
 | `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--review warn\|refuse] [--all-tests] [--require-task] [--require-task-ignore GLOB] [--require-test-first] [--require-acceptance] [--approving-review [--approved-by NAMES]] [--owner-accepts LABELS] [--timeout SECONDS] [--jobs N]` | The pull-request check: changed task records and receipts, all repository test roots, every task whose tests changed, and dependents. Refuses stale claims, changed receipts, unsupported definitions and removed tasks; see [checks against a base](#checks-against-a-base) |
 | `workorder repair --task ID` | Verifies a conflicted legacy append, keeps the common prefix and converts each side's extra lines to receipt files |
@@ -169,7 +169,9 @@ IN_PROGRESS`, then the distinct Missing lines and one Next line; findings about
 other tasks get one summary line (`check --base REF --run-tests` shows details).
 A finished task says `TASK-7 stays DONE; this change was refused:` and the reason.
 After a real failure Next says `fix the code or the test, then run workorder done
-again`. Success says `TASK-1 DONE: its declared test passed on this code`, plus
+again`. Success says `TASK-1 DONE: evidence verified` under one line naming the runs,
+such as `Evidence: verified: passes now, failed on origin/main's code, failed with
+the change stubbed out`, plus
 `; still owes: merge of the tested code` (or other delivery debt) when it applies,
 and a line asking you to commit tasks/ and .workorder/ (`and push` with an origin
 remote). It warns when the clone has no pre-commit hook. A task not yet on the
@@ -775,7 +777,7 @@ Pytest configuration is conftest.py, pytest.ini, .pytest.ini, pytest.toml,
 configurations a command selects (other TOML sections need no review). Each changed file gives one finding naming its
 owners, accepted by `--allow tests` or an owning task's label. Without
 `--run-tests`, file, configuration and selection checks still apply and a note
-says the REF comparison did not run.
+says the comparison with the base did not run.
 
 **Status and definition changes.** Moving DONE/CLOSED back to IN_PROGRESS or
 BLOCKED needs the task label or an approving review, unless a new counting failed
@@ -932,7 +934,9 @@ definition rule above) or a task unfinished at the merge base. Renewing an
 unrelated finished task, `test: any`, a test that does not count, notes, status
 edits, new definitions and merge or deployment receipts do not qualify. An
 approving review, `--allow ID` or `--allow no-task` accepts code without such
-evidence.
+evidence. Receipts recorded by hand on a task still unfinished (no `done`
+completion record, which `done --needs-review` also writes) show only that its
+test passed, so its code needs an approving review or `--allow ID`.
 
 Only non-test code counts: recognised test files, `test_paths`, `tasks/`,
 `.workorder/`, `.notquite/`, `docs/`, `.github/`, `*.md`, `*.rst`, `*.txt`,
@@ -1045,7 +1049,8 @@ claims always refuse.
 
 The workflow rule covers `.github/workflows/workorder.yml` and a renamed generated workflow, found by
 its `python -m workorder.review_labels` command in the base or current contents (so removing that
-command counts); only `workorder-allow:workflow` accepts it. Workorder checks the change only when it runs: make the check required with a
+command counts); only `workorder-allow:workflow` accepts it. Adding the first one, where the base has
+none, needs no label. Workorder checks the change only when it runs: make the check required with a
 repository rule.
 
 Anyone with triage rights can apply labels. Protect acceptance with CODEOWNERS and required code
@@ -1202,11 +1207,11 @@ line endings and byte order mark. CRLF checkouts, as Git on Windows may make, re
 ## Reading show and check results
 
 In `show` and `check ID`, an unclaimed task starts
-`TASK-1 IN_PROGRESS (not claimed finished); its test evidence is in place`, or `owes: ...`. A
+`TASK-1 IN_PROGRESS (not claimed finished); its recorded test run passed; done has not shown the test proves the change`, or `owes: ...`. A
 supported finished task prints
 ``Evidence: verified: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)``
 and its computed status, then its `Acceptance:` line ([evidence and acceptance](#evidence-and-acceptance)).
-`done` prints `Evidence: verified: the declared test passed on this code`. If HEAD differs from the implementation, Result names the implemented
+`done` prints `Evidence: verified: passes now, ...` (above). If HEAD differs from the implementation, Result names the implemented
 commit the test passed on. A test that does not count shows `(does not count: <reason>)`, even with
 exit 0. `show` suggests `workorder done --task ID` for outstanding work, first asking for a concrete
 command when the task has `test: any`. A named check says `TASK-1's files are unchanged since <sha>`

@@ -269,7 +269,7 @@ def test_fresh_runs_keep_fresh_evidence_wording(local_repo, action):
     commit_all(root)
     if action == 'done':
         output = ok(root, 'done', '--task', 'TASK-2')
-        assert 'its declared test passed on this code' in output
+        assert 'Evidence: verified: passes now' in output
     else:
         claim(root)
         output = ok(root, 'check', '--run-tests')

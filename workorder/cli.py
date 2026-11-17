@@ -145,10 +145,12 @@ def parser():
     check.add_argument("--verbose", action="store_true",
                        help="print every task note, finding and test output line instead of grouping them")
     check.add_argument("--allow", metavar="TASKS", default="",
-                       help="with --base: accept definition/test edits, REF-test failures, reduced pytest outcomes or complete removal"
-                            " (comma-separated ids; tests for test-file edits, no-task for changes without task work)")
+                       help="with --base: accept definition/test edits, base-test failures, reduced pytest outcomes or complete removal"
+                            " (comma-separated ids; tests for test-file edits, no-task for changes without task work,"
+                            " workflow for Workorder workflow changes)")
     check.add_argument('--approving-review', action='store_true',
-                       help='accept review findings except old-test failures and test-first exceptions; --allow names explicit labels')
+                       help='an approving review clears every finding except edits to existing tests and Workorder'
+                            ' workflow changes, which need labels; --allow names explicit labels')
     check.add_argument('--owner-accepts', metavar='LABELS', default='',
                        help='with --base in solo mode: labels the repository owner added (same ids as --allow);'
                             ' they clear what --allow would and print as owner acceptance, never as review')
@@ -160,13 +162,14 @@ def parser():
                        help='with --approving-review: the approving reviewers, named in Acceptance lines'
                             ' (the workflow sets this)')
     check.add_argument("--run-tests", action="store_true",
-                       help="run selected tasks' tests; with --base, include tasks with changed tests and REF comparisons")
+                       help="run selected tasks' tests; with --base, include tasks with changed tests and base comparisons")
     check.add_argument("--strict-tests", action="store_true",
                        help="with --base: require --allow for all test and pytest configuration changes")
     check.add_argument("--all-tests", action="store_true",
                        help="with --run-tests: also test every DONE/CLOSED task, once per code, command and timeout")
     check.add_argument("--require-task", action="store_true",
-                       help="with --base: require a new counting receipt on a task with a concrete test command for non-test code changes")
+                       help="with --base: require a new counting receipt on a task with a concrete test command for non-test code changes;"
+                            " an unfinished task's hand-recorded receipts need an approving review or its label")
     check.add_argument('--require-task-ignore', action='append', default=[], metavar='GLOB',
                        help='with --require-task: ignore matching repository paths (repeatable)')
     for sub in (done, check):
@@ -268,6 +271,39 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
             steps = [f'  Next:     fix the test, or run workorder done --task {tid} --needs-review; '
                      f'the pull request needs workorder-allow:{tid} or an approving review']
     print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
+
+
+def base_code_findings(root, base, record, timeout, results):
+    """The base-code finding from the run done started beside the stubbed run, if it showed one."""
+    if not base:
+        return []
+    try:
+        with s.base_reuse(), console.capture([]):
+            found = gate.local_test_problems(root, base, record, timeout=timeout, notes=[], completed=True,
+                                             results=results)
+    except (s.Refused, OSError, ValueError, subprocess.SubprocessError):
+        return []
+    return [str(line) for line in found if "'s code too, so it does not show the change works" in str(line)]
+
+
+def done_evidence(lines, tid, base, proven, results):
+    """One Evidence line naming what done's runs showed, in place of the repeated pass."""
+    facts = ['passes now']
+    if base and tid in proven:
+        facts.append(f"failed on {base}'s code")
+    stubbed = [value for key, value in dict.items(results) if isinstance(key, tuple) and key[:2] == ('stub', tid)]
+    if any(isinstance(code, int) and code not in {0, 5} for code, _ in stubbed):
+        facts.append('failed with the change stubbed out')
+    shown = []
+    for line in lines:
+        if line == '  Evidence: verified: the declared test passed on this code':
+            line = '  Evidence: verified: ' + ', '.join(facts)
+        elif line.startswith('  Result: the declared test passed on '):
+            if shown and not shown[-1]:
+                shown.pop()
+            continue
+        shown.append(line)
+    return shown
 
 
 @s.read_session()
@@ -398,6 +434,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 s.read_text(root, f"tasks/{tid}.md")) if node is not None])
         results = gate.ConcurrentResults()
         notes = []
+        proven = set()  # done's comparison showed the task's tests fail on the base code
         if base and (jobs or 3) > 1:
             # The new-code copy, base-code and stubbed runs are independent: run them at the same time.
             # Their output is printed in the usual order when each result is read.
@@ -408,7 +445,10 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if stub and needs_review and gate._accepts_allow_label(stub):
             pending_findings.append(stub)
         elif stub:
-            done_refusal(tid, status, [f'  Missing:  {stub}'], needs_review=needs_review)
+            # The base-code run ran beside the stubbed one: name both facts when both are known.
+            done_refusal(tid, status, [f'  Missing:  {line}' for line in
+                                       base_code_findings(root, base, record, timeout, results) + [stub]],
+                         needs_review=needs_review)
             return 1
         if base:
             revision, label = gate.comparison_base(root, base)
@@ -436,7 +476,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             with s.base_reuse():
                 # The base code does not change while someone works: an unchanged base run is reused.
                 problems = gate.local_test_problems(root, base, record, timeout=timeout, notes=notes,
-                                                    completed=True, pending_review=needs_review, results=results)
+                                                    completed=True, pending_review=needs_review, results=results,
+                                                    proven=proven)
             problems += gate.local_regression_problems(root, base, exclude={tid}, timeout=timeout,
                                                        notes=notes, results=results, pending_review=needs_review, jobs=jobs)
             if not needs_review:
@@ -459,13 +500,13 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 if owners and tid not in owners:
                     if 'its code changed after it was finished' in review_note:
                         print(f'Note: {review_note}')
-                    elif not review_note.endswith(': its test passed when this check ran it'):
+                    elif not review_note.endswith((': ' + gate.PASSED_NOTE, ': ' + gate.REUSED_NOTE)):
                         other_notes |= owners
                 elif review_note != wrapper:
                     if needs_review and gate._accepts_allow_label(review_note):
                         pending_findings.append(review_note)
                     else:
-                        print(f"Note: {review_note}")
+                        print(f"Note: {review_note.replace(gate.PASSED_NOTE, 'its test passed when done ran it')}")
             if problems:
                 done_refusal(tid, status, [f'  Missing:  {problem}' for problem in problems], other_notes,
                              needs_review=needs_review)
@@ -513,14 +554,14 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             lines.append('  Next:     the pull-request check will ask for an approving review: this task is new '
                          f'in this change (the reviewer reads its definition; or the label workorder-allow:{tid}); '
                          'a second pull request is not needed')
-        print("\n".join(lines))
+        print("\n".join(done_evidence(lines, tid, base, proven, results)))
         _, owed, delivery = gate.verdict(root, s.record(root, tid))
         debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""
         if needs_review or gate.waiting_for_review(root, s.record(root, tid)):
             findings = gate.pending_findings(root, s.record(root, tid))
             print(f'{tid} DONE, ' + gate.pending_review_message(tid, findings) + debt)
         else:
-            print(f"{tid} DONE: its declared test passed on this code{debt}")
+            print(f"{tid} DONE: evidence verified{debt}")
         push = " and push" if s.has_origin(root) else ""
         print(f"commit tasks/ and .workorder/{push}")
         return 0
@@ -853,6 +894,9 @@ def run_command(options, command, run):
                                                              and not counts['tasks']
                                                              and counts.get('tested_tasks')),
                                     solo=solo))
+            if problems:
+                count = len(problems)
+                print(f"check: NOT OK ({count} finding{'s' if count != 1 else ''})")
             return int(bool(problems))
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
