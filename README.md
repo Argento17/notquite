@@ -3,11 +3,11 @@
 **Every task recorded. A clear history. Agents always go back to it.**
 [Reviewer guide](docs/reviewer-guide.md) · [Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder flags](docs/shortcuts.md)
 
+![Comic: a coding agent says DONE and Workorder refuses until the task's test passes; then the next session picks up where the work left off from `workorder show`](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)
+
 Workorder keeps each task as a record in your repository. A coding agent starts every session from the task, works within it, and leaves it up to date. The next session, or the next agent, picks up where the last one stopped.
 
-Each task is a Markdown file in `tasks/`: its mission, scope, acceptance criteria, dependencies, test command and progress. Receipts in `.workorder/` record the
-implementation, commands, results and code they refer to. `workorder show` prints that history. `status: DONE` is a claim; `workorder check` says whether the record
-supports it. Acceptance lists still need a person or agent to check them.
+Each task is a Markdown file in `tasks/`: its mission, scope, acceptance criteria, dependencies, test command and progress. Receipts in `.workorder/` record the implementation, commands, results and code they refer to. `workorder show` prints that history. `status: DONE` is a claim; `workorder check` says whether the record supports it. Acceptance lists still need a person or agent to check them.
 
 Requires Git and Python 3.10 or newer. It uses Python's standard library, with no server or database. Tested on Linux and Windows with Python 3.10, 3.12 and 3.13.
 
