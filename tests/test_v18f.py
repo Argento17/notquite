@@ -163,7 +163,8 @@ def test_first_init_turns_on_the_detected_project_test(local_repo, name, text):
     assert config(root) == {'project_test': 'python -m pytest -q'}
     found = name if '/' not in name else name.split('/')[0] + '/'
     assert (f'.workorder/config.json: project test on: python -m pytest -q (pytest found in {found}); '
-            'done and the pull-request check run your full suite once; if it takes minutes, '
+            'the pull-request check runs your full suite once (done runs it with --project-test); '
+            'if it takes minutes, '
             'turn it off with workorder init --no-project-test') in output.splitlines()
     assert '  .workorder/config.json' in output.splitlines()
 
@@ -222,9 +223,17 @@ def test_detected_project_test_refuses_a_broken_other_test(local_repo):
     (root / 'calc.py').write_text(CODE.replace('return 1', 'return 2'))
     (root / 'other.py').write_text('VALUES = ("1",)\n')
     commit_all(root)
-    done = cli(root, 'done', '--task', 'TASK-1')
+    done = cli(root, 'done', '--task', 'TASK-1', '--project-test')
     assert done.returncode == 1, done.stdout + done.stderr
     assert 'the project test fails on this code: tests/test_other.py::test_true (passes on' in done.stdout
+    # Since 0.19 plain done leaves the full suite to the pull-request check, which still refuses.
+    plain = ok(root, 'done', '--task', 'TASK-1')
+    assert ('Note: the project test runs in the pull-request check (check --run-tests), not in done; '
+            'run done --project-test to run it now') in plain.splitlines()
+    commit_all(root)
+    early = check(root)
+    assert early.returncode == 1, early.stdout + early.stderr
+    assert 'the project test fails on this code: tests/test_other.py::test_true (passes on' in early.stdout
     (root / 'other.py').write_text('VALUES = ("1", "true")\n')
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-1')

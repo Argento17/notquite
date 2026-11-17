@@ -126,18 +126,19 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 
 <!-- refusal-inventory workorder/__init__.py 51c6a4d75952a2c005eb33acda81f0834b2f1e0dffae215a7d9cd26f48759af2 records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
-<!-- refusal-inventory workorder/bootstrap.py f9ec3d59381cf7784913115bbee20ff45b1ac830e8dd39665fdf517d6207ee1d records,workflow,project-test -->
-<!-- refusal-inventory workorder/cli.py 00601bdf7c3986ce4a64e354f9abd120adb8f840e9d1430e3ea1dacc82cbc4b2 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
-<!-- refusal-inventory workorder/gate.py 32b5fd3a40997f22c65cc90998368d85bffeeca150d7e364615a6e320300b783 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
+<!-- refusal-inventory workorder/bootstrap.py ed3361caf2221d4c33678e5f95c175711f070e9e1d7cea1d653ae34519db6022 records,workflow,project-test -->
+<!-- refusal-inventory workorder/cli.py 0907da4b12ee0344fde5c5ad647ebebe7b76bfff7da323e326c44dac8de2b603 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
+<!-- refusal-inventory workorder/gate.py 92e474a8f323e6f1a73d22695de02e8b92ecb9e314fbbc7d083b7be211a45c2a code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 84c2d9a3f4cb85cc24bccd023e98b2959733d3dcae092541ecc3a82c6bff3d63 evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
-<!-- refusal-inventory workorder/project_tests.py f65af83dd6885820c0d9a8d739d12aebd6dce97a1ff859b821b252d545f32b34 project-test,records -->
+<!-- refusal-inventory workorder/project_tests.py 8c75f2cdf987b46e0086735fa9f1bcf6b908561f405f72f0abb056b9869e4a96 project-test,records -->
 <!-- refusal-inventory workorder/pytest_selection.py bcff8a23918c0320f921d46b229359bc41237be3055be093a6e746860395d35b weak-tests,imports -->
 <!-- refusal-inventory workorder/python_imports.py 6c7412fae56fed15a3a03a97cce2e13a2c817e8ad8d3edacc2d5f84de537d420 imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py 7ce5092167a284491e8dbacc6780f3ff00b624f52a06660ed44a4c1b3cf5bb0d records,evidence,current-tests,removal,pending -->
-<!-- refusal-inventory workorder/git_reads.py c406e897d3776a2eefb175775f1cf8144f2d6991a666432e1337bb739c5c0371 records,evidence -->
-<!-- refusal-inventory workorder/console.py 05f5ef10f1e818b11840f1aad889661f477678caa4851f3b2af2703cd32ff092 records,current-tests -->
+<!-- refusal-inventory workorder/store.py cccd3fd44f9c240064cd4ae1e1101386572dff467ee74bfa1fe7018a3ad8b2cb records,evidence,current-tests,removal,pending -->
+<!-- refusal-inventory workorder/git_reads.py 9ee3d14e67661f1bfbb3586b996fadde5f007a1c5db9f17bc53155c9a3339d70 records,evidence -->
+<!-- refusal-inventory workorder/timing.py 37bdb892641d496f8a9cae72b0d4c678ad6792a11710367957ad4be560842cfa current-tests -->
+<!-- refusal-inventory workorder/console.py 3ae31468d7e4e08ccd65efbd12914e8ca978af0c4b60c4d5d39e83e444d6bee2 records,current-tests -->

@@ -86,6 +86,19 @@ def test_reuse(enabled=True):
         _REUSE_TESTS.reset(token)
 
 
+_REUSE_BASE = ContextVar("workorder_reuse_base", default=False)
+
+
+@contextmanager
+def base_reuse(enabled=True):
+    """Reuse a stored base-code result: the base does not change while someone works."""
+    token = _REUSE_BASE.set(enabled)
+    try:
+        yield
+    finally:
+        _REUSE_BASE.reset(token)
+
+
 _READS = ContextVar("workorder_reads", default=None)
 
 
@@ -1738,6 +1751,14 @@ def test_timeout(record, override=None):
 def run_test(command, root, timeout=None, capture_output=True, *, isolated=False, cache_root=None,
              verify_imports=None):
     """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
+    from .timing import phase
+    with phase('new code', default=True):
+        return _run_test_process(command, root, timeout, capture_output, isolated=isolated, cache_root=cache_root,
+                                 verify_imports=verify_imports)
+
+
+def _run_test_process(command, root, timeout=None, capture_output=True, *, isolated=False, cache_root=None,
+                      verify_imports=None):
     from .python_imports import ImportFailure, bytecode_cache, environment, pytest_guard
     # pytest parses this environment option with shlex even on Windows. Each
     # subprocess owns its pytest cache; neither cache affects our result key.

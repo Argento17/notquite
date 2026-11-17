@@ -211,12 +211,32 @@ def _selected_command(words, nodes, report):
     return selected, {pytest_selection.MODULE + '.py': (source.encode('utf-8'), None)}
 
 
+DEFERRED = ('the project test runs in the pull-request check (check --run-tests), not in done; '
+            'run done --project-test to run it now')
+
+
+def deferred_line(root):
+    """done's line when it leaves the project test to the pull-request check; an unreadable setting still refuses."""
+    return UNSET if command(root) is None else DEFERRED
+
+
 def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeout=None):
     """Run current code once, then only failed pytest nodes on the available base.
 
     Returned failures are ordinary strings: warning mode cannot turn an observed
     current failure into a pass. Only its explicit tests label can.
     """
+    from contextlib import nullcontext
+    from .timing import phase
+    try:
+        configured = command(root) is not None
+    except s.Refused:
+        configured = True  # _run reports the unreadable setting
+    with phase('project test') if configured else nullcontext():
+        return _run(root, base=base, label=label, notes=notes, counts=counts, allow=allow, timeout=timeout)
+
+
+def _run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeout=None):
     notes = [] if notes is None else notes
     try:
         words = command(root)

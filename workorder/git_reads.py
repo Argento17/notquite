@@ -492,8 +492,21 @@ def repository_state(root, *, isolated=False, configurations=None, contents=None
             # Reflogs, pseudorefs and in-progress merge/rebase state affect Git
             # reads too. Only Workorder's non-evidence caches are excluded.
             visit(directory, tree=True, metadata=True)
-        if (common / 'objects/info/alternates').exists():
-            return None
+        alternates = common / 'objects/info/alternates'
+        if alternates.exists():
+            # A comparison copy borrows its repository's objects (clone --shared). Observe
+            # the borrowed object folders like the copy's own; deeper chains are not read.
+            for line in alternates.read_text(encoding='utf-8').splitlines():
+                if not line.strip() or line.startswith('#'):
+                    continue
+                borrowed = Path(line.strip())
+                if not borrowed.is_absolute():
+                    borrowed = common / 'objects' / borrowed
+                borrowed = borrowed.resolve()
+                if not borrowed.is_dir() or (borrowed / 'info/alternates').exists():
+                    return None
+                digest.update(b'alternate\0' + os.fsencode(borrowed))
+                visit(borrowed, tree=True, metadata=True)
         if env.get('GIT_INDEX_FILE'):
             visit(root / env['GIT_INDEX_FILE'], metadata=True)
         configuration = _git_configuration(root, gitdir, common, env, environment, configurations, contents, observe)
