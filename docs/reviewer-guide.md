@@ -2,9 +2,27 @@
 
 Reproduce a pull-request check with `workorder check --base origin/main --run-tests --all-tests --require-task`; use the actual target branch. Read each refusal below and the named test's output. `workorder check ID` explains one task's evidence.
 
-**The review rule:** an approving review clears every finding except (a) edits, deletions, new skips/xfails or weakening of existing tests and (b) changes to the Workorder workflow file; those two need a label (`workorder-allow:tests` or the narrower `workorder-allow:ID` for (a), `workorder-allow:workflow` for (b)). Each refusal says which: "an approving review clears this" or "a reviewer accepts it with the label ... (an approving review is not enough: ...)". No review or label excuses a current test failure or missing evidence.
+**The review rule:** an approving review clears every finding except changes to existing tests (edited, removed, skipped, weakened, or existing tests that now fail, including project tests) and changes to the Workorder workflow file; those need a label (`workorder-allow:tests` or the narrower `workorder-allow:ID`; `workorder-allow:workflow`). Each refusal says which: "an approving review clears this" or "a reviewer accepts it with the label ... (an approving review is not enough: ...)". No review or label excuses a current test failure or missing evidence.
 
-Labels below must come from someone other than the pull request author. An approving review must cover the current head and come from another person. Locally, `--allow ID`, `--allow tests`, `--allow scope:ID`, `--allow no-task` and `--allow workflow` represent those reviewer labels. `--review warn` changes ordinary test-review findings to warnings; it does not accept explicit-label findings or missing evidence.
+| Finding | What clears it |
+|---|---|
+| A finished task's test fails now, runs no tests, or times out | Fix it; nothing else |
+| A DONE claim lacks evidence, or its code changed after it was finished | Finish the work or `workorder renew --task ID`, and commit the receipts |
+| A task, receipt or configuration cannot be read; receipts edited or deleted; a dependency missing | Fix or restore the named file |
+| A project test that already failed on the base | Nothing; it is a Note |
+| A task written and finished in this pull request, or its Scope, Acceptance or dependencies changed | Approving review, or `workorder-allow:ID` |
+| Changed code that no task records (`--require-task`) | Approving review, or `workorder-allow:no-task` |
+| Changed code outside the task's `code_paths` | Approving review, or `workorder-allow:scope:ID` |
+| The test asserts nothing, passes on the base code, or still passes with the change stubbed out | A better test; or approving review, or `workorder-allow:ID` |
+| A refactor or no-code-change completion the base task did not declare | Approving review, or `workorder-allow:ID` |
+| The test did not land first (`--require-test-first`) | Approving review, or `workorder-allow:ID` |
+| The comparison with the base could not run | Fix the setup; or approving review, or `workorder-allow:ID` |
+| A reopened task's test fails; a task retired; a finished task removed with all its receipts | Approving review, or `workorder-allow:ID` |
+| An existing test edited, removed, skipped or weakened, or a task's test command or test paths changed | `workorder-allow:ID`, or `workorder-allow:tests` for shared files; not an approving review |
+| Existing tests fail on the new code, including the project test | `workorder-allow:ID`, or `workorder-allow:tests` for project and unowned tests; not an approving review |
+| The Workorder workflow file changed | `workorder-allow:workflow`; not an approving review |
+
+Labels below must come from someone other than the pull request author. An approving review must cover the current head and come from another person. Locally, `--allow ID`, `--allow tests`, `--allow scope:ID`, `--allow no-task` and `--allow workflow` represent those reviewer labels, and `--approving-review` an approving review. `--review warn` changes ordinary test-review findings to warnings; it does not accept explicit-label findings or missing evidence.
 
 <!-- refusal-family records -->
 ## Record, configuration or dependency cannot be read
@@ -106,9 +124,9 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 
 <!-- refusal-inventory workorder/__init__.py 51c6a4d75952a2c005eb33acda81f0834b2f1e0dffae215a7d9cd26f48759af2 records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
-<!-- refusal-inventory workorder/bootstrap.py 47c1916b3312cb1434a8bbd327a7ed2a51f1a48f9f84bbda3e19966d506dafe5 records,workflow,project-test -->
+<!-- refusal-inventory workorder/bootstrap.py ac022ba271be9b0ba893c60e8d68ef2ea8e28fe468bfc25ff09809e0f90df670 records,workflow,project-test -->
 <!-- refusal-inventory workorder/cli.py 51eee601edea712deac119f6e6799fa5a9ca6d4da838887b1c49c0096616f18d records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
-<!-- refusal-inventory workorder/gate.py b4f36fa7416c72efadb5e2a3ad3391122c19abba83d81699e4f1750fd6692cea code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
+<!-- refusal-inventory workorder/gate.py 20ed88e81957ebeb9610ff601ff6b62101e234f2a5cfe127451ab11911fc0b6a code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py eea945bdbe5f51c5d04133b3f6f37d728dd4ed7acfe3d1ac5b48e47ca5b1822f evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
 <!-- refusal-inventory workorder/project_tests.py f65af83dd6885820c0d9a8d739d12aebd6dce97a1ff859b821b252d545f32b34 project-test,records -->

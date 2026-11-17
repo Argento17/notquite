@@ -4616,8 +4616,9 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
     if not staged:
         from . import project_tests
         if run_tests:
+            # Existing tests that now fail need the tests label: an approving review is not enough.
             problems += project_tests.run(root, base=base, label=base_label, notes=notes, counts=counts,
-                                           allow=allow, timeout=timeout)
+                                           allow=explicit_allow, timeout=timeout)
         elif base and project_tests.command(root) is None:
             notes.append(project_tests.UNSET)
     if staged and not base:
