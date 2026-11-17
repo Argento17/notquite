@@ -830,6 +830,11 @@ that interpreter lacks pytest. `init --no-project-test` keeps it off or removes
 it; later plain `init` runs leave it. Commit the configuration. It runs freshly in
 `done` and `check --run-tests`, not pre-commit, and writes no receipt.
 
+**Speed.** The project test adds one full run of your suite to every `done` and to
+the pull-request check, so each takes at least as long as the suite. For a suite
+that takes minutes, run `workorder init --no-project-test`, or set a faster command
+with `workorder init --project-test "CMD"`.
+
 For a failing pytest command, only the failing nodes rerun on the base: a test
 failing there too is a Note; one that passed there is a new regression. Missing
 base results, collection or setup failures and unidentifiable failures are

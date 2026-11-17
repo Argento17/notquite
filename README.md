@@ -107,6 +107,12 @@ Run `workorder init` in every clone: Git does not clone hooks. It installs the p
 
 `workorder init --claude` also installs Claude Code hooks that show held tasks at session start and check completion claims at stop. See [agent hooks](docs/reference.md#agent-hooks).
 
+## Speed
+
+`done` runs the task's test three times: on the new code, on the code before the change, and with the change stubbed out. The pre-commit hook adds under a second per commit.
+
+**The whole test suite runs by default.** When `init` finds pytest, it turns on the project test: `done` and the pull-request check also run your full suite once. So every `done` takes at least as long as your suite. If your suite takes minutes, turn it off with `workorder init --no-project-test`, or choose a faster command with `workorder init --project-test "CMD"`.
+
 ## What it does not do
 
 - It does not check Acceptance items, except those ending `(test: path::name)`, which `done` ties to that pytest test. People or agents confirm the rest.

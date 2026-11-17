@@ -2,6 +2,8 @@
 
 ## 0.18.0 (17 Nov 2026)
 
+- The README has a Speed section: `done` runs the task's test three times, and the project test (on by default
+  when `init` finds pytest) adds one full run of the suite; `init --no-project-test` turns it off. `init` says so.
 - The project-import check waits up to 60 s for a cold interpreter (was 10 s), so a slow machine no
   longer turns an honest comparison into "could not compare".
 - An honest change to what an old test expects commits as work in progress with a note; `done` refuses it until

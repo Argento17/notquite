@@ -163,6 +163,7 @@ def test_first_init_turns_on_the_detected_project_test(local_repo, name, text):
     assert config(root) == {'project_test': 'python -m pytest -q'}
     found = name if '/' not in name else name.split('/')[0] + '/'
     assert (f'.workorder/config.json: project test on: python -m pytest -q (pytest found in {found}); '
+            'done and the pull-request check run your full suite once; if it takes minutes, '
             'turn it off with workorder init --no-project-test') in output.splitlines()
     assert '  .workorder/config.json' in output.splitlines()
 

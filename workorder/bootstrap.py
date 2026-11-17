@@ -354,6 +354,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             project_tests.configure(root, project_test)
             written.append(project_tests.CONFIG)
             print(f'.workorder/config.json: project test on: {project_test} (pytest found in {detected});'
+                  ' done and the pull-request check run your full suite once; if it takes minutes,'
                   ' turn it off with workorder init --no-project-test')
     elif project_test is not None and not project_matches:
         if check:

@@ -126,7 +126,7 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 
 <!-- refusal-inventory workorder/__init__.py 51c6a4d75952a2c005eb33acda81f0834b2f1e0dffae215a7d9cd26f48759af2 records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
-<!-- refusal-inventory workorder/bootstrap.py 798a50cafc8b922b61254552650e26ddba57028a223ee90e31303b7033d2facf records,workflow,project-test -->
+<!-- refusal-inventory workorder/bootstrap.py f9ec3d59381cf7784913115bbee20ff45b1ac830e8dd39665fdf517d6207ee1d records,workflow,project-test -->
 <!-- refusal-inventory workorder/cli.py 00601bdf7c3986ce4a64e354f9abd120adb8f840e9d1430e3ea1dacc82cbc4b2 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
 <!-- refusal-inventory workorder/gate.py 32b5fd3a40997f22c65cc90998368d85bffeeca150d7e364615a6e320300b783 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 84c2d9a3f4cb85cc24bccd023e98b2959733d3dcae092541ecc3a82c6bff3d63 evidence,current-tests,test-edits,pending,renewal -->
