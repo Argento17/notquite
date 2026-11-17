@@ -50,7 +50,7 @@ def test_changed_test_lines_need_review_even_when_both_runs_pass(local_repo):
     probe.write_text('def test_one():\n    assert 2 == 2\n')
     touch(root)
     denied = check(root, base)
-    assert denied.returncode == 1 and 'lost or changed 1 lines' in denied.stdout
+    assert denied.returncode == 1 and 'lost or changed 1 line since' in denied.stdout  # 1.0 lane P2: was "1 lines"
     assert 'workorder-allow:TASK-1' in denied.stdout
     assert check(root, base, '--allow', 'TASK-1').returncode == 0
 

@@ -40,7 +40,7 @@ Contents: [Commands](#commands) · [Task files](#task-files) ·
 | `workorder receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to |
 | `workorder receipt deployed --task ID --target NAME -- CMD...` | Runs a read-back command; valid only if it exits 0 and prints the full commit ID |
 | `workorder receipt live --task ID --target NAME -- CMD...` | The same, recorded after the deployment |
-| `workorder check [ID]` / `check --task ID` | No argument: every task, one line per problem and `check: NOT OK (N findings)`, or `check: OK`. With a task (or `tasks/ID.md`): that task explained. `--require-acceptance` also refuses finished tasks no person has accepted |
+| `workorder check [ID]` / `check --task ID` | No argument: every task, one line per problem, then `check: NOT OK (N findings[, M shown grouped])` or `check: OK`. With a task (or `tasks/ID.md`): that task explained. `--require-acceptance` also refuses finished tasks no person has accepted |
 | `workorder check --staged` | The pre-commit hook: checks the staged tasks this commit touches (task file, receipts, contract or its evidence) and their dependents. Refuses a commit that newly claims DONE or CLOSED on code other than the implemented code, and command changes on unfinished tasks |
 | `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--review warn\|refuse] [--all-tests] [--require-task] [--require-task-ignore GLOB] [--require-test-first] [--require-acceptance] [--approving-review [--approved-by NAMES]] [--owner-accepts LABELS] [--timeout SECONDS] [--jobs N]` | The pull-request check: changed task records and receipts, all repository test roots, every task whose tests changed, and dependents. Refuses stale claims, changed receipts, unsupported definitions and removed tasks; see [checks against a base](#checks-against-a-base) |
 | `workorder repair --task ID` | Verifies a conflicted legacy append, keeps the common prefix and converts each side's extra lines to receipt files |
@@ -63,8 +63,8 @@ another clone has claimed unless `--take-over` is given (the takeover is added t
 Progress). It needs a concrete declared command; use individual receipts for
 `test: any`.
 
-**Acceptance tied to tests.** An item ending `(test: path::name)` must name a
-pytest test that exists, is run by the task's command, passes now and fails on
+**Acceptance tied to tests.** An item ending `(test: path::name)` (a full stop may
+follow; an unreadable `(test:` refuses) must name a pytest test that exists, is run by the task's command, passes now and fails on
 the base code (refactor and verification tasks need only pass). `done` prints, for
 example, `Acceptance: 2 of 3 items tied to tests that pass now and failed before;
 1 item not tied to a test (a reviewer confirms it)`. `show` marks tied items.
@@ -603,7 +603,7 @@ paths and pytest's own discovery and configuration still count.
 
 **Review modes.** `--review refuse` is the default. `--review warn` prints each
 test-review finding as `Warning:` with a `Review: N test changes need a reviewer's
-look` summary, then `check: OK` (with file and line annotations under
+look` summary; `check: OK` comes last (with file and line annotations under
 `GITHUB_ACTIONS`). False claims and current failures refuse in both modes.
 `--allow` supplies labels; `--approving-review` stands for an approving review
 of the current head.
@@ -838,32 +838,30 @@ the pull-request check (check --run-tests), not in done; run done --project-test
 **Speed.** The project test adds one full run of your suite to the pull-request
 check (and to `done --project-test`), so it takes at least as long as the suite. For a
 suite that takes minutes, run `workorder init --no-project-test`, or set a faster
-command with `workorder init --project-test "CMD"`. Plain `done` runs only the task's
-own test:
+command with `workorder init --project-test "CMD"`. Plain `done` runs the task's own
+test once (in its comparison copy) and the labelled tests of finished tasks whose code
+this change touches:
 
-- The new-code copy, base-code and stubbed-out runs run at the same time, up to
-  `--jobs` (default 3); output keeps the usual order.
+- The base-code and stubbed-out runs run at the same time, up to `--jobs` (default 3).
 - The base-code result is kept in Git's private directory, keyed by the base commit's
-  tree, the overlaid test files' content, the command, timeout, Git settings and the
-  test interpreter (path, version, `sys.path`, site-packages entries, `.pth` contents,
-  Python and pytest environment variables). A second `done` on the same base reuses it
+  tree, the overlaid test files, the command, timeout, Git settings and the test
+  interpreter (path, version, `sys.path`, site-packages, `.pth` contents, Python and
+  pytest environment variables). A second `done` on the same base reuses it
   (`result reused from the run at ...`); any differing input, or CI, runs it again.
 - Runs that only show a failure stop at the first one (pytest `-x`): the base-code run,
   and the stubbed-out run when no new or changed tests are selected. The others run in full.
-- Comparison copies share the object store (`git clone --shared`); files, index and Git
-  directory stay separate.
+- Comparison copies share the object store (`git clone --shared`).
 - In repositories too large for the read cache, reads that cannot change are still
-  shared within one command: objects by full ID, commit listings, index listings while
-  the index is unchanged, parsed Python sources, and changed work-tree paths (unless a
-  `post-index-change` hook or `core.fsmonitor` could run). Replacement refs or a split
-  index turn the matching sharing off.
+  shared within one command: objects by full ID, commit and index listings, parsed
+  Python sources and changed work-tree paths; replacement refs, a split index, a
+  `post-index-change` hook or `core.fsmonitor` turn that sharing off.
 - The pre-commit hook returns at once, silently, when only documentation is staged
   (outside `tasks/` and the receipt folders) and no task file names it, its folder or
   its suffix pattern; problems already committed are left to the pull-request check.
-- On rich 15.0 (560 files, a 0.06 s task test): `done` about 3.5 s, the receipts
-  commit about 3.5 s, a documentation-only commit 0.2 s.
+- On rich 15.0 (560 files, a 0.06 s task test): `done` and the receipts commit about
+  3.5 s each, a documentation-only commit 0.2 s.
 
-`done` and `check --run-tests` end with one stderr line, for example `Time: 3.3s: setup
+`done` and `check --run-tests` end with one stderr line (new code includes other tasks' runs), for example `Time: 3.3s: setup
 0.6s, new code 2.3s, base code 1.0s, stubbed 2.1s, project test not run, runs overlapped`.
 
 For a failing pytest command, only the failing nodes rerun on the base: a test
@@ -872,8 +870,7 @@ base results, collection or setup failures and unidentifiable failures are
 reported as undecided. Only `workorder-allow:tests` accepts a project finding
 (existing tests now fail); an approving review and `--review warn` do not.
 
-Without `project_test`, output says `only the declared tests ran; the project's
-other tests did not run (set a project test with workorder init --project-test)`.
+Without `project_test`, a Note says the project's other tests did not run.
 
 **Finished tasks.** `--all-tests --run-tests`, with or without `--base`, runs
 every DONE/CLOSED task's concrete command on current code, once per distinct
@@ -884,8 +881,7 @@ With no changed task the summary says `no task changed in this change; ran 2
 finished tasks' declared tests`. New workflows enable `--all-tests`.
 
 `--jobs N` (`check`, `done`) runs distinct current commands concurrently; the
-default is the CPU count (one if unknown). In `done` it also bounds the task's own
-new-code copy, base-code and stubbed-out runs (default 3). Identical commands and timeouts share
+default is the CPU count (else one); `done` compares with at most 3 (see **Speed**). Identical commands and timeouts share
 a run; results print in task order; comparisons keep their own copies.
 
 **Reuse.** `done`, `receipt test`, `renew` and explicit `check --run-tests` run
@@ -918,8 +914,9 @@ failure (once per command run) and the counts. The full text is saved in
 `--verbose` prints everything, and hooks read `WORKORDER_VERBOSE=1`. Base-branch
 tests failing on current code are headed `Tests from origin/main on this code:`.
 
-The run count counts tasks (a task's current and base runs once), with `(cached)`
-or `(some comparisons cached)`; a missing executable does not count. Otherwise a
+The run count counts tasks (a task's current and base runs once), named when more
+ran than were checked; `(cached, not run again)` or `(some comparisons cached)`
+mark reuse; a missing executable does not count. Otherwise a
 line says `no declared test ran in this check`, or just `no task changed in this
 change` when nothing changed, even after merging main's test edit. Unreadable and removed tasks are counted, but not
 as claims; one unfinished task reads `checked 1 task (not claimed finished)`.
@@ -1236,8 +1233,10 @@ when the target changed implementation paths since the merge base. An unsupporte
 
 DONE is `Evidence: verified`: the declared test, which the author wrote, supports the claim. A
 second line, `Acceptance:`, says whether a person agrees it is the right result:
-`confirmed by NAME on DATE` (`workorder accept --task ID`, on the tested code and refused when
-`WORKORDER_AGENT` is set), `confirmed in review by NAME` (an approving review of the tasks the pull
+`confirmed by NAME on DATE` (`workorder accept --task ID`, on the tested code; refused when
+`WORKORDER_AGENT` or an agent session variable is set: `CLAUDECODE`, `CODEX_THREAD_ID`,
+`CODEX_SANDBOX*`, `CURSOR_AGENT`, `GEMINI_CLI`, `AI_AGENT`. An agent can unset them),
+`confirmed in review by NAME` (an approving review of the tasks the pull
 request finishes), `stale since COMMIT` (the task's code changed after it), or
 `tied tests pass (N of M items)` / `awaiting a person (N items)`. Tied tests are not a person.
 
@@ -1357,7 +1356,7 @@ with the merge base, reruns them and prints test-change notes with label advice.
 finished tasks whose implementation paths or tests differ from the merge base in staged code (older
 receipts without paths use their code tree); `done` uses the same scope. Unsupported DONE claims exit
 1. Passing output is quiet; failures are shortened, with the full text in
-`.git/workorder/last-output.txt` (`WORKORDER_VERBOSE=1` prints everything). The summary counts tasks whose tests ran and marks fully cached comparisons `(cached)`. Temporary copies drop inherited Git variables, so the index stays intact in linked
+`.git/workorder/last-output.txt` (`WORKORDER_VERBOSE=1` prints everything). The summary counts tasks whose tests ran or were reused. Temporary copies drop inherited Git variables, so the index stays intact in linked
 worktrees. The hook never fetches.
 
 ### Solo mode

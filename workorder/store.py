@@ -708,8 +708,18 @@ EXTENDED_BODY = """
 """
 
 
-# An Acceptance item may end with "(test: path::name)", a pytest node id that done checks.
-ACCEPTANCE_TEST = re.compile(r'\(test:\s*([^()\s]*)\s*\)\s*$')
+# An Acceptance item may end with "(test: path::name)", a pytest node id that done checks;
+# a full stop or other closing punctuation after it still ties the item.
+ACCEPTANCE_TEST = re.compile(r'\(test:\s*([^()\s]*)\s*\)[\s.,;:!?]*$')
+ACCEPTANCE_TIE_MARK = re.compile(r'\(\s*test\s*:', re.I)
+
+
+def acceptance_tie_problem(item):
+    """An item that mentions (test: but is not read as a tie: say so rather than ignore it."""
+    if ACCEPTANCE_TEST.search(item) or not ACCEPTANCE_TIE_MARK.search(item):
+        return None
+    return ("its (test: ...) is not read as a tie to a test; end the item with exactly one "
+            "(test: path::name), such as (test: tests/test_utils.py::test_trailing_slash)")
 
 
 def acceptance_node_problem(node):
@@ -749,6 +759,8 @@ def acceptance_lines(items):
         match = ACCEPTANCE_TEST.search(item)
         if match and acceptance_node_problem(match[1]):
             raise Refused(acceptance_node_problem(match[1]))
+        if acceptance_tie_problem(item):
+            raise Refused(f"acceptance item '{item}': {acceptance_tie_problem(item)}")
         lines.append(item if item.startswith(('- ', '* ')) else '- ' + item)
     return lines
 
@@ -2279,7 +2291,8 @@ def missing_test_dependency(command, code, output, root=None):
 
 
 def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None,
-            no_code_change=False, refactor=False, pending_review=False, completion=False):
+            no_code_change=False, refactor=False, pending_review=False, completion=False, run=None):
+    """Record one receipt; `run` is done's (code, output) of this test already run in a copy."""
     repository(root)
     definition = record(root, tid)
     commit = head(root)
@@ -2327,7 +2340,10 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         if kind in {"deployed", "live"} and not target:
             raise Refused("read-backs need --target")
         try:
-            if kind == "test":
+            if kind == "test" and run is not None:
+                # Already run and printed by done, on this commit's code in a copy.
+                run = subprocess.CompletedProcess(list(command), run[0], str(run[1]), '')
+            elif kind == "test":
                 run = cached_test(command, root, test_timeout(definition, timeout), fresh=True)
                 print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0)
             else:

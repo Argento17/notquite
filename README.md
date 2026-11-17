@@ -37,7 +37,7 @@ mkdir demo && cd demo && git init -q -b main
 git config user.name "Your Name" && git config user.email you@example.com
 git init -q --bare ../demo-origin.git && git remote add origin ../demo-origin.git
 workorder init
-printf '__pycache__/\n' > .gitignore
+printf '__pycache__/\n' >> .gitignore
 git add . && git commit -qm "Set up Workorder" && git push -qu origin main
 ```
 
@@ -130,9 +130,9 @@ Run `workorder init` in every clone (Git does not clone hooks); it also adds thi
 
 ## Speed
 
-`done` runs only the task's own test. Measured on rich: `done` 3 s, pre-commit 3-4 s, 0.2 s for documentation alone.
+`done` runs the task's own test, and the tests of finished tasks whose code this change touches. On rich: `done` 3 s, pre-commit 3-4 s, documentation 0.2 s.
 
-**Your whole suite runs once, in the pull-request check.** `init` turns this on when it finds pytest; `workorder init --no-project-test` turns it off.
+**Your whole suite runs once, in the pull-request check.** `init` turns this on when it finds pytest (`--no-project-test`: off).
 
 ## What it does not do
 

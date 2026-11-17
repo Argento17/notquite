@@ -275,7 +275,7 @@ def test_merge_only_test_change_reports_no_task_changed(local_repo):
     git(root, 'merge', '--no-commit', '--no-ff', 'main')
     commit_with_hook(root)
     output = ok(root, 'check', '--base', 'main', '--run-tests')
-    assert output.splitlines()[-1] == 'no task changed in this change', output
+    assert output.splitlines()[-2:] == ['no task changed in this change', 'check: OK'], output  # 1.0 P2: verdict last
     assert 'checked 0 tasks' not in output and 'no declared test ran' not in output
 
 

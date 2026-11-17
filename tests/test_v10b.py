@@ -296,7 +296,8 @@ def test_hook_shows_test_output_only_when_the_test_fails(local_repo):
     cached = real_git(root, 'commit', '-aqm', 'Note a cached pass')
     cached_output = cached.stdout + cached.stderr
     assert cached.returncode == 0, cached_output
-    assert '(cached)' in cached_output
+    # 1.0 lane P2: a reused result is not "ran ... (cached)".
+    assert "reused 1 task's declared test result (cached, not run again)" in cached_output
     assert 'UNIQUE_PASS_OUTPUT' not in cached_output
     path.write_text(path.read_text(encoding='utf-8').replace(
         json.dumps(f'{PYTHON} -c "print(\'UNIQUE_PASS_OUTPUT\')"'),

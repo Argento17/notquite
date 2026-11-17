@@ -203,7 +203,9 @@ def test_done_other_tasks_only_in_one_other_line(local_repo, review):
     (root / 'tests/test_2.py').write_text(TEST.replace('== 2', '== 2.0'))
     commit_all(root)
     result = cli(root, 'done', '--task', 'TASK-3', *(['--needs-review'] if review else []))
-    other = [line for line in result.stdout.splitlines() if 'TASK-1' in line or 'TASK-2' in line]
+    # 1.0 lane P2: the labels above other tasks' test output name them too; findings stay in one line.
+    other = [line for line in result.stdout.splitlines() if ('TASK-1' in line or 'TASK-2' in line)
+             and "'s test (its code changed in this change):" not in line]
     assert len(other) == 1 and 'Other:' in other[0], result.stdout
 
 

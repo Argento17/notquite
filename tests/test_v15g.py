@@ -193,4 +193,4 @@ def test_unfinished_inline_python_is_not_a_missing_file(local_repo):
 def test_bare_base_summary_when_no_task_changed(local_repo):
     git(local_repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
     output = ok(local_repo, 'check', '--base', 'origin/main')
-    assert output.splitlines()[-1] == 'no task changed in this change', output
+    assert output.splitlines()[-2:] == ['no task changed in this change', 'check: OK'], output  # 1.0 P2: verdict last

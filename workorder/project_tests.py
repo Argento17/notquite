@@ -183,13 +183,20 @@ def _report(path):
     return value
 
 
-def _failure_output(report, output):
+def _failure_output(report, output, quiet=False):
     from . import console
     sections = report.get('failures') or []
+    if quiet and not console.verbose():
+        full = [report.get('short_summary'), *sections, report.get('summary')]
+        text = '\n'.join(filter(None, full))
+        if text:
+            print('', end='', full=text + '\n', dedupe=False)  # kept in the saved full output only
+        return
     if sections and not console.verbose():
         # The FAILED lines and the start of the first failure, once per run.
         full = [report.get('short_summary'), *sections, report.get('summary')]
-        print(console.short_failures(report.get('short_summary') or '', sections, report.get('summary') or ''),
+        print(console.capped(console.short_failures(report.get('short_summary') or '', sections,
+                                                    report.get('summary') or '')),
               end='', full='\n'.join(filter(None, full)) + '\n', dedupe=False)
         return
     if report.get('short_summary'):
@@ -207,7 +214,9 @@ def _failure_output(report, output):
         if len(lines) > 60:
             print('[project-test output truncated to last 60 lines]')
         if lines:
-            print('\n'.join(lines[-60:]))
+            text = '\n'.join(lines[-60:])
+            shown = console.capped(text)
+            print(shown, full=None if shown == text else text + '\n')
     for section in sections:
         lines = section.splitlines()
         print('\n'.join(lines[:60]))
@@ -354,15 +363,16 @@ def _run(root, *, base=None, label=None, notes=None, counts=None, allow=(), time
                 summary = f" ({report['summary']})" if report.get('summary') else ''
                 notes.append('the project test passed on this code' + summary)
             return []
-        if pytest:
-            _failure_output(report, output)
         failed = sorted(node for node, outcome in report.get('outcomes', {}).items()
                         if outcome == 'FAILED') if pytest and code == 1 else []
+        current_failures = (report, output) if pytest else None
         if not failed:
+            _failure_output(*current_failures) if current_failures else None
             return finding(f'the project test fails on this code (exit {gate.test_exit_meaning(code, words)}); '
                            'could not identify failing tests to compare with the base')
         base = base or gate.local_test_base(root)
         if not base:
+            _failure_output(*current_failures)
             return finding('the project test fails on this code: ' + ', '.join(failed)
                            + '; could not compare: no target is available locally')
         display = (label or base).removeprefix('refs/remotes/').removeprefix('refs/heads/')
@@ -373,11 +383,21 @@ def _run(root, *, base=None, label=None, notes=None, counts=None, allow=(), time
             before, before_output = gate.run_ref_test(
                 root, Path(temporary) / 'base', revision, selected, timeout, counts, overlays)
         except (s.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
+            _failure_output(*current_failures)
             return finding(f'the project test fails on this code; could not compare with {display}: {error}')
         report = _report(base_report)
         if report.get('summary'):
-            notes.append(f"the project test on {display} ({report['summary']})")
+            # Only the tests that failed here were rerun on the base, not the whole suite.
+            rerun = (f"{len(failed)} project test{'s' if len(failed) != 1 else ''} that "
+                     f"fail{'s' if len(failed) == 1 else ''} on this code")
+            notes.append(f"the rerun on {display} of the {rerun} ({report['summary']})")
         outcomes = report.get('outcomes', {}) if before in {0, 1} else {}
+        if any(outcomes.get(node) != 'FAILED' for node in failed):
+            _failure_output(*current_failures)
+        else:
+            # Each failure already fails on the base, so it is only a Note: no failure body here;
+            # the saved full output keeps it.
+            _failure_output(*current_failures, quiet=True)
 
     problems = []
     for node in failed:

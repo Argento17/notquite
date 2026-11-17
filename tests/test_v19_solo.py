@@ -158,7 +158,7 @@ def test_owner_acceptance_is_printed_as_owner_acceptance_never_review(local_repo
     output = ok(root, 'check', '--base', base, '--owner-accepts', 'TASK-3,tests,no-task')
     assert f'{OWNER}: TASK-3 (new task), tests/test_calc.py (changed lines)' in output
     assert 'approving review:' not in output and 'accepted by review' not in output
-    summary = output.strip().splitlines()[-1]
+    summary = output.strip().splitlines()[-2]  # 1.0 lane P2: the verdict comes last
     assert 'solo mode' in summary, output
     # Nothing disappears: the owner's labels accept exactly what the same labels from a reviewer would,
     # line for line, and only the wording of the acceptance differs.

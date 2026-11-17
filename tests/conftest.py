@@ -31,3 +31,7 @@ def local_environment(monkeypatch):
     monkeypatch.setenv('PATH', str(Path(TEST_PYTHON).parent) + os.pathsep + os.environ['PATH'])
     monkeypatch.delenv('CI', raising=False)
     monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+    # A suite run from inside a coding agent's session must not refuse accept everywhere.
+    for name in ('CLAUDECODE', 'CODEX_THREAD_ID', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED',
+                 'CURSOR_AGENT', 'GEMINI_CLI', 'AI_AGENT'):
+        monkeypatch.delenv(name, raising=False)
