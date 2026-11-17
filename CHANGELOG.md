@@ -2,6 +2,9 @@
 
 ## 0.17.0 (17 Nov 2026)
 
+- Let pending-review "could not compare" claims commit with a Note while the
+  pull request still requires the task label. Print a label-requirement Note in
+  `done` and pre-commit for refactor/verification completions not predeclared on the base.
 - Treat declared code paths and package source as code even when named like tests;
   explicit test paths take precedence. Configure test filename and folder globs
   in `.workorder/config.json`. Comparison failures carry reviewer labels and

@@ -3006,6 +3006,19 @@ def completion_kind_problem(root, base, record, staged=False):
     return AssertionProblem(reviewer_label(finding, tid), finding.path, label_only=True)
 
 
+def completion_kind_note(root, base, record, staged=False):
+    if record['status'] not in FINISHED:
+        return None
+    run = latest_test_run(root, record, staged)
+    if not (run.get('refactor') or run.get('no_code_change')):
+        return None
+    problem = completion_kind_problem(root, base, record, staged)
+    if problem:
+        return (str(problem).split('; a reviewer ', 1)[0]
+                + f"; the pull request needs workorder-allow:{record['id']}")
+    return None
+
+
 @s.cached_read
 def finished_code_change(root, base, record, staged=False):
     """New completion evidence must describe the code a squash would retain."""
@@ -4268,6 +4281,10 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 notes.append(f'{tid}: ' + pending_review_message(tid, pending_findings(root, record, staged=staged)))
             local_base = local_test_base(root, record)
             revision, label = comparison_base(root, local_base) if local_base else ('HEAD', None)
+            if local_base:
+                exemption = completion_kind_note(root, revision, record, staged)
+                if exemption:
+                    notes.append(exemption)
             for change in requirement_changes(root, revision, record, staged):
                 if not change.startswith('test changed:'):
                     notes.append(f"{tid}: {change} " + (f'since {label}' if label else 'in this commit'))
@@ -4333,6 +4350,19 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                                            allow=allow, timeout=timeout)
         elif base and project_tests.command(root) is None:
             notes.append(project_tests.UNSET)
+    if staged and not base:
+        # A pending comparison must be committable for a reviewer to label it.
+        # Current-test failures and pull-request refusals keep their usual rules.
+        blocking = []
+        for problem in problems:
+            record = all_records.get(problem.split(':', 1)[0])
+            if (isinstance(problem, ComparisonProblem) and record
+                    and waiting_for_review(root, record, staged=True)):
+                if problem not in notes:
+                    notes.append(str(problem))
+            else:
+                blocking.append(problem)
+        problems = blocking
     refused = set(re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', '\n'.join(problems)))
     counts['_supported'] = supported
     counts['tests_only'] = len(supported - refused)

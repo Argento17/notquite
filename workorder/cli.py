@@ -406,6 +406,10 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             return 1
         if note is not None:
             print(f"{tid}: {s.add_note(root, tid, note)}")
+        if base and (refactor or no_code_change):
+            exemption = gate.completion_kind_note(root, revision, s.record(root, tid))
+            if exemption:
+                print(f'Note: {exemption}')
         if base and gate.fields_at(root, tid, revision) is None:
             lines.append(f'  Next:     the pull request needs an approving review or workorder-allow:{tid}; '
                          'a reviewer reads and accepts the task definition')

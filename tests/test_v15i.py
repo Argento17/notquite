@@ -150,7 +150,8 @@ def test_shared_file_stub_finding_reaches_pending_review(local_repo):
 @pytest.mark.parametrize('action', ['hook', 'done', 'check', 'refactor'])
 def test_comment_only_finished_test_is_unchanged(local_repo, action):
     root = local_repo
-    prepare(root)
+    # Predeclare the exemption so only a changed test could need review here.
+    prepare(root, kind='refactor' if action == 'refactor' else None)
     land(root)
     if action == 'refactor':
         (root / 'calc.py').write_text(REFACTOR)
