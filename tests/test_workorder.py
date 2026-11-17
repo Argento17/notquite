@@ -29,10 +29,41 @@ def git(root, *args):
     return result.stdout.strip()
 
 
+def _windows_process_table():
+    """Diagnostic for a pipe held open after Workorder exits (seen only on Windows CI)."""
+    command = ("Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,"
+               "CreationDate,Name,CommandLine | Format-Table -AutoSize -Wrap | Out-String -Width 400")
+    try:
+        return subprocess.run(["powershell", "-NoProfile", "-Command", command],
+                              capture_output=True, encoding="utf-8", errors="replace", timeout=60).stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"could not list processes: {error}"
+
+
 def cli(root, *args):
     env = dict(os.environ, PYTHONPATH=str(PACKAGE), GIT_TERMINAL_PROMPT="0")
-    return subprocess.run([PYTHON, "-m", "workorder", *args], cwd=root, env=env,
-                          capture_output=True, encoding="utf-8", timeout=120)
+    command = [PYTHON, "-m", "workorder", *args]
+    if os.name == "nt":
+        # Diagnostic for an intermittent Windows hang: dump every thread's stack
+        # to stderr shortly before the 120-second limit.
+        command = [PYTHON, "-c", "import faulthandler, runpy, sys; "
+                   "faulthandler.dump_traceback_later(100, file=sys.stderr); "
+                   "sys.argv = ['workorder', *sys.argv[1:]]; "
+                   "runpy.run_module('workorder', run_name='__main__', alter_sys=True)", *args]
+    process = subprocess.Popen(command, cwd=root, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
+    try:
+        stdout, stderr = process.communicate(timeout=120)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            print(f"workorder pid {process.pid} exit {process.poll()}; processes while its output is still open:")
+            print(_windows_process_table())
+        process.kill()
+        _, stderr = process.communicate()
+        print("workorder stderr (thread dump on Windows):")
+        print(stderr[-30000:])
+        raise
+    return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
 
 def ok(root, *args):
@@ -544,13 +575,18 @@ def test_reference_extended_example_is_a_valid_task(clones):
 
 
 def test_workflow_installs_kit_runs_tests_and_checker():
-    steps = [line.strip() for line in
-             (PACKAGE / ".github/workflows/check.yml").read_text().splitlines()
-             if line.strip().startswith("- run:")]
+    text = (PACKAGE / ".github/workflows/check.yml").read_text()
+    steps = [line.strip() for line in text.splitlines() if line.strip().startswith("- run:")]
     assert steps == ["- run: python -m pip install -e '.[test]'",
-                     "- run: python -m pytest -n auto", "- run: workorder check",
+                     "- run: workorder check",
                      "- run: python -m pip install -e '.[test]'",
                      "- run: sh examples/real-projects.sh python"]
+    # The test step runs pytest on one of three shards; together the shards cover every test file once.
+    assert "shard: [1, 2, 3]" in text and "python -m pytest -n auto $files" in text
+    files = sorted(path.relative_to(PACKAGE).as_posix() for path in (PACKAGE / "tests").glob("test_*.py"))
+    shards = [[x for i, x in enumerate(files) if i % 3 == shard - 1] for shard in (1, 2, 3)]
+    assert sorted(sum(shards, [])) == files and all(shards)
+    assert "i % 3 == ${{ matrix.shard }} - 1" in text
 
 
 def test_test_before_implementation_does_not_complete_task(clones):
@@ -839,7 +875,11 @@ def local_repo(tmp_path):
     git(root, "init", "-q", "-b", "main")
     git(root, "config", "user.name", "solo")
     git(root, "config", "user.email", "solo@example.com")
-    (root / "app.py").write_text("items = []\n", encoding="utf-8")
+    # Read-cache contracts need stable metadata after a fixture commit returns.
+    # Explicit maintenance/repack tests remain free to run those commands.
+    git(root, "config", "maintenance.auto", "false")
+    git(root, "config", "gc.auto", "0")
+    (root / "app.py").write_bytes(b"items = []\n")
     git(root, "add", "app.py")
     git(root, "commit", "-qm", "Start")
     return root

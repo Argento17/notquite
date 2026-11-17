@@ -32,7 +32,9 @@ def finished(root, tid='TASK-1', status='DONE', test=None):
     return commit_all(root)
 
 
+@pytest.mark.usefixtures('observable_git_environment')
 def test_git_subprocess_budget_for_finished_tasks(local_repo, monkeypatch):
+    monkeypatch.delenv('WORKORDER_GIT_CACHE', raising=False)  # this test measures reuse
     # Unique code/claim commits per task, two valid receipts each. Count real
     # subprocesses including binary cat-file calls, not just the git wrapper.
     root = local_repo
@@ -229,8 +231,8 @@ def test_new_finished_definition_needs_allow(local_repo, status):
     finished(root, status=status)
     refused = cli(root, 'check', '--base', base)
     assert refused.returncode == 1
-    assert ('TASK-1 is new in this pull request: a reviewer accepts its definition with the label '
-            'workorder-allow:TASK-1 (or an approving review)') in refused.stdout
+    assert ('TASK-1 was written and finished in this pull request; a reviewer reads its definition '
+            'and accepts it with an approving review or workorder-allow:TASK-1') in refused.stdout
     ok(root, 'check', '--base', base, '--allow', 'TASK-1')
 
 

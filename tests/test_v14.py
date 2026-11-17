@@ -49,7 +49,7 @@ def check(root, *extra):
 def test_declared_refactor_completes_and_is_visible_to_reviewer(local_repo):
     root = local_repo
     branch(root, 'TASK-3', TEST)
-    (root / 'calc.py').write_text(CODE.replace('a / b', '(a) / (b)'))
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / (b + 0)'))
     commit_all(root)
     output = ok(root, 'done', '--task', 'TASK-3', '--refactor')
     assert 'TASK-3 DONE:' in output
@@ -189,7 +189,7 @@ def test_real_assertion_syntax_remains_accepted(local_repo, body):
 
 
 @pytest.mark.parametrize('status', ['DONE', 'IN_PROGRESS'])
-def test_new_task_with_red_before_green_needs_no_label(local_repo, status):
+def test_new_task_with_red_before_green_reviews_only_finished_claim(local_repo, status):
     root = local_repo
     branch(root, 'TASK-40', code=None, new=True)
     (root / 'calc.py').write_text(CODE)
@@ -198,9 +198,15 @@ def test_new_task_with_red_before_green_needs_no_label(local_repo, status):
     claim(root, 'TASK-40')
     store.set_task_field(root, 'TASK-40', 'status', status)
     result = check(root)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.count('TASK-40 is new in this pull request; its test fails on origin/main and passes now') == 1
-    assert 'accepts its definition' not in result.stdout
+    assert result.returncode == int(status == 'DONE'), result.stdout + result.stderr
+    if status == 'DONE':
+        assert result.stdout.count('TASK-40 was written and finished in this pull request;') == 1
+        for flags in [('--allow', 'TASK-40'), ('--approving-review',)]:
+            accepted = check(root, *flags)
+            assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    else:
+        assert result.stdout.count('TASK-40 is new in this pull request; its test fails on origin/main and passes now') == 1
+        assert 'accepts its definition' not in result.stdout
 
 
 def test_new_task_without_red_still_needs_definition_review(local_repo):
@@ -211,7 +217,7 @@ def test_new_task_without_red_still_needs_definition_review(local_repo):
     claim(root, 'TASK-40')
     result = check(root)
     assert result.returncode == 1
-    assert 'TASK-40 is new in this pull request: a reviewer accepts its definition' in result.stdout
+    assert 'TASK-40 was written and finished in this pull request; a reviewer reads its definition' in result.stdout
 
 
 @pytest.mark.parametrize('template', ['extended', 'simple'])
@@ -342,7 +348,7 @@ def test_unowned_assertion_free_test_is_refused(local_repo):
 def test_refactor_cannot_keep_declaration_after_test_edit(local_repo):
     root = local_repo
     branch(root, 'TASK-3', TEST)
-    (root / 'calc.py').write_text(CODE + '# refactor\n')
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-3', '--refactor')
     (root / 'tests/test_div.py').write_text(TEST + '    assert div(8, 2) == 4\n')
@@ -399,7 +405,7 @@ def test_pathless_refactor_refuses_changed_collected_tests(local_repo, action):
     definition.write_text(definition.read_text().replace(' -q tests/test_div.py', ' -q'))
     commit_all(root)
     git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
-    (root / 'calc.py').write_text(CODE + '# refactor\n')
+    (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     commit_all(root)
     if action == 'check':
         ok(root, 'done', '--task', 'TASK-3', '--refactor')

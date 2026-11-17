@@ -72,8 +72,10 @@ def test_new_task_receipts_get_one_precise_definition_request(local_repo, status
     store.set_task_field(root, 'TASK-4', 'status', status)
     result = cli(root, 'check', '--base', base, '--require-task')
     assert result.returncode == 1, result.stdout
-    expected = ('TASK-4 is new in this pull request: a reviewer accepts its definition with the label '
-                'workorder-allow:TASK-4 (or an approving review)')
+    expected = (('TASK-4 was written and finished in this pull request; a reviewer reads its definition '
+                 'and accepts it with an approving review or workorder-allow:TASK-4') if status == 'DONE' else
+                ('TASK-4 is new in this pull request: a reviewer accepts its definition with the label '
+                 'workorder-allow:TASK-4 (or an approving review)'))
     assert result.stdout.count(expected) == 1, result.stdout
     assert 'no task records it' not in result.stdout
     ok(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-4')

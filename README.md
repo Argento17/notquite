@@ -1,14 +1,12 @@
 # Workorder: the task record for coding agents
 
 **Every task recorded. A clear history. Agents always go back to it.**
-[Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder flags](docs/shortcuts.md)
+[Reviewer guide](docs/reviewer-guide.md) · [Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder flags](docs/shortcuts.md)
 
 Workorder keeps each task as a record in your repository. A coding agent starts every session from the task, works within it, and leaves it up to date. The next session, or the next agent, picks up where the last one stopped.
 
-Each task is a Markdown file in `tasks/`: its mission, scope, acceptance criteria,
-dependencies, test command and progress. Receipts in `.workorder/` record the
-implementation, commands, results and code they refer to. `workorder show` prints
-that history. `status: DONE` is a claim; `workorder check` says whether the record
+Each task is a Markdown file in `tasks/`: its mission, scope, acceptance criteria, dependencies, test command and progress. Receipts in `.workorder/` record the
+implementation, commands, results and code they refer to. `workorder show` prints that history. `status: DONE` is a claim; `workorder check` says whether the record
 supports it. Acceptance lists still need a person or agent to check them.
 
 Requires Git and Python 3.10 or newer. It uses Python's standard library, with no server or database. Tested on Linux and Windows with Python 3.10, 3.12 and 3.13.
@@ -48,8 +46,8 @@ Out: subtraction and other operations.
 - `add(2, 2)` returns `4`.
 ```
 
-Land the task on main first, as below, then do the work on a branch. If task and
-code share a pull request, no label is needed when its test fails before the change and passes after:
+Land the task on main first, as below, then do the work on a branch. A task written
+and finished in one pull request always needs a reviewer label or approving review:
 
 ```sh
 git add . && git commit -qm "Workorder setup and TASK-1"
@@ -78,8 +76,8 @@ Use `--no-code-change` only when the task's own code and test files are unchange
 `--needs-review` writes DONE pending a reviewer label or approval. Use `--refactor`
 for unchanged tests passing before and after. Plain `renew` keeps that declaration; `renew --no-refactor` drops it. `new --code-paths src/calc.py` sets code scope. [Task format](docs/reference.md#task-files).
 
-For installed `src/` projects (including `pip install -e .`), copies put `src/` and the copy root first on `PYTHONPATH` and verify package locations before comparing.
-Only the project's own packages must resolve inside the copy; editable dependencies may live elsewhere.
+For installed `src/` projects (including `pip install -e .`), test copies verify project imports using pytest's actual configuration and `pythonpath`, including isolated Python commands.
+Only the project's own packages must resolve inside the copy; editable dependencies may live elsewhere. Documentation and Python docstring-only edits need no code receipts or renewal.
 
 ## Working with coding agents
 
@@ -89,13 +87,13 @@ workflow when one is absent. It lists the files written and an exact commit comm
 
 ```markdown
 ## Tasks
-- Start every session from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed, then run `workorder renew --task <id>` if the task's own code or test files changed. Use the repository's default branch name if it is not main. Then run `workorder show --task <id>` and work from what it prints: the mission and Scope say what to do and what not to; the Acceptance list says how the work will be accepted; `test` is the command that proves it; the history and progress say where the last session stopped.
-- When agents share one Git identity, set `WORKORDER_AGENT` so claims tell them apart. Before starting, run `workorder claim --task <id>` (needs an origin remote you can push to). Run `workorder release --task <id>` when you stop working on it, finished or not.
-- When creating a task, use `workorder new --code-paths <files or folders>` to set its code scope. Work on a branch and open a pull request. Land the task on main first, or include it with code whose test fails on the merge-base code and passes now; that new task needs no label. Otherwise a reviewer must accept the new definition with `workorder-allow:<id>` or an approving review.
-- After committing code and confirming every Acceptance item is met, fetch origin before `done` when there is an origin remote: `git fetch origin`. Then run `workorder done --task <id> --note "<what was done>"`. It records implementation when needed, runs the declared test on current and target code, checks affected finished tasks, and sets DONE only when its check supports the claim. If `done` refuses or prints a warning, report it; do not say the task is done. Acceptance lists are not checked by Workorder.
-- For a refactor with unchanged test files that pass before and after, use `done --task <id> --refactor`. For intentional test changes, use `done --task <id> --needs-review`. It writes DONE with a pending review receipt; the pull request still needs `workorder-allow:<id>` or an approving review. Report the pending review to the user. A refused `done` writes no Progress note or receipts; use `workorder note` to leave a handover while fixing it.
-- For unfinished work, record progress and the next step with `workorder note --task <id> --next "<next step>" "<what was done>"`; `done` clears `next`. Before stopping, commit tasks/ and .workorder/ with your work and push.
-- After merge, run `workorder check <id>` on main; if the task's own code or test files changed, run `workorder renew --task <id>` there and test again.
+- Start from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed. Use the default branch's name. Run `workorder show --task <id>`; follow its mission, Scope, Acceptance, test, history and progress.
+- Set `WORKORDER_AGENT` when sharing a Git identity. Run `workorder claim --task <id>` before work (needs a writable origin), and `workorder release --task <id>` when stopping, finished or not.
+- Create tasks with `workorder new --code-paths <files or folders>`. Land the task first, then implement on a branch and open a pull request. A task written and finished in one pull request needs an approving review or `workorder-allow:<id>`.
+- Confirm every Acceptance item, commit code, fetch origin if present, then run `workorder done --task <id> --note "<what was done>"`. Workorder checks test evidence, not Acceptance. Report refusals and warnings; do not claim completion after them.
+- Use `done --task <id> --refactor` for unchanged tests passing before and after; use `done --task <id> --needs-review` for intended test edits. Report pending review: the pull request needs the task's label or approval. Refused done writes no notes or receipts; use `workorder note` for handover.
+- Keep unfinished progress with `workorder note --task <id> --next "<next step>" "<progress>"`; done clears next. Before stopping, commit tasks/ and .workorder/ with the work and push.
+- Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`. Commit its receipts. After merge, run `workorder check <id>` on main; renew and test again if needed.
 ```
 
 `workorder init --claude` installs Claude Code SessionStart and Stop hooks. SessionStart shows held tasks;
@@ -110,11 +108,13 @@ Use `init --test-first` to add `check --require-test-first`; tests added or chan
 
 The pre-commit hook checks staged work; finished-task command repairs get review notes if they pass. With a local target, `done` also tests affected finished tasks. Another task's own test edits and recorded findings stop blocking only after its own `done --needs-review` in this change covers its current tests. Other findings still block plain `done`; all appear once in `Other:`. Fetch origin before `done`.
 
-A completed task's test must fail on the target's merge-base code when its own code or tests changed. `--refactor` accepts unchanged tests passing on both versions; `--no-code-change` checks the task's declared code paths and tests. Without code paths, other tasks' new receipts exclude their recorded changes. The task label can accept a false exemption in the pull request. Each exemption remains a separate task note.
+A new or reopened completion must show its change with tests that fail on the target's merge-base code. Renewing a finished claim already on the target does not owe new base-code or stub proof. `--refactor` accepts unchanged tests passing on both versions; `--no-code-change` checks the task's code paths and tests. Without code paths, other tasks' new receipts exclude their recorded changes. A false exemption needs the task label.
 
-New or changed Python test functions need an assertion or helper (including `pytest.warns`); literal-only assertions and `value == value` refuse. Tests must also fail when the task's changed Python functions are replaced with bodies that raise an error in a temporary copy. Declared code paths set that boundary; without them, other tasks' declared paths are excluded. Refactor and no-code-change runs are exempt; unusual valid tests can use `done --needs-review` and need the task's explicit reviewer label. [Test checks](docs/reference.md#checks-against-a-base).
+New or changed Python test functions need an assertion or helper (including `pytest.warns`); literal-only assertions and `value == value` refuse. For pytest, the new or changed tests run together against base code and against changed functions replaced with bodies that raise an error; at least one must fail in each check. If none changed, the whole command decides. Mixed stub results list passing tests in one Note. Refactor and no-code-change runs are exempt; unusual valid tests can use `done --needs-review` and need the task's explicit reviewer label. [Test checks](docs/reference.md#checks-against-a-base).
 
-The default workflow checks pull requests with `--base origin/<base> --run-tests --all-tests --require-task`, and default-branch pushes with `--run-tests --all-tests`.
+Finished tasks allow new Python tests, fixtures, imports and appended parameter cases when existing tests stay unchanged. Existing test edits need the task label or an approving review, including for declared refactors. A pytest command without paths uses `testpaths`, or recognized repository tests; `new` asks for `--test-paths` if none are found.
+
+The default workflow checks pull requests with `--base origin/<base> --run-tests --all-tests --require-task`, and default-branch pushes with `--run-tests --all-tests`. Set an optional whole-project command with `workorder init --project-test "python -m pytest"`; `done` and `check --run-tests` run it, pre-commit does not. Without one, output says only declared task tests ran.
 `check/done --jobs N` runs distinct current commands concurrently, defaulting to the CPU count; output stays in task order. Identical commands and timeouts share one run. If the task's own code or test files changed, run `workorder renew --task <id>`. Renewal preserves a refactor declaration.
 Generated Python metadata and caches, and lockfiles, need no task evidence. Repeat `check --require-task-ignore GLOB` for other path exceptions; these affect only the code-to-task requirement.
 
@@ -125,6 +125,6 @@ Shared test and configuration files produce one finding naming their owners. Cur
 
 `init --check` reports missing setup without changing it. `init --update-workflow` shows a diff and refreshes the workflow. `--force` keeps a different hook as `pre-commit.workorder-previous` and calls it first.
 Generated workflows install detected test dependencies and pin the running Workorder version or installed Git commit. With no detected test dependencies, they install no extra test tools and print a warning. [Team setup](docs/reference.md#team-setup).
-Existing 0.14 receipts need no migration. Local task IDs respect reservation tags already fetched; missing test-origin evidence never claims that a test landed earlier.
+Existing task files and receipts need no migration. Before a squash, the pull-request check requires a task finished in that change to renew if its code changed after completion; `done` and pre-commit print that advice as a Note. Local task IDs respect reservation tags already fetched.
 
 [Full reference](docs/reference.md) · [Real-project proof](examples/real-projects.sh) · [Examples](examples/) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)

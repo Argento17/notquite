@@ -181,7 +181,7 @@ def test_rebase_keeps_receipts_only_for_recorded_code_and_target_changes(local_r
         root = clone
     if later:
         path = root / ('calc.py' if later == 'recorded' else 'unrelated.py')
-        path.write_text(path.read_text() + '# edited after testing\n')
+        path.write_text(path.read_text().replace('a / b', '(a + 0) / b').replace('value = 1', 'value = 0 + 1'))
         commit_all(root)
     result = check(root)
     assert result.returncode == (1 if later else 0), result.stdout + result.stderr

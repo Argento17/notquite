@@ -34,7 +34,7 @@ def finished_on_branch(root, status='DONE', refactor=False):
     commit_with_hook(root)
     git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
     git(root, 'switch', '-c', 'work')
-    (root / 'fn.py').write_text(CODE.replace('a / b', '(a) / b') if refactor else CODE)
+    (root / 'fn.py').write_text(CODE.replace('a / b', '(a + 0) / b') if refactor else CODE)
     (root / 'tests/test_fn.py').write_text(TEST.replace('from calc', 'from fn'))
     commit_with_hook(root)
     output = ok(root, 'done', '--task', 'TASK-1', *(['--refactor'] if refactor else []))
@@ -227,9 +227,9 @@ def test_named_task_run_tests_explains_refusal_without_running(local_repo):
 def test_init_instructions_distinguish_unfinished_work_and_agents(local_repo, filename):
     ok(local_repo, 'init')
     text = (local_repo / filename).read_text()
-    assert 'For unfinished work, record progress and the next step' in text
-    assert '`done` clears `next`' in text
-    assert 'set `WORKORDER_AGENT` so claims tell them apart' in text
+    assert 'Keep unfinished progress with `workorder note' in text
+    assert '; done clears next.' in text
+    assert 'Set `WORKORDER_AGENT` when sharing a Git identity' in text
 
 
 def test_branch_finished_test_edit_keeps_commit_renew_flow(local_repo):

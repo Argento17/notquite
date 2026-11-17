@@ -77,7 +77,7 @@ def test_sibling_dependency_does_not_hide_remapped_project(local_repo, tmp_path,
         git(clone, 'config', 'user.email', 'tester@example.invalid')
         git(clone, 'update-ref', 'refs/remotes/origin/main', base)
         root = clone
-    (root / 'pkg/unipkg/__init__.py').write_text('def value():\n    return (1)\n')
+    (root / 'pkg/unipkg/__init__.py').write_text('def value():\n    return 0 + 1\n')
     commit_all(root)
     result = cli(root, 'done', '--task', 'TASK-1', '--refactor')
     assert result.returncode == 1, result.stdout + result.stderr

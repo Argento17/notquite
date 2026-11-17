@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .console import print
+
 import argparse
 import os
 from pathlib import Path
@@ -44,6 +46,7 @@ def parser():
     init.add_argument("--update-workflow", action="store_true", help="rewrite the workflow and show its diff; --check previews only")
     init.add_argument("--light", action="store_true", help="write a trial workflow with review warnings and no task requirement")
     init.add_argument('--test-first', action='store_true', help='require tests to land before implementation in the workflow')
+    init.add_argument('--project-test', metavar='CMD', help="set the project's test command in .workorder/config.json")
     hook = commands.add_parser("hook", help="run a local agent session or stop check")
     hook.add_argument("event", choices=["session-start", "stop"])
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
@@ -213,6 +216,7 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
     print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
 
 
+@s.read_session()
 @s.test_output_session()
 @s.completion_transaction
 def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_change=False, refactor=False,
@@ -297,18 +301,27 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 lines.append('  Next:     fix the code or the test, then run workorder done again')
             done_refusal(tid, status, lines, needs_review=needs_review)
             return 1
+        from . import project_tests
+        project_notes = []
+        project_problems = project_tests.run(root, base=revision if base else None, label=base,
+                                             notes=project_notes, timeout=timeout)
+        for project_note in project_notes:
+            print(f'Note: {project_note}')
+        if project_problems:
+            done_refusal(tid, status, [f'  Missing:  {problem}' for problem in project_problems])
+            return 1
         print("Acceptance:")
         print(filled["Acceptance"])
         print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         results = {}
-        stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results)
+        notes = []
+        stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results, notes=notes)
         if stub and needs_review and gate._accepts_allow_label(stub):
             pending_findings.append(stub)
         elif stub:
             done_refusal(tid, status, [f'  Missing:  {stub}'], needs_review=needs_review)
             return 1
         if base:
-            notes = []
             revision, label = gate.comparison_base(root, base)
             records = gate.records(root, errors={})
             declared = {}
@@ -351,7 +364,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 if review_note in problems:
                     continue
                 if owners and tid not in owners:
-                    if not review_note.endswith(': its test passed when this check ran it'):
+                    if 'its code changed after it was finished' in review_note:
+                        print(f'Note: {review_note}')
+                    elif not review_note.endswith(': its test passed when this check ran it'):
                         other_notes |= owners
                 elif review_note != wrapper:
                     if needs_review and gate._accepts_allow_label(review_note):
@@ -391,6 +406,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             return 1
         if note is not None:
             print(f"{tid}: {s.add_note(root, tid, note)}")
+        if base and gate.fields_at(root, tid, revision) is None:
+            lines.append(f'  Next:     the pull request needs an approving review or workorder-allow:{tid}; '
+                         'a reviewer reads and accepts the task definition')
         print("\n".join(lines))
         _, owed, delivery = gate.verdict(root, s.record(root, tid))
         debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""
@@ -407,6 +425,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         return 1
 
 
+@s.read_session()
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     command = []
@@ -441,7 +460,8 @@ def main(argv=None):
         if options.action == "init":
             from .bootstrap import initialize
             return initialize(root, options.check, options.force, claude=options.claude,
-                              update_workflow=options.update_workflow, light=options.light, test_first=options.test_first)
+                              update_workflow=options.update_workflow, light=options.light, test_first=options.test_first,
+                              project_test=options.project_test)
         elif options.action == "hook":
             from .hooks import run
             return run(root, options.event)
@@ -455,6 +475,14 @@ def main(argv=None):
                                 'so changes to its tests are reviewed')
             named = (options.test_paths if options.test_paths is not None else
                      gate.paths_named_by_command(options.test, root) if options.test else None)
+            definition = {'id': options.prefix + '-1', 'test': options.test}
+            if (options.test_paths is None and gate.uses_pytest(definition)
+                    and not gate.pytest_collection_paths(definition)):
+                inferred = gate.default_pytest_files(root, definition, 'HEAD')
+                if not inferred:
+                    raise s.Refused('no test files are known for this pytest command; pass --test-paths PATH [PATH ...]')
+                if options.test_first:
+                    named = sorted(inferred)
             requested = (options.test_paths if options.test_paths is not None else
                          gate.paths_named_by_command(options.test, root, include_missing=True) if options.test else [])
             for path in requested:
@@ -531,14 +559,13 @@ def main(argv=None):
             previous = next((item for item in reversed(s.entries(root, options.task)) if item['kind'] == 'test'), {})
             refactor = previous.get('refactor', False) if options.refactor is None else options.refactor
             if refactor:
-                import tempfile
                 base = gate.local_test_base(root, record)
                 if not base:
                     raise s.Refused('a declared refactor needs a locally available target; fetch origin first')
                 revision, _ = gate.comparison_base(root, base)
                 if gate.changed_test_paths(root, revision, gate.refactor_test_files(root, record, revision)):
                     raise s.Refused(f'{options.task}: its test files changed; use renew --no-refactor to drop the declaration')
-                with tempfile.TemporaryDirectory(prefix='workorder-refactor-') as temporary:
+                with s.temporary_checkout(prefix='workorder-refactor-') as temporary:
                     code, output = gate.run_ref_test(root, Path(temporary) / 'base', revision, command,
                                                      s.test_timeout(record, options.timeout), None)
                 if isinstance(code, str):

@@ -21,6 +21,7 @@ PROJECTS = {
     'attrs': ('https://github.com/python-attrs/attrs.git', os.environ.get('ATTRS_COMMIT', '3dca08ce5bbe673d7df25f44f3dda92505d1043d'), 'src/attr'),
 }
 CASES = ('feature', 'bugfix', 'refactor', 'assert-true', 'expected-value', 'skip')
+CLICK_CASES = ('shared-file-callable', 'shared-file-honest', 'shared-folder-second-task')
 
 
 def run(command, repo, log, env, expected=0):
@@ -50,12 +51,104 @@ def replace(path, old, new):
     path.write_text(text.replace(old, new), encoding='utf-8')
 
 
+def click_shared_case(repo, log, env, python, case, commit_id):
+    """Append tests to Click's own shared file, retaining all its existing tests."""
+    wo = [sys.executable, '-m', 'workorder']
+    source = repo / 'src/click/types.py'
+    tests = repo / 'tests/test_basic.py'
+    original_tests = tests.read_text(encoding='utf-8')
+    test_command = [python, '-m', 'pytest', '-q', 'tests/test_basic.py']
+
+    def define_task(task_id, command, title, scope, acceptance):
+        run(wo + ['new', '--local', '--title', title, '--owner', 'example', '--ships', 'none',
+                  '--test', shlex.join(command), '--code-paths', 'src/click/types.py'], repo, log, env)
+        definition = repo / f'tasks/{task_id}.md'
+        replace(definition, '## Scope\n', f'\n## Scope\n\n{scope}\n')
+        replace(definition, '## Acceptance\n', f'\n## Acceptance\n\n- {acceptance}\n')
+        return definition
+
+    def start_branch(name):
+        git(repo, log, env, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+        git(repo, log, env, 'checkout', '-qb', name)
+
+    task_id = 'TASK-1'
+    if case == 'shared-folder-second-task':
+        # The finished task owns the folder, including the shared file that
+        # TASK-2 will extend. Its existing tests and definition stay intact.
+        define_task('TASK-1', [python, '-m', 'pytest', '-q', 'tests', '-k', 'boolean'],
+                    'click: simplify boolean normalization',
+                    'Name the normalized boolean input before looking up its value.',
+                    'Existing boolean options keep their behavior.')
+        commit(repo, log, env, 'Define the first task before its implementation')
+        start_branch('first-task')
+        replace(source, '        return BoolParamType.bool_states.get(value.strip().lower())',
+                '        normalized = value.strip().lower()\n'
+                '        return BoolParamType.bool_states.get(normalized)')
+        commit(repo, log, env, 'Name the normalized boolean input')
+        finished = run(wo + ['done', '--task', 'TASK-1', '--refactor'], repo, log, env)
+        if 'TASK-1 DONE:' not in finished:
+            raise RuntimeError(f'click/{case} did not finish the first task: {log}')
+        commit(repo, log, env, 'Record the finished first task')
+        git(repo, log, env, 'checkout', '-q', 'main')
+        git(repo, log, env, 'merge', '--ff-only', 'first-task')
+        task_id = 'TASK-2'
+
+    definition = define_task(task_id, test_command, f'click: {case}',
+                             'Accept enable as a true value for a boolean option.',
+                             'A boolean option accepts enable, ignoring case and surrounding whitespace.')
+    # Definitions land first: writing and finishing a task in one pull request
+    # requires reviewer acceptance, which these cases do not request.
+    commit(repo, log, env, 'Define the task before adding its boolean option behavior')
+    start_branch('workorder-example')
+    replace(source, 'value.strip().lower()', '_normalize_bool_word(value)')
+    replace(source, '\n\nclass BoolParamType(',
+            '\n\ndef _normalize_bool_word(value: str) -> str:\n'
+            '    return value.strip().lower()\n\n\nclass BoolParamType(')
+    replace(source, '        "on": True,\n', '        "on": True,\n        "enable": True,\n')
+    honest = case != 'shared-file-callable'
+    if honest:
+        added_test = ('\n\ndef test_workorder_enable_boolean(runner):\n'
+                      '    @click.command()\n'
+                      '    @click.option("--flag", type=bool)\n'
+                      '    def cli(flag):\n'
+                      '        click.echo(flag, nl=False)\n\n'
+                      '    result = runner.invoke(cli, ["--flag", " ENABLE "])\n'
+                      '    assert result.exit_code == 0\n'
+                      '    assert result.output == "True"\n')
+    else:
+        added_test = ('\n\ndef test_workorder_boolean_callable():\n'
+                      '    from click.types import _normalize_bool_word\n\n'
+                      '    assert callable(_normalize_bool_word)\n')
+    tests.write_text(original_tests + added_test, encoding='utf-8')
+    commit(repo, log, env, case)
+    done = run(wo + ['done', '--task', task_id], repo, log, env, expected=0 if honest else 1)
+    if honest and f'{task_id} DONE:' not in done:
+        raise RuntimeError(f'click/{case} did not reach DONE: {log}')
+    reason = 'its new or changed tests still pass with the changed functions stubbed out'
+    if not honest:
+        if reason not in done or 'test_workorder_boolean_callable' not in done:
+            raise RuntimeError(f'click/{case} did not refuse the callable-only test: {log}')
+        if 'status: "IN_PROGRESS"' not in definition.read_text(encoding='utf-8'):
+            raise RuntimeError(f'click/{case} changed status after refusing DONE: {log}')
+        run(wo + ['renew', '--task', task_id], repo, log, env)
+        replace(definition, 'status: "IN_PROGRESS"', 'status: "DONE"')
+    commit(repo, log, env, 'Record the completion claim for the pull-request check')
+    checked = run(wo + ['check', '--base', 'origin/main', '--run-tests', '--all-tests', '--require-task'],
+                  repo, log, env, expected=0 if honest else 1)
+    if not honest and (reason not in checked or 'test_workorder_boolean_callable' not in checked):
+        raise RuntimeError(f'click/{case} did not refuse the callable-only completion claim: {log}')
+    if honest and 'workorder-allow:' in done + checked:
+        raise RuntimeError(f'click/{case} unexpectedly asked for a reviewer label: {log}')
+    print(f'click/{case}: ' + ('DONE' if honest else 'refused'), flush=True)
+    return dict(project='click', case=case, commit=commit_id, done=honest, log=str(log))
+
+
 def cases(seed, commit_id, project, package_path, output, env, prepared_python=None):
-    """Run all six cases against the pinned source. prepared_python is for offline checks."""
+    """Run the project's cases against pinned source; prepared_python allows offline checks."""
     results = []
     package = package_path.split('/')[-1]
     wo = [sys.executable, '-m', 'workorder']
-    for case in CASES:
+    for case in CASES + (CLICK_CASES if project == 'click' else ()):
         folder = output / f'{project}-{case}'
         folder.mkdir()
         log = folder / 'commands.log'
@@ -88,6 +181,9 @@ def cases(seed, commit_id, project, package_path, output, env, prepared_python=N
         if not prepared_python and not Path(location).resolve().is_relative_to(repo.resolve()):
             raise RuntimeError(f'{project} editable install resolves outside its clone: {location}')
         run(wo + ['init'], repo, log, env)
+        if case in CLICK_CASES:
+            results.append(click_shared_case(repo, log, env, python, case, commit_id))
+            continue
         source = repo / package_path / '_workorder_example.py'
         tests = repo / 'tests/test_workorder_example.py'
         # The example operation exercises upstream Click / attrs, rather than
@@ -179,7 +275,9 @@ def main():
             pins[name] = commit_id
             results.extend(cases(seed, commit_id, name, package_path, output, env))
         (output / 'results.json').write_text(json.dumps(dict(commits=pins, cases=results), indent=2) + '\n')
-        print('PASS: 12 real-project cases verified; 6 honest changes DONE without labels; 6 shortcuts refused.', flush=True)
+        honest = sum(result['done'] for result in results)
+        print(f'PASS: {len(results)} real-project cases verified; {honest} honest changes DONE without labels; '
+              f'{len(results) - honest} shortcuts refused.', flush=True)
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         print(f'FAIL: {error}\nLogs: {output}', file=sys.stderr)
         return 1

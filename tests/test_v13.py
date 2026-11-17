@@ -41,7 +41,7 @@ def test_vacuous_test_refuses_completion(local_repo, existing, action, target):
     subtraction_task(root, existing)
     if target == 'main':
         git(root, 'update-ref', '-d', 'refs/remotes/origin/main')
-    (root / 'calc.py').write_text(MUL + SUB + '# TODO pow\n')
+    (root / 'calc.py').write_text(MUL + SUB + 'pass\n')
     (root / 'test_sub.py').write_text('from calc import sub\nassert sub is not None\n')
     commit_all(root)
     if action == 'done':
@@ -177,6 +177,12 @@ def test_staged_files_use_bounded_git_processes(local_repo, tmp_path, monkeypatc
     for number in range(2000):
         (root / f'file{number}.py').write_text(f'value = {number}\n')
     commit_all(root)
+    # Make the working tree exactly what a checkout writes (core.autocrlf on
+    # Windows runners), so the staged and working fingerprints describe the same bytes.
+    # Git skips stat-clean files even with -f, so remove them first.
+    for path in git(root, 'ls-files').splitlines():
+        (root / path).unlink()
+    git(root, 'checkout-index', '-a')
     calls = []
     original = subprocess.Popen
 
@@ -293,7 +299,7 @@ def test_vacuous_test_cannot_use_an_old_shared_helper_as_its_red_result(local_re
     commit_all(root)
     result = cli(root, 'done', '--task', 'TASK-2')
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "its test passes on origin/main's code too" in result.stdout
+    assert "its new or changed tests (test_sub) pass on origin/main's code too" in result.stdout
 
 
 def test_new_namespace_package_is_a_code_failure_on_base(local_repo):

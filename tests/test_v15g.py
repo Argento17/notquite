@@ -110,10 +110,10 @@ def test_old_claim_still_refuses_broken_add(local_repo, second_module, action):
 
 
 @pytest.mark.parametrize('action', ['check', 'precommit', 'stop'])
-def test_renewed_claim_with_changed_code_is_stub_checked(local_repo, action):
+def test_renewed_landed_claim_checks_regression_without_new_implementation_proof(local_repo, action):
     root = local_repo
     two_tasks(root)
-    # Renewal records passing tests, but add's old test cannot prove the new sub function.
+    # The landed add task needs passing regressions; sub needs its own task evidence.
     ok(root, 'renew', '--task', 'TASK-1')
     git(root, 'add', '-A')
     if action == 'check':
@@ -124,7 +124,10 @@ def test_renewed_claim_with_changed_code_is_stub_checked(local_repo, action):
         result = stop(root)
     output = result.stdout + result.stderr
     assert result.returncode == (1 if action == 'check' else 0), output
-    assert 'TASK-1: its test still passes with the changed functions stubbed out (sub in calc.py)' in output
+    assert 'TASK-1: its test still passes with the changed functions stubbed out' not in output
+    assert "TASK-1: its test passes on" not in output
+    if action == 'check':
+        assert 'no task records it' in output
 
 
 @pytest.mark.parametrize('staged_passes', [False, True])

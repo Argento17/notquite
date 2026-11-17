@@ -1,6 +1,102 @@
 # Changelog
 
-## 0.15.0 (15 Nov 2026)
+## 0.16.0 (16 Nov 2026)
+
+- Keep the read cache active with Git for Windows' default diff drivers. Raw
+  evidence reads bypass helpers; caller-requested helper output stays fresh
+  only when the selected paths use it. Escape characters a console cannot
+  encode in diagnostics, including test IDs. Retry a briefly locked final
+  comparison import report without changing the test's exit or accepting
+  missing, unreadable or invalid evidence.
+
+- Wait for briefly locked comparison import reports instead of aborting valid
+  tests; missing, unreadable, or invalid import evidence still refuses the run.
+
+- Keep Git reads reusable with ordinary LFS registrations, included configuration,
+  and external ignore and attributes files; track their dependencies and use fresh
+  reads for active helpers whose inputs cannot be inspected. Recognize squashed
+  receipts independently in stale-claim checks, including with the read cache
+  disabled. Cached task and receipt values no longer share caller mutations.
+  Avoid rereading unchanged files during POSIX state checks, and support Git's
+  hook environment. Give parallel test workers their own read sessions and reuse
+  unchanged queries across external commands after validating their inputs.
+  Validate compound completion and merge-base reads once per call.
+  Share staged-tree reads without rewriting the caller's index.
+  Keep fresh metadata reads task-specific and batch each group of blobs without
+  retaining a connection between fresh calls. Classify protected test material
+  only when a path might otherwise be omitted as documentation or unchanged syntax.
+  Verify comparison imports during pytest startup before loading conftests or
+  tests, avoiding a second interpreter for fresh runs; cached results still get
+  a fresh import probe. Split each OS/Python CI combination across three test shards.
+
+- Reuse read-only Git queries throughout each command, including `done`, while
+  checking repository contents, HEAD, refs and the index before reuse. Invalidate
+  reads after writes and external commands; fall back to fresh reads when state
+  cannot be fully inspected. Share a framed `cat-file --batch` connection for
+  blobs and HEAD lookups, renewing it when Git metadata changes and closing it
+  when the command ends. Keep test and receipt checks unchanged.
+
+- Run test evidence, comparisons and import probes with checkout bytecode
+  refreshed on every run, including isolated Python and console pytest commands.
+  Reuse dependency bytecode in Git-local cache slots, with exclusive slots for
+  parallel runs; remove each checkout's entries after its run. Same-size edits
+  with unchanged timestamps cannot reuse stale bytecode, and runs leave project
+  bytecode caches untouched. Fall back to temporary caches without writable Git metadata.
+  Discard test-result caches created before bytecode isolation.
+
+- Keep pytest project-test output concise in done and pull-request checks:
+  one passing note with pytest's counts, or failing-test summaries and failure
+  sections capped at 60 lines each. Show only counts for the base rerun;
+  read exact test outcomes from the report plugin, including parameter IDs.
+
+- Require an approving review or the task's reviewer label when a task is
+  written and finished in the same pull request. Recommend landing its
+  definition first; done explains the review needed before merging.
+- Add `init --project-test CMD`, stored in `.workorder/config.json`. Done and
+  explicit test checks run it once, compare only failing pytest tests on the
+  base, and distinguish old failures from new ones. A reviewer can accept a
+  project failure with approval or `workorder-allow:tests`. Hooks do not run
+  it. Without a configured command, print the limits of the declared tests.
+- Apply pytest's selected pythonpath configuration and overrides in import probes,
+  including isolated Python commands, consistently with pytest 8.3 and later.
+  Recognize mandatory imports of packages absent
+  from the base without mistaking an editable install for old-code evidence.
+- Exclude documentation and Python changes with unchanged syntax apart from
+  docstrings from code scope, new implementation path maps and staleness
+  checks. Classify test material first and preserve its review and staleness
+  protection regardless of suffix. Preserve the fingerprints in existing receipts.
+- Name newly added tests in shared files. Judge skip and xfail additions by
+  their outcomes when run. Keep the ancestry check on advice that main moved.
+- Add a reviewer guide checked against executable diagnostics and linked from
+  generated workflow failures. Shorten the generated agent instructions.
+- Add offline-defined Click examples using its shared test files; preserve
+  the pinned revisions for the separate real-project run.
+- Show renewal advice during done for another task as well as in commit
+  hooks. Check renewals of already landed finished tasks as regressions,
+  without asking them to prove another task's new functions.
+
+- For pytest commands, check new or changed test functions together against
+  stubbed functions and base code. Older tests in a shared file cannot supply
+  their failure. Name the selected tests in refusals and list tests that still
+  pass under stubs in one Note when another selected test fails. Keep the whole
+  command when no selected test function changed.
+- Let finished tasks share Python test files: new tests, classes, fixtures and
+  imports, and appended parameter cases, need no review when existing tests
+  stay unchanged. Existing test edits still need review; task labels and
+  approving reviews accept them for declared refactors too. Merge hooks give
+  passing edits the same review note as other commits.
+- Refuse a pull request when a task finished in that change has later edits
+  to its code paths or recorded implementation files. Tell the agent to renew
+  and commit the receipts before a squash. A merge hook prints that advice as
+  a note so the merge can be committed.
+- Discover files for pytest commands without paths from testpaths, or from
+  recognized repository tests when testpaths is absent. Use the same discovery
+  for task creation, completion, hooks and pull-request checks. If no files
+  are known, new requests --test-paths before writing anything.
+- Keep existing task files and receipts readable. Set the package and current
+  installation examples to 0.16.0.
+
+## 0.15.0 (16 Nov 2026)
 
 - Limit --no-code-change to the task's declared code paths and test files.
   Without declared paths, exclude changes covered by another task's new

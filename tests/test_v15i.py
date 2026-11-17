@@ -96,7 +96,7 @@ def test_refactor_failing_test_edit_still_refuses(local_repo, hook):
 
 @pytest.mark.parametrize('test_text,finding', [
     ('from calc import add\n\ndef test_add():\n    result = add(2, 2)\n    if result != 4:\n        raise AssertionError(result)\n', 'asserts nothing that can fail'),
-    ('from calc import add\n\ndef test_add():\n    assert callable(add)\n', 'still passes with the changed functions stubbed out'),
+    ('from calc import add\n\ndef test_add():\n    assert callable(add)\n', 'still pass with the changed functions stubbed out'),
     ('from calc import add\n\ndef test_add():\n    assert True\n', 'asserts nothing that can fail'),
 ])
 def test_label_only_findings_have_done_route(local_repo, test_text, finding):
@@ -142,7 +142,7 @@ def test_shared_file_stub_finding_reaches_pending_review(local_repo):
     commit_with_hook(root)
     output = ok(root, 'done', '--task', 'TASK-2', '--needs-review')
     assert 'TASK-2 DONE, pending review' in output
-    assert 'stubbed out (add in calc.py)' in output
+    assert 'stubbed out (test_mul)' in output and 'add in calc.py' in output
     commit_with_hook(root)
     assert_review(root, 'TASK-2', label_only=True)
 

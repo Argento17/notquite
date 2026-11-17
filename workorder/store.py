@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from .console import print
+
 import datetime as dt
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
-from functools import wraps
+from copy import deepcopy
+from functools import partial, wraps
 import hashlib
 import hmac
 import heapq
@@ -22,6 +25,8 @@ import sys
 import tempfile
 import time
 import uuid
+
+from .git_reads import ReadCache, Batch, uses_diff_helper
 
 
 class Refused(ValueError):
@@ -85,34 +90,130 @@ _READS = ContextVar("workorder_reads", default=None)
 
 
 @contextmanager
-def read_session():
+def read_session(*, seed=None):
     """Share reads within one command, never across commands in an embedding process."""
     if _READS.get() is not None:
         yield
         return
-    token = _READS.set({})
+    cache = seed if seed is not None else ReadCache()
+    token = _READS.set(cache)
     try:
         yield
     finally:
-        _READS.reset(token)
+        try:
+            cache.close()
+        finally:
+            _READS.reset(token)
 
 
-def invalidate_reads():
+@contextmanager
+def temporary_checkout(*, prefix):
+    """Release cached Git processes before removing temporary checkouts.
+
+    A command's read session can outlive many comparison directories. Windows
+    cannot remove a process's cwd, so reap every batch beneath this directory
+    even when snapshot preparation or test execution raises or times out.
+    Keep the source repository's batches available to the rest of the command.
+    """
+    with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
+        try:
+            yield temporary
+        finally:
+            cache = _READS.get()
+            if cache is not None:
+                cache.close(root=temporary)
+
+
+def invalidate_reads(*, metadata_only=False):
     cache = _READS.get()
     if cache is not None:
-        cache.clear()
+        # Virtual receipts and other derived values always need rebuilding.
+        # Git queries can survive an external command that changed no observed
+        # input: checking validates state before reuse, even in a nested read
+        # when this generation changes. Unobservable helpers never reuse reads.
+        cache.clear(queries=False)
 
 
-def cached_read(function):
+@contextmanager
+def changing_repository():
+    """Commands may mutate even when they fail or cannot be started."""
+    invalidate_reads()
+    try:
+        yield
+    finally:
+        invalidate_reads()
+
+
+def _read_key(value):
+    """Key compound read inputs by value, including a task's nested fields."""
+    if isinstance(value, dict):
+        return (dict, frozenset((key, _read_key(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return (type(value), tuple(_read_key(item) for item in value))
+    if isinstance(value, (set, frozenset)):
+        return (type(value), frozenset(_read_key(item) for item in value))
+    return value
+
+
+@contextmanager
+def read_scope(root):
+    """Validate one compound read without caching its caller's side effects.
+
+    Read-only preparation can share one observation. A scope spanning test
+    execution or writes must use the mutation guards: nested reads revalidate
+    whenever invalidate_reads changes the generation.
+    """
+    cache = _READS.get()
+    if cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0':
+        yield
+    else:
+        with cache.checking(root):
+            yield
+
+
+def cached_read(function, *, git_query=False, diff_query=False, refresh_after=False):
     @wraps(function)
     def read(*args, **kwargs):
         cache = _READS.get()
-        if cache is None:
+        if cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0':
             return function(*args, **kwargs)
-        key = (function, args, tuple(sorted(kwargs.items())))
-        if key not in cache:
-            cache[key] = function(*args, **kwargs)
-        return cache[key]
+        with cache.checking(args[0], isolated=kwargs.get('isolated', False)) as reusable:
+            if not reusable:
+                return function(*args, **kwargs)
+            state = cache.states[(args[0], kwargs.get('isolated', False))]
+            if diff_query and args[1] in {'diff', 'status'} and (
+                    state[3].is_file() or os.name == 'nt' and state[3].with_suffix('.exe').is_file()):
+                # Index refresh can run external code even with no diff driver.
+                # Bypass the helper probe too: its diff can execute this hook.
+                with changing_repository():
+                    return function(*args, **kwargs)
+            if diff_query and uses_diff_helper(args[0], args[1:],
+                    state[2],
+                    isolated=kwargs.get('isolated', False)):
+                # A derived read enclosing this query must not retain helper
+                # output either. Ordinary plumbing reads remain reusable.
+                cache.clear(queries=False)
+                return function(*args, **kwargs)
+            entries = cache.queries if git_query else cache
+            key = (function, tuple(_read_key(arg) for arg in args),
+                   tuple((key, _read_key(value)) for key, value in sorted(kwargs.items())))
+            if key not in entries:
+                try:
+                    generation = cache.generation
+                    result = function(*args, **kwargs)
+                    if generation == cache.generation:
+                        entries[key] = result if git_query else deepcopy(result)
+                    return result
+                finally:
+                    if refresh_after:
+                        # write-tree may write objects and refresh its copy.
+                        # Keep the query under its PRE-command state, then force
+                        # a full observation before any later reuse. A changed
+                        # state evicts it; unchanged inputs can reuse the result.
+                        cache.clear(queries=False)
+            # A caller may annotate a receipt or task. Reuse must have the same
+            # value semantics as a fresh read, including nested mutable fields.
+            return entries[key] if git_query else deepcopy(entries[key])
     return read
 
 
@@ -140,15 +241,40 @@ def now():
 
 
 def git(root, *args, data=None, required=True):
-    run = (_git_read if args[0] in {"rev-parse", "symbolic-ref", "show", "log", "ls-tree",
-                                   "ls-files", "diff", "merge-base", "rev-list", "patch-id",
-                                   "check-ref-format"} else _git_run)
-    return run(root, *args, data=data, required=required)
-
-
-@cached_read
-def _git_read(root, *args, data=None, required=True):
     return _git_run(root, *args, data=data, required=required)
+
+
+def _git_run(root, *args, data=None, required=True, isolated=False):
+    readonly = (args[0] in {"rev-parse", "show", "log", "ls-tree", "ls-files", "diff",
+                           "merge-base", "rev-list", "patch-id", "check-ref-format",
+                           "cat-file", "for-each-ref", "status"}
+                or args[0] == "symbolic-ref" and len([a for a in args[1:] if not a.startswith('-')]) == 1
+                or args[:2] == ("remote", "get-url")
+                or args[0] == "config" and (args[1:2] in {("--get",), ("--get-all",), ("--list",)}
+                                            or len(args) == 2 and not args[1].startswith('-')))
+    if readonly:
+        isolated = isolated and copy_environment() != dict(os.environ)
+        result = _git_read(root, *args, data=data, isolated=isolated)
+        if required and result.returncode:
+            raise Refused(result.stderr.strip() or "Git command failed")
+        return result
+    with changing_repository():
+        return _git_execute(root, *args, data=data, required=required, isolated=isolated)
+
+
+@partial(cached_read, git_query=True, diff_query=True)
+def _git_read(root, *args, data=None, isolated=False):
+    if (not isolated and _READS.get() is not None
+            and args == ('rev-parse', '--verify', 'HEAD^{commit}')):
+        item = _batch_object(root, 'HEAD^{commit}')
+        if item is not None:
+            return subprocess.CompletedProcess(['git', *args], 0, item[0] + '\n', '')
+    if not isolated and len(args) == 2 and args[0] == 'show' and ':' in args[1]:
+        raw = blob_bytes(root, args[1])
+        if raw is not None:
+            return subprocess.CompletedProcess(['git', *args], 0,
+                raw.decode('utf-8', 'surrogateescape').replace('\r\n', '\n').replace('\r', '\n'), '')
+    return _git_execute(root, *args, data=data, required=False, isolated=isolated)
 
 
 def copy_environment():
@@ -159,7 +285,7 @@ def copy_environment():
     return {key: value for key, value in os.environ.items() if key not in local}
 
 
-def _git_run(root, *args, data=None, required=True, isolated=False):
+def _git_execute(root, *args, data=None, required=True, isolated=False):
     result = subprocess.run(
         ["git", *args], cwd=root, input=data, capture_output=True,
         encoding="utf-8", errors="surrogateescape", timeout=30,
@@ -200,18 +326,24 @@ def local_path(root, relative):
 def read_bytes(root, relative, staged=False):
     local_path(root, relative)
     if staged:
-        result = subprocess.run(["git", "show", f":{relative}"], cwd=root,
-                                capture_output=True, timeout=30)
-        if result.returncode:
+        content = blob_bytes(root, f":{relative}")
+        if content is None:
             raise Refused(f"missing staged file: {relative}")
-        return result.stdout
+        return content
     return local_path(root, relative).read_bytes()
 
 
 def read_text(root, relative, staged=False):
     # Git on Windows may check text files out with CRLF; the content is the same.
     if staged and (receipt_task(relative) or relative.startswith("tasks/")):
-        text = metadata_texts(root, None, None, True).get(relative)
+        if metadata_scope(relative) is None:
+            text = metadata_texts(root, None, None, True).get(relative)
+        else:
+            # Read the index without resolving a possibly different worktree
+            # symlink, exactly as the shared metadata inventory does.
+            raw = blob_bytes(root, f':{relative}')
+            text = (raw.decode('utf-8', errors='surrogateescape').removeprefix('\ufeff').replace('\r\n', '\n')
+                    if raw is not None else None)
         if text is None:
             raise Refused(f"missing staged file: {relative}")
         return checked_text(text, relative)
@@ -700,6 +832,7 @@ def release(root, tid, force=False):
     return not holder
 
 
+@changing_repository()
 def fetch_upstream(root):
     """Best-effort show refresh, with one short deadline and no stale-ref fallback."""
     if not has_origin(root):
@@ -845,6 +978,14 @@ def receipt_task(path):
     return None
 
 
+def metadata_scope(tid):
+    """Share a full metadata inventory only when subsequent reads can reuse it."""
+    cache = _READS.get()
+    fresh = (cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0'
+             or cache.stack and not cache.stack[-1][1])
+    return tid if fresh else None
+
+
 @cached_read
 def metadata_texts(root, rev=None, tid=None, staged=False):
     """Read task and receipt blobs in two Git calls, preserving byte-sized batch framing.
@@ -874,26 +1015,66 @@ def metadata_texts(root, rev=None, tid=None, staged=False):
     return {path: blobs[oid] for path, oid in objects.items()}
 
 
-def read_blobs(root, oids):
-    # Preserve undecodable bytes in the shared batch. read_text/receipt_texts validate only the
-    # selected file, so an unrelated task's bad encoding cannot poison every cached metadata read.
+@partial(cached_read, git_query=True)
+def blob_bytes(root, spec):
+    """Read a blob by object ID or revision:path, preserving its exact bytes."""
+    # The batch protocol is line delimited. Unusual Git paths still use argv.
+    if '\n' in spec or '\r' in spec:
+        result = subprocess.run(['git', 'show', spec], cwd=root, capture_output=True, timeout=30)
+        return result.stdout if result.returncode == 0 else None
+    item = _batch_object(root, spec)
+    return item[2] if item is not None and item[1] == b'blob' else None
+
+
+def _batch_object(root, spec):
     cache = _READS.get()
-    blobs = cache.setdefault(("blobs", root), {}) if cache is not None else {}
-    wanted = sorted(set(oids) - blobs.keys())
-    if wanted:
-        result = subprocess.run(["git", "cat-file", "--batch"], cwd=root,
-                                input=("\n".join(wanted) + "\n").encode(),
-                                capture_output=True, timeout=30, check=True)
-        offset = 0
-        for oid in wanted:
-            end = result.stdout.index(b"\n", offset)
-            header = result.stdout[offset:end].split()
-            if len(header) != 3 or header[1] != b"blob":
+    if (cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0'
+            or cache.stack and not cache.stack[-1][1]):
+        batch = Batch(root)
+        try:
+            return batch.read(spec)
+        except (ValueError, OSError) as error:
+            raise Refused(str(error)) from error
+        finally:
+            batch.close()
+    key = (root, tuple(sorted(os.environ.items())))
+    if key not in cache.batches:
+        cache.batches[key] = Batch(root)
+    try:
+        return cache.batches[key].read(spec)
+    except (ValueError, OSError) as error:
+        cache.batches.pop(key).close()
+        raise Refused(str(error)) from error
+
+
+def read_blobs(root, oids):
+    if _READS.get() is None or os.environ.get('WORKORDER_GIT_CACHE') == '0':
+        return _read_blobs(root, oids, fresh=True)
+    with _READS.get().checking(root) as reusable:
+        return _read_blobs(root, oids, fresh=not reusable)
+
+
+def _read_blobs(root, oids, *, fresh):
+    # One Git invocation can read a group of immutable IDs without retaining
+    # its replacement-ref/index snapshot across separate fresh read calls.
+    oids = set(oids)
+    batch = Batch(root) if fresh and oids else None
+    blobs = {}
+    try:
+        for oid in oids:
+            if batch is not None and '\n' not in oid and '\r' not in oid:
+                item = batch.read(oid)
+                raw = item[2] if item is not None and item[1] == b'blob' else None
+            else:
+                raw = blob_bytes(root, oid)
+            if raw is None:
                 raise Refused("Git could not read a task or receipt blob")
-            size = int(header[2])
-            raw = result.stdout[end + 1:end + 1 + size]
             blobs[oid] = raw.decode("utf-8", errors="surrogateescape").removeprefix("\ufeff").replace("\r\n", "\n")
-            offset = end + 2 + size
+    except (OSError, ValueError) as error:
+        raise Refused(str(error)) from error
+    finally:
+        if batch is not None:
+            batch.close()
     return blobs
 
 
@@ -903,10 +1084,10 @@ def receipt_paths(root, staged=False, rev=None, tid=None):
     scopes = ([f"{d}/{tid}.jsonl" for d in RECEIPT_DIRS] + [f"{d}/{tid}" for d in RECEIPT_DIRS]
               if tid else list(RECEIPT_DIRS))
     if rev:
-        return sorted(p for p in metadata_texts(root, rev, tid if rev != "HEAD" else None, False)
+        return sorted(p for p in metadata_texts(root, rev, tid if rev != "HEAD" else metadata_scope(tid), False)
                       if receipt_task(p) and (tid is None or receipt_task(p) == tid))
     if staged:
-        return sorted(p for p in metadata_texts(root, None, None, True)
+        return sorted(p for p in metadata_texts(root, None, metadata_scope(tid), True)
                       if receipt_task(p) and (tid is None or receipt_task(p) == tid))
     found = []
     for scope in scopes:
@@ -922,7 +1103,7 @@ def receipt_paths(root, staged=False, rev=None, tid=None):
 def receipt_texts(root, tid, staged=False, rev=None):
     if rev or staged:
         return {p: checked_text(text, p) for p, text in metadata_texts(
-            root, rev, tid if rev and rev != "HEAD" else None, staged).items() if receipt_task(p) == tid}
+            root, rev, tid if rev and rev != "HEAD" else metadata_scope(tid), staged).items() if receipt_task(p) == tid}
     texts = {p: read_text(root, p)
              for p in receipt_paths(root, staged, rev, tid) if receipt_task(p) == tid}
     pending = proposed_receipts(root, tid)
@@ -964,6 +1145,18 @@ def verify_receipt(root, tid, value):
             tree = code_tree(root, item['commit'])
             if any(tree.get(path) != entry for path, entry in paths.items()):
                 raise Refused(f'{tid}: implementation paths do not match its commit')
+    if 'implementation_syntax' in item:
+        syntax = item['implementation_syntax']
+        paths = item.get('implementation_paths', {})
+        if (item['kind'] != 'implemented' or not isinstance(syntax, dict)
+                or any(path not in paths or not path.endswith('.py') or not isinstance(entry, str)
+                       or not re.fullmatch(r'100(?:644|755) blob [0-9a-f]{64}', entry)
+                       for path, entry in syntax.items())):
+            raise Refused(f'{tid}: invalid implementation syntax')
+        if present:
+            from . import source
+            if source.syntax_map(root, paths) != syntax:
+                raise Refused(f'{tid}: implementation syntax does not match its commit')
     if item["kind"] in {"test", "deployed", "live"}:
         if (type(item.get("exit_code")) is not int or type(item.get("valid")) is not bool
                 or not isinstance(item.get("command"), list) or not item["command"]
@@ -1149,7 +1342,7 @@ def annotate_pending_review(root, tid, findings):
         for line in dict.fromkeys(findings)]
     item.pop('hash')
     item['hash'] = digest(packed(item).encode())
-    invalidate_reads()
+    invalidate_reads(metadata_only=True)
 
 
 def completion_transaction(function):
@@ -1191,7 +1384,7 @@ def append(root, tid, item):
         write_receipt(root, tid, data)
     else:
         pending.append(data)
-        invalidate_reads()
+        invalidate_reads(metadata_only=True)
     return data
 
 
@@ -1400,7 +1593,7 @@ def code_tree(root, revision):
 
 def index_code(root):
     """The code fingerprint of what the next commit would contain (the index)."""
-    return code_digest(root, git(root, "write-tree").stdout.strip())
+    return code_digest(root, index_tree(root))
 
 
 def dirty_paths(root):
@@ -1408,7 +1601,12 @@ def dirty_paths(root):
     generated = [f':(exclude,glob)**/{pattern}' for pattern in
                  ('*.egg-info/**', '*.dist-info/**', '__pycache__/**', '*.pyc', '.pytest_cache/**')]
     status = git(root, "status", "--porcelain", "--untracked-files=all", "--", *CODE_PATHS, *generated).stdout
-    return [line[3:] for line in status.splitlines()]
+    paths = [line[3:] for line in status.splitlines()]
+    from . import source
+    if not paths:
+        return []
+    meaningful = source.changed(root, paths, 'HEAD') | source.changed(root, paths, 'HEAD', staged=True)
+    return [path for path in paths if path in meaningful]
 
 
 def clean_code(root):
@@ -1435,43 +1633,77 @@ def test_timeout(record, override=None):
     return positive_seconds(value) if value is not None else None
 
 
-def run_test(command, root, timeout=None, capture_output=True, *, isolated=False):
+@changing_repository()
+def run_test(command, root, timeout=None, capture_output=True, *, isolated=False, cache_root=None,
+             verify_imports=None):
     """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
-    from .python_imports import environment
+    from .python_imports import ImportFailure, bytecode_cache, environment, pytest_guard
     # pytest parses this environment option with shlex even on Windows. Each
-    # subprocess owns its cache; it never becomes part of our result-cache key.
+    # subprocess owns its pytest cache; neither cache affects our result key.
+    env = environment(root, copy_environment() if isolated else os.environ.copy())
     with tempfile.TemporaryDirectory(prefix="workorder-pytest-", ignore_cleanup_errors=True) as cache:
-        env = environment(root, copy_environment() if isolated else os.environ.copy())
         env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "")
                                  + " -o cache_dir=" + shlex.quote(cache))
-        # Keep the ordinary subprocess path when there is no deadline. With a deadline,
-        # use a process group so child test runners cannot keep captured pipes open.
-        if timeout is None:
-            return subprocess.run(list(command), cwd=root, capture_output=capture_output,
-                                  encoding="utf-8", errors="replace",
-                                  env=env)
-        with subprocess.Popen(list(command), cwd=root, stdout=subprocess.PIPE if capture_output else None,
-                              stderr=subprocess.PIPE if capture_output else None,
-                              encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
-                              env=env) as process:
-            try:
-                output, errors = process.communicate(timeout=timeout)
-                return subprocess.CompletedProcess(command, process.returncode, output, errors)
-            except subprocess.TimeoutExpired:
-                if os.name != 'nt':
+        with pytest_guard(command, root, verify_imports, env) as guard, \
+                bytecode_cache(guard.command if guard else command, root, guard.env if guard else env,
+                               cache_root=cache_root) as (execution, env):
+            if guard:
+                guard.pycache_prefix = env.get('PYTHONPYCACHEPREFIX')
+            # Bound import verification during pytest startup even without a
+            # test timeout. An earlier declared test deadline always wins.
+            if timeout is None and guard is None:
+                run = subprocess.run(execution, cwd=root, capture_output=capture_output,
+                                     encoding="utf-8", errors="replace", env=env)
+                run.args = command
+                return run
+            started = time.monotonic()
+            deadline = started + timeout if timeout is not None else None
+            probe_deadline = started + guard.timeout if guard else None
+            with subprocess.Popen(execution, cwd=root, stdout=subprocess.PIPE if capture_output else None,
+                                  stderr=subprocess.PIPE if capture_output else None,
+                                  encoding="utf-8", errors="replace", start_new_session=os.name != 'nt',
+                                  env=env) as process:
+                def stop():
+                    if os.name != 'nt':
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    else:
+                        process.kill()
+                    return process.communicate()
+
+                while True:
+                    now = time.monotonic()
+                    if deadline is not None and now >= deadline:
+                        output, errors = stop()
+                        message = f"test timed out after {timeout:g} seconds (exit 124)\n"
+                        if capture_output:
+                            errors = (errors or "") + message
+                        else:
+                            print(message, end='', file=sys.stderr, flush=True)
+                        return subprocess.CompletedProcess(command, 124, output, errors)
+                    if probe_deadline is not None:
+                        report = guard.status()
+                        if report is not None:
+                            if not report.get('ok'):
+                                output, errors = stop()
+                                return guard.finish(subprocess.CompletedProcess(command, 4, output, errors))
+                            probe_deadline = None
+                        elif now >= probe_deadline:
+                            output, errors = stop()
+                            failure = ImportFailure('could not verify project imports: '
+                                                    f'import guard startup timed out after {guard.timeout:g} seconds')
+                            return subprocess.CompletedProcess(command, failure, output, errors)
+                    wait = max(0, deadline - now) if deadline is not None else None
+                    if probe_deadline is not None:
+                        wait = min(wait if wait is not None else 0.05, 0.05, max(0, probe_deadline - now))
                     try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                else:
-                    process.kill()
-                output, errors = process.communicate()
-                message = f"test timed out after {timeout:g} seconds (exit 124)\n"
-                if capture_output:
-                    errors = (errors or "") + message
-                else:
-                    print(message, end='', file=sys.stderr, flush=True)
-                return subprocess.CompletedProcess(command, 124, output, errors)
+                        output, errors = process.communicate(timeout=wait)
+                    except subprocess.TimeoutExpired:
+                        continue
+                    run = subprocess.CompletedProcess(command, process.returncode, output, errors)
+                    return guard.finish(run) if guard else run
 
 
 def _test_state(root, isolated=False):
@@ -1510,7 +1742,7 @@ def ci_environment():
 
 def test_cache_path(root, fingerprint, command, timeout):
     folder = root / git(root, 'rev-parse', '--git-path', 'workorder-tests').stdout.strip()
-    key = digest(packed([3, fingerprint, list(command), timeout]).encode('ascii'))
+    key = digest(packed([4, fingerprint, list(command), timeout]).encode('ascii'))
     return folder / (key + '.json')
 
 
@@ -1533,9 +1765,10 @@ def checkout_bytes(root, path):
     """Index contents with Git's checkout conversion, as a user would run them."""
     # Attribute rules must come from the index too, not unstaged .gitattributes.
     tree = index_tree(root)
-    result = subprocess.run(['git', 'cat-file', '--filters', f':{path}'], cwd=root,
-                            capture_output=True, timeout=30,
-                            env={**os.environ, 'GIT_ATTR_SOURCE': tree})
+    with changing_repository():
+        result = subprocess.run(['git', 'cat-file', '--filters', f':{path}'], cwd=root,
+                                capture_output=True, timeout=30,
+                                env={**os.environ, 'GIT_ATTR_SOURCE': tree})
     if result.returncode:
         raise Refused(f'could not read staged checkout content: {path}')
     return result.stdout
@@ -1553,17 +1786,18 @@ def checkout_contents(root, entries):
     requests = b''.join(os.fsencode(path) + b'\0' for path, _, _ in entries)
     with tempfile.TemporaryDirectory(prefix='workorder-checkout-') as temporary:
         destination = Path(temporary)
-        result = subprocess.run(['git', 'checkout-index', '--stdin', '-z', '--ignore-skip-worktree-bits',
-                                 '--prefix=' + destination.as_posix() + '/'], cwd=root,
-                                input=requests, capture_output=True, timeout=30,
-                                env={**os.environ, 'GIT_ATTR_SOURCE': index_tree(root)})
+        with changing_repository():
+            result = subprocess.run(['git', 'checkout-index', '--stdin', '-z', '--ignore-skip-worktree-bits',
+                                     '--prefix=' + destination.as_posix() + '/'], cwd=root,
+                                    input=requests, capture_output=True, timeout=30,
+                                    env={**os.environ, 'GIT_ATTR_SOURCE': index_tree(root)})
         if result.returncode:
             raise Refused('could not read staged checkout content: ' + result.stderr.decode('utf-8', 'replace').strip())
         for path, _, mode in entries:
             yield path, mode, (destination / path).read_bytes()
 
 
-@cached_read
+@partial(cached_read, git_query=True, refresh_after=True)
 def index_tree(root):
     # write-tree updates the index's tree cache. Preserve the caller's index,
     # including an alternate index supplied by Git while running a hook.
@@ -1572,7 +1806,12 @@ def index_tree(root):
         source = root / source
     with tempfile.TemporaryDirectory(prefix='workorder-index-') as temporary:
         index = Path(temporary) / 'index'
-        index.write_bytes(source.read_bytes())
+        try:
+            raw = source.read_bytes()
+        except FileNotFoundError:
+            pass  # Git interprets an absent index as an empty staged tree.
+        else:
+            index.write_bytes(raw)
         result = subprocess.run(['git', 'write-tree'], cwd=root, capture_output=True,
                                 encoding='utf-8', errors='surrogateescape', timeout=30,
                                 env={**os.environ, 'GIT_INDEX_FILE': str(index)})
@@ -1590,13 +1829,16 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
     """
     owner = cache_root if cache_root is not None else root
     isolated = owner != root
+    integrate = False
     if isolated:
-        from .python_imports import check, environment
-        failure = check(root, owner, command, environment(root, copy_environment()), timeout)
-        if failure:
-            run = subprocess.CompletedProcess(command, failure, '', '')
-            run.cached = False
-            return run
+        from .python_imports import ImportFailure, check, environment, integrated_pytest
+        integrate = integrated_pytest(command, root, environment(root, copy_environment()))
+        if not integrate:
+            failure = check(root, owner, command, environment(root, copy_environment()), timeout)
+            if failure:
+                run = subprocess.CompletedProcess(command, failure, '', '')
+                run.cached = False
+                return run
     logical = list(command if logical_command is None else logical_command)
     timeout = positive_seconds(timeout) if timeout is not None else None
     ci = ci_environment()
@@ -1611,6 +1853,21 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
                 cached_path = test_cache_path(owner, before[1], logical, timeout)
                 if not fresh:
                     run = read_test_cache(cached_path, command)
+                    if run is not None and integrate:
+                        # Cache hits still verify the interpreter's external
+                        # installations. A probe can itself change the checkout,
+                        # so choose the cache again from its resulting state.
+                        failure = check(root, owner, command, environment(root, copy_environment()), timeout)
+                        if failure:
+                            run = subprocess.CompletedProcess(command, failure, '', '')
+                            run.cached = False
+                            return run
+                        cached_path = None
+                        before = _test_state(root, isolated)
+                        owner_head = _git_run(owner, 'rev-parse', '--verify', 'HEAD^{commit}').stdout.strip()
+                        if before:
+                            cached_path = test_cache_path(owner, before[1], logical, timeout)
+                        run = read_test_cache(cached_path, command) if cached_path is not None else None
                     if run is not None:
                         return run
         except (OSError, Refused, ValueError):
@@ -1621,7 +1878,19 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
         except OSError:
             pass
     try:
-        run = run_test(command, root, timeout, capture_output=True, isolated=isolated)
+        run = run_test(command, root, timeout, capture_output=True, isolated=isolated, cache_root=owner,
+                       verify_imports=owner if integrate else None)
+        if integrate and getattr(run, 'import_guard_missing_pytest', None) is not None:
+            failure = check(root, owner, command, environment(root, copy_environment()), timeout,
+                            require_missing_pytest=True)
+            if failure:
+                run.returncode = failure
+            else:
+                run.returncode = run.import_guard_missing_pytest
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        if not integrate:
+            raise
+        run = subprocess.CompletedProcess(command, ImportFailure(f'could not verify project imports: {error}'), '', '')
     finally:
         invalidate_reads()
     # Pytest can report a failure even when application shutdown code forces exit 0.
@@ -1630,7 +1899,7 @@ def cached_test(command, root, timeout=None, *, cache_root=None, logical_command
     if run.returncode == 0 and any(outcomes.get(name, 0) for name in ('failed', 'error', 'errors')):
         run.returncode = 1
     run.cached = False
-    if cached_path is not None:
+    if cached_path is not None and isinstance(run.returncode, int):
         temporary = cached_path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
         try:
             if (_test_state(root, isolated) == before
@@ -1703,6 +1972,8 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         tree = code_tree(root, commit)
         data.update(implementation_base=base,
                     implementation_paths={path: tree.get(path) for path in sorted(paths)})
+        from . import source
+        data['implementation_syntax'] = source.syntax_map(root, data['implementation_paths'])
     if kind == "merged":
         if not ref.startswith("refs/heads/"):
             raise Refused("merge ref must be a full branch ref")
@@ -1721,8 +1992,9 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
                 run = cached_test(command, root, test_timeout(definition, timeout), fresh=True)
                 print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0)
             else:
-                run = subprocess.run(list(command), cwd=root, capture_output=True,
-                                     encoding="utf-8", errors="replace")
+                with changing_repository():
+                    run = subprocess.run(list(command), cwd=root, capture_output=True,
+                                         encoding="utf-8", errors="replace")
             exit_code = run.returncode
             output = run.stdout or ""
         except OSError as error:

@@ -115,9 +115,8 @@ def test_named_file_does_not_own_the_rest_of_tests(local_repo):
     output = refused.stdout + refused.stderr
     assert refused.returncode == 1, output
     assert output.count('lost or changed') == 1
-    assert 'TASK-1:' in output and 'tests/test_one.py' in output
+    assert 'TASK-1, TASK-3, TASK-4, TASK-5, TASK-6, TASK-7:' in output and 'tests/test_one.py' in output
     assert 'TASK-2:' not in output
-    assert 'TASK-3:' not in output
     assert cli(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'tests').returncode == 0
     helper = root / 'tests/helper.py'
     helper.write_text('value = 2\n')
@@ -125,7 +124,7 @@ def test_named_file_does_not_own_the_rest_of_tests(local_repo):
     helper_change = cli(root, 'check', '--review', 'refuse', '--base', base)
     helper_output = helper_change.stdout + helper_change.stderr
     assert helper_change.returncode == 1, helper_output
-    assert 'tests/helper.py' in helper_output and 'workorder-allow:tests' in helper_output
+    assert 'tests/helper.py' in helper_output and 'workorder-allow:TASK-3' in helper_output
     assert 'TASK-1:' not in helper_output
     helper.write_text('value = 1\n')
     (root / 'tests/conftest.py').write_text('value = 2\n')
@@ -171,9 +170,10 @@ def test_new_records_test_paths_when_the_command_names_them(local_repo):
     git(bare, 'init', '-q')
     git(bare, 'config', 'user.name', 'dev')
     git(bare, 'config', 'user.email', 'dev@example.invalid')
-    ok(bare, 'new', '--title', 'Run everything', '--owner', 'dev', '--local',
-       '--test', f'{PYTHON} -m pytest -q')
-    assert 'test_paths' not in store.record(bare, 'TASK-1')
+    result = cli(bare, 'new', '--title', 'Run everything', '--owner', 'dev', '--local',
+                 '--test', f'{PYTHON} -m pytest -q')
+    assert result.returncode == 1 and '--test-paths' in result.stderr
+    assert not (bare / 'tasks').exists()
 
 
 def test_other_languages_count_as_test_files(local_repo):
