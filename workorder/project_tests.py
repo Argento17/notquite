@@ -98,6 +98,14 @@ def _report(path):
 
 
 def _failure_output(report, output):
+    from . import console
+    sections = report.get('failures') or []
+    if sections and not console.verbose():
+        # The FAILED lines and the start of the first failure, once per run.
+        full = [report.get('short_summary'), *sections, report.get('summary')]
+        print(console.short_failures(report.get('short_summary') or '', sections, report.get('summary') or ''),
+              end='', full='\n'.join(filter(None, full)) + '\n', dedupe=False)
+        return
     if report.get('short_summary'):
         print(report['short_summary'])
     sections = report.get('failures') or []
