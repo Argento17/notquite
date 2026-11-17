@@ -28,6 +28,7 @@ Test subprocesses refresh checkout bytecode on every run, so edits with the same
 ## New or changed task requirements
 **Meaning:** `was written and finished in this pull request` requires definition review whenever a new task claims DONE/CLOSED, even if its test demonstrates the change. A new unfinished task supplying required code receipts keeps the earlier `is new in this pull request` rule: review is needed unless its test fails on base code and passes now. Scope/Acceptance edits, changed tests/contracts, removed dependencies, cancellation and unsupported reopening also change the agreement.
 **Clear:** Prefer landing the task definition first, then implement it in another change. Otherwise a reviewer accepts the definition with `workorder-allow:ID` or an approving review. Restore unintended requirement edits. Fill empty Scope and Acceptance before `done`; acceptance review never supplies missing test evidence.
+`status changed: DONE -> RETIRED` comes from `workorder retire ID --reason TEXT`: the task keeps its record and receipts but no longer owns its test files, and its test no longer reruns. Retiring removes a protection, so a reviewer accepts it with `workorder-allow:ID` or an approving review. `only a DONE or CLOSED task can be retired` has no label: set the status back.
 
 <!-- refusal-family test-edits -->
 ## Test files, selection or outcomes changed
@@ -44,6 +45,7 @@ Explicit `test_paths` stay protected regardless of suffix. Otherwise declared `c
 ## The test does not show the change works
 **Meaning:** `asserts nothing`, tests passing on base code, or tests still passing with changed functions `stubbed out` show missing proof. New/changed pytest functions are checked together, so old unrelated tests cannot supply that proof. A false no-code-change exemption and a refactor whose earlier test fails are also refused. A refactor/verification completion needs review unless the base task already declares the matching `kind: refactor` or `kind: verification`. Hand-written DONE/CLOSED plus receipts with no production-code change follows the verification rule.
 **Clear:** Test the changed result and rerun `done`. For a true refactor use `done --refactor` with unchanged tests passing before and after; use `--no-code-change` only when the task's code/tests are unchanged. A test passing on base code permits ordinary reviewer acceptance. Assertion/stub findings and exemptions not predeclared on the base require the explicit `workorder-allow:ID` label; approval and warning mode do not accept them. `done --needs-review` can record eligible findings pending that review, but cannot accept failed tests or an invalid exemption locally.
+An Acceptance item ending `(test: path::name)` is tied to that pytest test: `done` refuses (`acceptance item ...`) unless it exists, is run by the task's test command, passes now and fails on the base code (a `kind: refactor` or `kind: verification` task, or `--refactor`/`--no-code-change`, needs only the pass). Fix the code, the test or the item; no label applies to `done`.
 With a local target, `done --refactor`, `done --no-code-change` and pre-commit print one Note per task naming the required pull-request label when the base lacks the matching kind. A kind added only on the implementation branch does not remove the requirement.
 
 <!-- refusal-family test-first -->
@@ -88,7 +90,7 @@ Passing pytest project tests print one note with pytest's counts. Failures show 
 <!-- refusal-family removal -->
 ## Task or receipt history was removed or changed
 **Meaning:** A task was removed, receipts were edited/deleted, or retained receipt hashes/history no longer agree. Every commit since the base matters, including edits later restored.
-**Clear:** Restore receipt history; append new evidence instead. `workorder repair --task ID` handles supported legacy append conflicts. A reviewer may retire a task finished/cancelled at the base with `workorder-allow:ID` or approval only when its task and all receipts are removed. Partial retirement, removal of unfinished work, changed retained receipts and broken dependencies still refuse.
+**Clear:** Restore receipt history; append new evidence instead. `workorder repair --task ID` handles supported legacy append conflicts. A RETIRED task's file stays; deleting it follows the same rule. A reviewer may remove a task finished/cancelled/retired at the base with `workorder-allow:ID` or approval only when its task and all receipts are removed. Partial retirement, removal of unfinished work, changed retained receipts and broken dependencies still refuse.
 
 <!-- refusal-family pending -->
 ## Completion is waiting for review
@@ -102,8 +104,8 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/__init__.py 51c6a4d75952a2c005eb33acda81f0834b2f1e0dffae215a7d9cd26f48759af2 records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
 <!-- refusal-inventory workorder/bootstrap.py afbf495c278cce882cf2ada62aa0733d152031899bc34b014662db31bf13b82e records,workflow,project-test -->
-<!-- refusal-inventory workorder/cli.py 80e0b2ffe288e3cbb46c898776b31fa0c8ca317547390b86c8c92928246576dc records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
-<!-- refusal-inventory workorder/gate.py 61f972f495d0ffb5033be3b3308d34a5af41afe3509c38894b561f6fa552c67b code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
+<!-- refusal-inventory workorder/cli.py f47811a2c269e755e583f894059327d576fde639b425d97e030444e6999eb02d records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
+<!-- refusal-inventory workorder/gate.py 5bcc5cd5b02cb161756773e9a029ef5c610c3e8111a685bc2bf15f9803998952 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 4c890e78327bd094ac6f84882d7e42640cb88130f5232d92f7f23bbea6502a79 evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
 <!-- refusal-inventory workorder/project_tests.py 1730660955101d7371e31e3502dc368de1af06e7bd6c400acc84f4309c54c0a9 project-test,records -->
@@ -113,6 +115,6 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py 01600835b4480ed2a4fbbcee622ff196731da965b99b052e00891c8eaabc18b1 records,evidence,current-tests,removal -->
+<!-- refusal-inventory workorder/store.py b30f4be37819a338094d90f3e8700039996f9634b9d322b085fded42c5c6cf2e records,evidence,current-tests,removal -->
 <!-- refusal-inventory workorder/git_reads.py c406e897d3776a2eefb175775f1cf8144f2d6991a666432e1337bb739c5c0371 records,evidence -->
 <!-- refusal-inventory workorder/console.py 6634087244aa3cbf3741281f4b740117043f662e24e309c6c5af10d7c543b681 records,current-tests -->

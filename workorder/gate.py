@@ -471,6 +471,25 @@ def implementation_at(root, rev, tid):
 
 
 FINISHED = {"DONE", "CLOSED"}
+ENDED = {"CANCELLED", "RETIRED"}  # never counted as finished; no evidence owed
+
+
+def retired_before(root, record, base):
+    """A task retired before this change owns no test files and its test never reruns."""
+    return (record.get('status') == 'RETIRED' and bool(base)
+            and (fields_at(root, record['id'], base) or {}).get('status') == 'RETIRED')
+
+
+def retirement_problem(root, base, record):
+    """Only a task finished at the base may be retired; retiring removes its protection."""
+    if record.get('status') != 'RETIRED':
+        return None
+    before = (fields_at(root, record['id'], base) or {}).get('status')
+    if before in FINISHED | {'RETIRED'}:
+        return None
+    was = f'it was {before}' if before else 'it is new in this change'
+    return (f"{record['id']}: only a DONE or CLOSED task can be retired ({was} at {base}); "
+            "set its status back")
 ACCEPTANCE_NOTE = ("the evidence covers the task's test only, not its Acceptance list;"
                    " finish every Acceptance item before claiming DONE")
 UNCLAIMED_OWES = "its Acceptance items, then status DONE (the evidence for its test is in place)"
@@ -479,12 +498,17 @@ UNCLAIMED_OWES = "its Acceptance items, then status DONE (the evidence for its t
 def owes(record, owed, delivery=()):
     """What a task still owes. A task nobody has claimed finished is never 'owing nothing'."""
     items = list(owed)
-    if not items and record["status"] not in FINISHED | {"CANCELLED"}:
+    if not items and record["status"] not in FINISHED | ENDED:
         items.append(UNCLAIMED_OWES)
     return ", ".join(items + list(delivery)) or "nothing"
 
 
+RETIRED_LINE = 'it owns no test files and its test no longer reruns; its record and receipts stay'
+
+
 def unfinished_headline(record, done, delivery, open_waits):
+    if record['status'] == 'RETIRED':
+        return f"{record['id']} RETIRED (finished, then retired); {RETIRED_LINE}"
     debt = done + delivery + open_waits
     detail = 'owes: ' + ', '.join(debt) if debt else 'its test evidence is in place'
     return f"{record['id']} {record['status']} (not claimed finished); {detail}"
@@ -711,7 +735,7 @@ def unchanged_implementation_paths(root, implemented, merged, claim, staged=Fals
         commits = s.git(root, "log", "--format=%H", original, "--", f"tasks/{implemented['task']}.md").stdout.split()
         for commit in commits:
             status = committed_status(root, implemented["task"], commit)
-            if status is None or status in FINISHED | {"CANCELLED"}:
+            if status is None or status in FINISHED | ENDED:
                 break
             base = commit
     if implemented.get('implementation_paths'):
@@ -879,6 +903,8 @@ def default_pytest_files(root, record, base, staged=False):
 @s.cached_read
 def test_files(root, record, base, staged=False):
     """Expand current and base definitions, so deleting a test or changing its path cannot hide it."""
+    if retired_before(root, record, base):
+        return set()
     before = fields_at(root, record["id"], base)
     candidates = repository_files(root, base) | repository_files(root)
     candidates |= raw_changed_paths(root, base, staged)
@@ -1276,6 +1302,8 @@ def implicit_test_files(root, record, base, staged, candidates, configs):
 
 @s.cached_read
 def strict_test_files(root, record, base, staged=False):
+    if retired_before(root, record, base):
+        return set()
     paths = test_files(root, record, base, staged)
     definitions = (record, fields_at(root, record['id'], base) or {})
     candidates = repository_files(root, base) | repository_files(root) | raw_changed_paths(root, base, staged)
@@ -1909,7 +1937,7 @@ def requirement_changes(root, base, record, staged=False):
     if before is None:
         return found
     old_status, status = before.get('status'), record.get('status')
-    if old_status != status and status == 'CANCELLED':
+    if old_status != status and status in ENDED:
         found.append(f'status changed: {old_status} -> {status}')
     if before.get("test", "") != record.get("test", ""):
         found.append(f"test changed: {before.get('test', '') or '(none)'!r} -> {record.get('test', '') or '(none)'!r}")
@@ -3043,6 +3071,118 @@ def finished_code_change(root, base, record, staged=False):
             'so its evidence matches this code and survives a squash merge')
 
 
+def _pytest_outcomes(output):
+    """Per-node outcomes from pytest's -rA short summary: passed, or the first other outcome seen."""
+    found = {}
+    for word, node in re.findall(r'^(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS) (\S+)', 
+                                 re.sub(r"\x1b\[[0-9;]*m", "", output), re.M):
+        found.setdefault(node, []).append(word.lower())
+    return found
+
+
+def _node_passed(outcomes, node):
+    words = [word for name, values in outcomes.items()
+             if name == node or name.startswith(node + '[') for word in values]
+    return bool(words) and all(word == 'passed' for word in words)
+
+
+def _node_defined(text, node):
+    names = [name.split('[', 1)[0] for name in node.split('::')[1:]]
+    return all(re.search(r'^\s*(?:async\s+)?(?:def|class)\s+' + re.escape(name) + r'\b', text, re.M)
+               for name in names)
+
+
+def acceptance_check(root, record, base=None, *, exempt=False, timeout=None):
+    """Acceptance items tied to pytest tests: each named test exists, is run by the task's test
+    command, passes now and fails on the base code (unless exempt). Returns (problems, summary)."""
+    tid = record['id']
+    items = s.acceptance_items(s.read_text(root, f'tasks/{tid}.md'))
+    tied = [(text, node) for text, node in items if node is not None]
+    if not tied:
+        return [], None
+    problems, candidates = [], []
+
+    def item(text):
+        return s.ACCEPTANCE_TEST.sub('', re.sub(r'^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?', '', text)).strip()
+
+    def refuse(text, node, why):
+        problems.append(f"{tid}: acceptance item '{item(text)}': its test {node} {why}")
+
+    for text, node in tied:
+        problem = s.acceptance_node_problem(node)
+        if problem:
+            problems.append(f"{tid}: acceptance item '{item(text)}': {problem}")
+            continue
+        path = node.split('::', 1)[0]
+        try:
+            file = s.local_path(root, path)
+            content = file.read_text(encoding='utf-8', errors='replace') if file.is_file() else None
+        except (OSError, s.Refused):
+            content = None
+        if content is None:
+            refuse(text, node, f'does not exist (no file {path})')
+        elif not _node_defined(content, node):
+            refuse(text, node, f'does not exist (no such test in {path})')
+        elif not uses_pytest(record):
+            refuse(text, node, "is not run by the task's test command (it does not run pytest)")
+        else:
+            candidates.append((text, node))
+    if candidates:
+        nodes = sorted({node for _, node in candidates})
+        command = selected_pytest_command(record, nodes)
+        overlays = pytest_selection.overlay(nodes)
+        deadline = s.test_timeout(record, timeout)
+        revision = label = None
+        if base and not exempt:
+            revision, label = comparison_base(root, base)
+            label = label or base
+        with s.temporary_checkout(prefix='workorder-acceptance-') as temporary:
+            code, output = run_snapshot_test(root, Path(temporary) / 'code', command, deadline, None,
+                                             overlays=overlays, quiet=True)
+            before_code = before_output = None
+            if revision:
+                # The current tests run against the base code: a tied test must fail there.
+                material = (repository_test_files(root, revision, records(root, errors={}))
+                            | strict_test_files(root, record, revision))
+                base_overlays = dict(overlays)
+                for path in sorted(material & changed_paths(root, revision)):
+                    content = _test_bytes(root, path)
+                    mode = (root / path).lstat().st_mode if content is not None else None
+                    if mode is not None and stat.S_ISLNK(mode):
+                        content = os.fsencode(os.readlink(root / path))
+                    base_overlays[path] = content, mode
+                before_code, before_output = run_ref_test(root, Path(temporary) / 'ref', revision, command,
+                                                          deadline, None, base_overlays)
+        selected = pytest_selection.selected(output, None) if isinstance(code, int) else None
+        now = _pytest_outcomes(output) if isinstance(code, int) else {}
+        before = _pytest_outcomes(before_output) if isinstance(before_code, int) else {}
+        for text, node in candidates:
+            if not isinstance(code, int) or selected is None:
+                refuse(text, node, f'could not be run: {test_exit_meaning(code, command)}')
+            elif node not in selected:
+                refuse(text, node, "is not run by the task's test command")
+            elif not _node_passed(now, node):
+                refuse(text, node, 'does not pass now')
+            elif exempt:
+                continue
+            elif not base:
+                refuse(text, node, 'could not be compared with the base code: no target is available locally;'
+                                   ' fetch origin first')
+            elif not isinstance(before_code, int):
+                refuse(text, node, f'could not be run on {label}: {test_exit_meaning(before_code, command)}')
+            elif _node_passed(before, node):
+                refuse(text, node, f'already passes on {label}, so it does not show the change')
+    if problems:
+        return problems, None
+    untied = len(items) - len(tied)
+    proof = 'pass now' + (' (the task is a refactor or verification: they need not fail before)'
+                          if exempt else ' and failed before')
+    summary = (f"Acceptance: {len(tied)} of {_count(len(items), 'item')} tied to tests that {proof}")
+    if untied:
+        summary += f"; {_count(untied, 'item')} not tied to a test (a reviewer confirms {'it' if untied == 1 else 'them'})"
+    return [], summary
+
+
 def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None, results=None, notes=None):
     """A passing test must fail when the task's changed Python functions are unavailable."""
     run = latest_test_run(root, record, staged)
@@ -3344,6 +3484,9 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             review(line, lines='pytest selection changed' not in line)
         if refactor_changes:
             review(f'{tid}: its test files changed; use --needs-review', lines=True)
+    if record.get('status') == 'RETIRED':
+        notes.append(f'{tid}: REF comparison skipped against {base}: it is retired, so its test does not rerun')
+        return problems
     if not run_tests:
         notes.append(f'{tid}: REF comparison skipped against {base}: use --run-tests to run it')
         return problems
@@ -3593,11 +3736,11 @@ def removals(root, base, names, allow, staged=False):
                  and s.ID.fullmatch(p[6:-3])}
     retired, problems = set(), []
     for tid in sorted(old_tasks - set(names)):
-        if (tid in allow and committed_status(root, tid, base) in FINISHED | {"CANCELLED"}
+        if (tid in allow and committed_status(root, tid, base) in FINISHED | ENDED
                 and not s.receipt_paths(root, staged, tid=tid)):
             retired.add(tid)
         else:
-            problems.append(f"{tid}: task file removed since {base}; removing a DONE, CLOSED or CANCELLED"
+            problems.append(f"{tid}: task file removed since {base}; removing a DONE, CLOSED, RETIRED or CANCELLED"
                             f" task requires all its receipts removed and --allow {tid}")
     return retired, problems
 
@@ -3741,6 +3884,8 @@ def has_work_receipt(root, base, changed, staged=False, allow=(), new_tasks=None
 def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all_tests=False,
                   unchanged_base=False):
     claims = "not claimed finished" if single_unclaimed else f"{counts['claimed']} claimed DONE or CLOSED"
+    if counts.get('retired'):
+        claims += f", {counts['retired']} retired"
     line = f"checked {_count(counts['tasks'], 'task')} ({claims})"
     if unchanged_base:
         line = 'no task changed in this change'
@@ -4019,7 +4164,8 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
     else:
         selected, changed = set(names), None
     counts.update(tasks=len(selected), claimed=sum(r["status"] in FINISHED for tid, r in all_records.items()
-                                                   if tid in selected), tests=0, cached=0, tests_only=0)
+                                                   if tid in selected), tests=0, cached=0, tests_only=0,
+                  retired=sum(r["status"] == "RETIRED" for tid, r in all_records.items() if tid in selected))
     problems = [f"{tid}: {message.removeprefix(tid + ': ')}" for tid, message in sorted(errors.items())
                 if tid in selected]
     updated_tests = set()
@@ -4142,6 +4288,8 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         comparison = bool(base and tid in selected and
                           (tid in worked or strict_test_files(root, record, base, staged) & changed
                            or record['status'] in FINISHED and task_change_touched(root, base, record, staged)))
+        if record['status'] == 'RETIRED':
+            continue
         if (tid in reopened or run_tests and (comparison or record['status'] in FINISHED
                                              and (all_tests or tid in worked))):
             runnable.append(record)
@@ -4200,6 +4348,9 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         elif record['status'] in FINISHED and record['contract'] == 'none' and tid not in cycles:
             supported.add(tid)
         if base:
+            retirement = retirement_problem(root, base, record)
+            if retirement:
+                problems.append(retirement)
             exemption = completion_kind_problem(root, base, record, staged)
             if exemption:
                 if tid in explicit_allow:
@@ -4658,7 +4809,7 @@ def record_lines(root, tid):
         lines += ['  Pending: ' + item['message'] for item in findings]
     if stale:
         lines.append("Result: " + stale_result(record))
-    if record["status"] not in FINISHED and computed in FINISHED:
+    if record["status"] not in FINISHED | ENDED and computed in FINISHED:
         # Found in the handoff trial: "computed CLOSED, owes nothing" on a half-done task misleads.
         lines.append("note:     " + ACCEPTANCE_NOTE)
     if s.dependencies(record):
@@ -4678,6 +4829,13 @@ def record_lines(root, tid):
             text.pop(0)
         while text and not text[-1].strip():
             text.pop()
+        if heading == 'Acceptance':
+            tied = sum(bool(s.ACCEPTANCE_TEST.search(line.strip())) for line in text)
+            items = sum(bool(line.strip()) for line in text)
+            text = [('[test] ' if s.ACCEPTANCE_TEST.search(line.strip()) else '') + line for line in text]
+            if tied:
+                text.append(f"({tied} of {_count(items, 'item')} tied to a test that workorder done checks;"
+                            " [test] marks them)")
         lines += ["", f"{heading.lower()}:"] + ([f"  {line}" if line.strip() else "" for line in text]
                                                or ["  (empty)"])
     lines += ["", "history:"] + (timeline(root, record, history) or ["  (no receipts yet)"])
@@ -4691,7 +4849,7 @@ def record_lines(root, tid):
         lines += ["", f"next step: {next_step(owed[0], record, root=root, finish=True)}"]
     elif pending:
         lines += ['', 'next step: waiting for review']
-    elif record["status"] not in FINISHED | {"CANCELLED"}:
+    elif record["status"] not in FINISHED | ENDED:
         lines += ["", "next step: finish the Acceptance items, then " + done_step(record)]
     return lines
 
@@ -4749,7 +4907,7 @@ def explain(root, tid, claim=None, rerun=False):
         lines.append(f"  Note:     {tid}'s files are unchanged since {commit}")
     if code_note:
         lines.append(f"  Note:     {code_note}")
-    if not debt and claimed not in FINISHED and computed in FINISHED:
+    if not debt and claimed not in FINISHED | ENDED and computed in FINISHED:
         lines.append(f"  Note:     {ACCEPTANCE_NOTE}")
     if debt:
         lines += [f"  Missing:  {item}" for item in debt]
@@ -4765,7 +4923,8 @@ def explain(root, tid, claim=None, rerun=False):
         if owed:
             lines.append(f"  Owes:     {', '.join(owed)}")
         result = ('the declared test passed on ' + ('the implemented code' if snapshot_changed or code_note else 'this code')
-                  if claimed in FINISHED else 'no completion claimed')
+                  if claimed in FINISHED else 'retired; no completion claimed' if claimed == 'RETIRED'
+                  else 'no completion claimed')
         lines += ["", f"  Result: {result}"]
     return lines, bool(debt)
 
@@ -4797,7 +4956,7 @@ def ready(root, local_claims=None):
         upstream = {}
         lines.append("(claims not shown: origin could not be reached)")
     for tid, record in sorted(all_records.items()):
-        if record["status"] == "CANCELLED":
+        if record["status"] in ENDED:
             continue
         blocked = waits(record, all_records, views)
         if record["status"] == "BLOCKED":

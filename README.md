@@ -7,7 +7,7 @@ Workorder keeps each task as a record in your repository. A coding agent starts 
 
 Each task is a Markdown file in `tasks/`: its mission, scope, acceptance criteria, dependencies, test command and progress. Receipts in `.workorder/` record the
 implementation, commands, results and code they refer to. `workorder show` prints that history. `status: DONE` is a claim; `workorder check` says whether the record
-supports it. Acceptance lists still need a person or agent to check them.
+supports it. Acceptance lists still need a person or agent to check them, except items ending `(test: path::name)`, which `done` checks against that pytest test. `workorder retire ID --reason TEXT` ends a finished task's test protection with reviewer acceptance.
 
 Requires Git and Python 3.10 or newer. It uses Python's standard library, with no server or database. Tested on Linux and Windows with Python 3.10, 3.12 and 3.13.
 

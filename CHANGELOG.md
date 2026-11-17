@@ -2,6 +2,18 @@
 
 ## 0.18.0 (unreleased)
 
+- Add `workorder retire ID --reason TEXT`: a DONE or CLOSED task becomes RETIRED,
+  keeping its record, notes and receipts. It no longer owns its test files and its
+  test no longer reruns in later checks. The pull-request check reports the
+  retirement as a finding cleared by `workorder-allow:ID` or an approving review;
+  RETIRED from an unfinished or new task is refused. Summaries count retired tasks
+  separately; deleting a task file keeps the existing removal rule.
+- Tie Acceptance items to tests: an item ending `(test: path::name)` names a pytest
+  test that `done` requires to exist, be run by the task's test command, pass now
+  and fail on the base code (refactor and verification tasks need only pass).
+  `done` prints how many items are tied; `new --acceptance` writes items and `show`
+  marks tied ones.
+
 ## 0.17.0 (17 Nov 2026)
 
 - Let pending-review "could not compare" claims commit with a Note while the

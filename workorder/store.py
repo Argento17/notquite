@@ -372,7 +372,9 @@ def files(root, directory, staged=False):
 
 
 # CANCELLED ends a task that will not be done: it needs no evidence and never counts as finished.
-STATUSES = ("IN_PROGRESS", "BLOCKED", "DONE", "CLOSED", "CANCELLED")
+# RETIRED ends a finished task's protection (workorder retire): its record, notes and receipts
+# stay, but it owns no test files and its test no longer reruns.
+STATUSES = ("IN_PROGRESS", "BLOCKED", "DONE", "CLOSED", "CANCELLED", "RETIRED")
 CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract")
 # Optional fields. Dependencies and the test add requirements; merge_ref selects delivery's target,
 # and test_paths selects files guarded by a base check. Planning fields never stand in for evidence.
@@ -648,10 +650,56 @@ EXTENDED_BODY = """
 """
 
 
-def task_text(tid, data, template):
+# An Acceptance item may end with "(test: path::name)", a pytest node id that done checks.
+ACCEPTANCE_TEST = re.compile(r'\(test:\s*([^()\s]*)\s*\)\s*$')
+
+
+def acceptance_node_problem(node):
+    """A tied test must be a pytest node id inside the repository: tests/test_x.py::test_name."""
+    path, separator, name = node.partition('::')
+    parts = path.replace('\\', '/').split('/')
+    if (not separator or not name or not path.endswith('.py') or path.startswith('/')
+            or re.match(r'^[A-Za-z]:', path) or '..' in parts or not all(part for part in name.split('::'))):
+        return (f'(test: {node}) is not a pytest node id in this repository, '
+                'such as tests/test_utils.py::test_trailing_slash')
+    return None
+
+
+def acceptance_items(text):
+    """The Acceptance section's items, each with its tied pytest node id or None."""
+    items = []
+    for heading, body in task_body_sections(text):
+        if heading != 'Acceptance':
+            continue
+        body = re.sub(r'<!--.*?-->', '', '\n'.join(body), flags=re.S)
+        for line in body.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            match = ACCEPTANCE_TEST.search(line)
+            items.append((line, match[1] if match else None))
+    return items
+
+
+def acceptance_lines(items):
+    """Turn --acceptance texts into list items, checking any tied node ids."""
+    lines = []
+    for item in items:
+        item = ' '.join(item.split())
+        if not item:
+            raise Refused('an acceptance item needs some text')
+        match = ACCEPTANCE_TEST.search(item)
+        if match and acceptance_node_problem(match[1]):
+            raise Refused(acceptance_node_problem(match[1]))
+        lines.append(item if item.startswith(('- ', '* ')) else '- ' + item)
+    return lines
+
+
+def task_text(tid, data, template, acceptance=()):
     if template == "simple":
         return ("---\n" + "".join(f"{k}: {packed(v)}\n" for k, v in data.items())
-                + f"---\n\n# {tid}\n\nWrite the original ask here.\n")
+                + f"---\n\n# {tid}\n\nWrite the original ask here.\n"
+                + ("\n## Acceptance\n\n" + "".join(line + "\n" for line in acceptance) if acceptance else ""))
     today = dt.datetime.now(dt.timezone.utc).date().isoformat()
     extended = {**dict(business_owner="", priority="", created_at=today, mission="", depends_on=[],
                        blocks=[], next="", summary="", test=""), **data}
@@ -660,13 +708,18 @@ def task_text(tid, data, template):
         order.insert(order.index("test") + 1, "test_paths")
     if 'code_paths' in extended:
         order.insert(order.index('contract'), 'code_paths')
+    body = EXTENDED_BODY
+    if acceptance:
+        marker = "Evidence Workorder should check belongs in a contract. -->\n"
+        body = body.replace(marker, marker + "\n" + "".join(line + "\n" for line in acceptance), 1)
     return ("---\n" + "".join(f"{k}: {packed(extended[k])}\n" for k in order)
-            + f"---\n\n# {tid}\n" + EXTENDED_BODY)
+            + f"---\n\n# {tid}\n" + body)
 
 
 def new(root, title, owner, ships="none", prefix="TASK", template="extended", test="", local_only=False,
-        test_paths=None, code_paths=None):
+        test_paths=None, code_paths=None, acceptance=()):
     repository(root)
+    acceptance = acceptance_lines(acceptance or ())
     if template not in {"simple", "extended"}:
         raise Refused("template must be simple or extended")
     if not re.fullmatch(r"[A-Z][A-Z0-9]*", prefix) or not title.strip() or not owner.strip():
@@ -700,7 +753,7 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
         if local or reserve(root, NAMESPACE + f"ids/{tid}", {**data, "at": now(), "who": who(root)}):
             path = directory / f"{tid}.md"
             with path.open("x", encoding="utf-8", newline="\n") as stream:
-                stream.write(task_text(tid, data, template))
+                stream.write(task_text(tid, data, template, acceptance))
             return tid
     raise Refused("too much allocation contention; retry")
 
@@ -745,7 +798,7 @@ def active_claims(root, upstream=None, snapshot=None):
                 fields = front_matter(tid, lines[1:lines.index("---", 1)])
             except (Refused, ValueError):
                 continue
-            if fields.get("status") in {"DONE", "CLOSED", "CANCELLED"}:
+            if fields.get("status") in {"DONE", "CLOSED", "CANCELLED", "RETIRED"}:
                 upstream[tid] = {"status": fields["status"], "ref": "origin/" + branch[11:],
                                  "commit": commit}
     for tid, (generation, ref, oid) in latest.items():
@@ -929,6 +982,26 @@ def set_task_field(root, tid, key, value):
     lines[start:end] = [prefix + encoded + newline]
     path.write_bytes(b''.join(lines))
     invalidate_reads()
+
+
+def retire(root, tid, reason):
+    """Mark a DONE or CLOSED task RETIRED, keeping its record, notes and receipts."""
+    current = record(root, tid)
+    reason = " ".join((reason or "").split())
+    if not reason:
+        raise Refused("retiring a task needs a reason: --reason TEXT")
+    if current["status"] not in {"DONE", "CLOSED"}:
+        raise Refused(f"{tid} is {current['status']}; only a DONE or CLOSED task can be retired")
+    path = local_path(root, f"tasks/{tid}.md")
+    before = path.read_bytes()
+    try:
+        set_task_field(root, tid, "status", "RETIRED")
+        line = add_note(root, tid, f"Retired (was {current['status']}): {reason}")
+    except BaseException:
+        path.write_bytes(before)
+        invalidate_reads()
+        raise
+    return current["status"], line
 
 
 def add_note(root, tid, text):

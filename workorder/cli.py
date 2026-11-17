@@ -72,6 +72,9 @@ def parser():
                      help="test files or folders; required for wrapper commands, even before the files exist")
     new.add_argument("--code-paths", nargs="+", metavar="PATH",
                      help="code files or folders in scope; changes outside them are flagged by --require-task")
+    new.add_argument("--acceptance", action="append", default=[], metavar="TEXT",
+                     help="an Acceptance item (repeatable); end it with (test: path::name) to tie it to a"
+                          " pytest test that done checks")
     new.add_argument("--template", choices=["extended", "simple"], default="extended",
                      help="extended: planning fields and Context/Scope/Lanes/Acceptance/Progress sections;"
                           " simple: the seven required fields only, as in 0.1.0 (default: extended)")
@@ -102,6 +105,10 @@ def parser():
     note.add_argument("--task", required=True)
     note.add_argument("--next", dest="next_text", help="set the task's next field")
     note.add_argument("text", nargs="?", help="what was done, or what is next")
+    retire = commands.add_parser("retire", help="mark a DONE or CLOSED task RETIRED: its record and receipts stay,"
+                                 " it no longer owns its test files and its test no longer reruns")
+    retire.add_argument("task")
+    retire.add_argument("--reason", required=True, help="why the task's protection ends (added to Progress)")
     repair = commands.add_parser("repair", help="convert a verified legacy append conflict to receipt files")
     repair.add_argument("--task", required=True)
     commands.add_parser("ready", help="list open work: free, held, blocked or awaiting delivery")
@@ -226,6 +233,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
     try:
         record = s.record(root, tid)
         status = record['status']
+        if status == 'RETIRED':
+            raise s.Refused(f'{tid} is RETIRED; it no longer claims completion. To reopen it, set status: '
+                            f'IN_PROGRESS in tasks/{tid}.md, then run workorder done again')
         if note is not None and not note.strip():
             raise s.Refused('a note needs some text')
         if refactor and (needs_review or no_code_change):
@@ -312,7 +322,14 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             return 1
         print("Acceptance:")
         print(filled["Acceptance"])
-        print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
+        exempt = refactor or no_code_change or record.get('kind') in ('refactor', 'verification')
+        tied_problems, tied = gate.acceptance_check(root, record, base, exempt=exempt, timeout=timeout)
+        if tied_problems:
+            done_refusal(tid, status, [f'  Missing:  {problem}' for problem in tied_problems]
+                         + ['  Next:     fix the test or the code, or correct the item\'s (test: path::name), '
+                            f'then run workorder done --task {tid} again'])
+            return 1
+        print(tied or "Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         results = {}
         notes = []
         stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results, notes=notes)
@@ -512,7 +529,8 @@ def main(argv=None):
                     raise s.Refused('could not run the declared test: ' + str(missing or code))
                 s.print_test_output(output, label='The declared test fails as required.')
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
-                        options.template, options.test, options.local, test_paths=named, code_paths=options.code_paths)
+                        options.template, options.test, options.local, test_paths=named, code_paths=options.code_paths,
+                        acceptance=options.acceptance)
             where = ("reserved on origin" if shared
                      else "local id: local numbering requested, not reserved on origin" if options.local
                      else "local id: no origin remote, so other clones could pick the same id")
@@ -552,6 +570,16 @@ def main(argv=None):
                 print(f"{options.task}: next: {options.next_text}")
             if options.text is not None:
                 print(f"{options.task}: {s.add_note(root, options.task, options.text)}")
+        elif options.action == "retire":
+            tid = s.task_id(options.task)
+            previous, line = s.retire(root, tid, options.reason)
+            print(f"{tid} RETIRED (was {previous}): {line.removeprefix('- ')}")
+            print(f"{tid}'s record, notes and receipts stay; it no longer owns its test files, "
+                  "and its test no longer reruns in later checks")
+            print(f"the pull request needs an approving review or workorder-allow:{tid}; "
+                  "retiring removes a protection")
+            push = " and push" if s.has_origin(root) else ""
+            print(f"commit tasks/{tid}.md{push}")
         elif options.action == "repair":
             print(s.repair(root, options.task))
         elif options.action == "renew":
