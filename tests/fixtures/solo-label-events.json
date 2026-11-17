@@ -1,0 +1,111 @@
+{
+  "pull_request": {
+    "number": 7,
+    "user": {"login": "author", "id": 10},
+    "head": {"sha": "head"},
+    "labels": [
+      {"name": "workorder-allow:TASK-2"},
+      {"name": "workorder-allow:TASK-3"},
+      {"name": "workorder-allow:tests"},
+      {"name": "workorder-allow:no-task"},
+      {"name": "workorder-allow:TASK-4"},
+      {"name": "workorder-allow:TASK-5"},
+      {"name": "workorder-allow:TASK-6;touch injected"}
+    ]
+  },
+  "pages": [
+    [
+      {"id": 101, "event": "labeled", "label": {"name": "workorder-allow:TASK-2"}, "actor": {"id": 10, "login": "Author"}},
+      {"id": 102, "event": "labeled", "label": {"name": "workorder-allow:no-task"}, "actor": {"id": 20, "login": "reviewer"}},
+      {"id": 103, "event": "labeled", "label": {"name": "workorder-allow:TASK-3"}, "actor": {"id": 10, "login": "author"}},
+      {"id": 104, "event": "unlabeled", "label": {"name": "workorder-allow:TASK-3"}, "actor": {"id": 20, "login": "reviewer"}}
+    ],
+    [
+      {"id": 105, "event": "unlabeled", "label": {"name": "workorder-allow:no-task"}, "actor": {"id": 10, "login": "author"}},
+      {"id": 106, "event": "labeled", "label": {"name": "workorder-allow:no-task"}, "actor": {"id": 10, "login": "author"}},
+      {"id": 107, "event": "labeled", "label": {"name": "workorder-allow:TASK-3"}, "actor": {"id": 20, "login": "reviewer"}},
+      {"id": 108, "event": "labeled", "label": {"name": "workorder-allow:tests"}, "actor": {"id": 20, "login": "reviewer"}},
+      {"id": 109, "event": "labeled", "label": {"name": "workorder-allow:TASK-5"}, "actor": null},
+      {"id": 110, "event": "labeled", "label": {"name": "workorder-allow:TASK-6;touch injected"}, "actor": {"id": 10, "login": "author"}}
+    ]
+  ],
+  "cases": [
+    {
+      "name": "owner",
+      "repository": {"full_name": "author/project", "owner": {"login": "author", "id": 10, "type": "User"}},
+      "permission": {"permission": "admin", "role_name": "admin", "user": {"login": "author", "id": 10}},
+      "allowed": ["TASK-3", "tests"],
+      "owner": ["TASK-2", "no-task"],
+      "notices": [
+        "accepted by the owner (solo mode; no independent review): workorder-allow:TASK-2 added by the pull request author, the repository owner",
+        "accepted by the owner (solo mode; no independent review): workorder-allow:no-task added by the pull request author, the repository owner"
+      ]
+    },
+    {
+      "name": "owner, permission lookup failed",
+      "repository": {"full_name": "author/project", "owner": {"login": "author", "id": 10, "type": "User"}},
+      "permission": null,
+      "allowed": ["TASK-3", "tests"],
+      "owner": ["TASK-2", "no-task"],
+      "notices": [
+        "accepted by the owner (solo mode; no independent review): workorder-allow:TASK-2 added by the pull request author, the repository owner",
+        "accepted by the owner (solo mode; no independent review): workorder-allow:no-task added by the pull request author, the repository owner"
+      ]
+    },
+    {
+      "name": "admin of an organization repository",
+      "repository": {"full_name": "example-org/project", "owner": {"login": "example-org", "id": 99, "type": "Organization"}},
+      "permission": {"permission": "admin", "role_name": "admin", "user": {"login": "author", "id": 10}},
+      "allowed": ["TASK-3", "tests"],
+      "owner": ["TASK-2", "no-task"],
+      "notices": [
+        "accepted by the owner (solo mode; no independent review): workorder-allow:TASK-2 added by the pull request author, an admin of the repository",
+        "accepted by the owner (solo mode; no independent review): workorder-allow:no-task added by the pull request author, an admin of the repository"
+      ]
+    },
+    {
+      "name": "non-owner author",
+      "repository": {"full_name": "example-org/project", "owner": {"login": "example-org", "id": 99, "type": "Organization"}},
+      "permission": {"permission": "write", "role_name": "write", "user": {"login": "author", "id": 10}},
+      "allowed": ["TASK-3", "tests"],
+      "owner": [],
+      "notices": [
+        "ignored workorder-allow:TASK-2: added by the pull request author, who is not the repository owner or an admin (permission: write; solo mode)",
+        "ignored workorder-allow:no-task: added by the pull request author, who is not the repository owner or an admin (permission: write; solo mode)"
+      ]
+    },
+    {
+      "name": "unverifiable permission",
+      "repository": {"full_name": "example-org/project", "owner": {"login": "example-org", "id": 99, "type": "Organization"}},
+      "permission": null,
+      "allowed": ["TASK-3", "tests"],
+      "owner": [],
+      "notices": [
+        "ignored workorder-allow:TASK-2: added by the pull request author, whose owner or admin permission could not be verified (solo mode)",
+        "ignored workorder-allow:no-task: added by the pull request author, whose owner or admin permission could not be verified (solo mode)"
+      ]
+    },
+    {
+      "name": "permission answer for another account",
+      "repository": {"full_name": "example-org/project", "owner": {"login": "example-org", "id": 99, "type": "Organization"}},
+      "permission": {"permission": "admin", "role_name": "admin", "user": {"login": "author", "id": 11}},
+      "allowed": ["TASK-3", "tests"],
+      "owner": [],
+      "notices": [
+        "ignored workorder-allow:TASK-2: added by the pull request author, whose owner or admin permission could not be verified (solo mode)",
+        "ignored workorder-allow:no-task: added by the pull request author, whose owner or admin permission could not be verified (solo mode)"
+      ]
+    },
+    {
+      "name": "owner login reused by another account",
+      "repository": {"full_name": "author/project", "owner": {"login": "author", "id": 12, "type": "User"}},
+      "permission": {"message": "Not Found", "status": "404"},
+      "allowed": ["TASK-3", "tests"],
+      "owner": [],
+      "notices": [
+        "ignored workorder-allow:TASK-2: added by the pull request author, whose owner or admin permission could not be verified (solo mode)",
+        "ignored workorder-allow:no-task: added by the pull request author, whose owner or admin permission could not be verified (solo mode)"
+      ]
+    }
+  ]
+}

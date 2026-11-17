@@ -24,7 +24,7 @@ Locally, `done` refuses what this check would refuse and names the label; an int
 | Existing tests fail on the new code, including the project test | `workorder-allow:ID` (covers what `done --needs-review` recorded), or `workorder-allow:tests` for project and unowned tests; not an approving review |
 | The Workorder workflow file changed | `workorder-allow:workflow`; not an approving review |
 
-Labels below must come from someone other than the pull request author. An approving review must cover the current head and come from another person. Locally, `--allow ID`, `--allow tests`, `--allow scope:ID`, `--allow no-task` and `--allow workflow` represent those reviewer labels, and `--approving-review` an approving review. `--review warn` changes ordinary test-review findings to warnings; it does not accept explicit-label findings or missing evidence.
+Labels below must come from someone other than the pull request author. An approving review must cover the current head and come from another person. In solo mode (`workorder init --solo`), a label the author added counts only when GitHub confirms the author as the repository owner or an admin; it clears what the same label would and prints as `accepted by the owner (solo mode; no independent review)`, never as review, and the summary line ends with `solo mode: ...`. Read such a run as the owner's acceptance only: nobody else looked at it. Locally, `--allow ID`, `--allow tests`, `--allow scope:ID`, `--allow no-task` and `--allow workflow` represent those reviewer labels, and `--approving-review` an approving review; in solo mode `--owner-accepts LABELS` represents the owner's own labels. `--review warn` changes ordinary test-review findings to warnings; it does not accept explicit-label findings or missing evidence.
 
 <!-- refusal-family records -->
 ## Record, configuration or dependency cannot be read
@@ -97,7 +97,7 @@ Temporary comparison copies are removed after their Git processes exit, includin
 <!-- refusal-family workflow -->
 ## Workorder workflow changed
 **Meaning:** The default workflow or a renamed generated workflow changed, including its removal.
-**Clear:** Restore it, or have a reviewer inspect the change and add `workorder-allow:workflow`. Reviewer approval alone or warning mode does not accept it. `workorder init --update-workflow` previews and refreshes generated setup; review and commit the resulting file.
+**Clear:** Restore it, or have a reviewer inspect the change and add `workorder-allow:workflow`. Reviewer approval alone or warning mode does not accept it. `workorder init --update-workflow` previews and refreshes generated setup; review and commit the resulting file. Switching to or from solo mode (`init --update-workflow --solo`) is such a change; in solo mode the owner's own label accepts it as owner acceptance.
 
 <!-- refusal-family project-test -->
 ## The optional project test finds a regression
@@ -126,17 +126,17 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 
 <!-- refusal-inventory workorder/__init__.py 51c6a4d75952a2c005eb33acda81f0834b2f1e0dffae215a7d9cd26f48759af2 records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
-<!-- refusal-inventory workorder/bootstrap.py f9ec3d59381cf7784913115bbee20ff45b1ac830e8dd39665fdf517d6207ee1d records,workflow,project-test -->
-<!-- refusal-inventory workorder/cli.py 00601bdf7c3986ce4a64e354f9abd120adb8f840e9d1430e3ea1dacc82cbc4b2 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
-<!-- refusal-inventory workorder/gate.py 32b5fd3a40997f22c65cc90998368d85bffeeca150d7e364615a6e320300b783 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
+<!-- refusal-inventory workorder/bootstrap.py a8429018128aa656796faf3c9b36269b13c4ef670da531772fbf02e116f7d4c8 records,workflow,project-test -->
+<!-- refusal-inventory workorder/cli.py d2461b410475da8d803ce27ef43ad7f12991c158e3b94f35f54ae980ef11a8c9 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
+<!-- refusal-inventory workorder/gate.py 87a80119f0c2983dadd34606e0116e366c5ee165ea0140ab7802e990214d16a3 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 84c2d9a3f4cb85cc24bccd023e98b2959733d3dcae092541ecc3a82c6bff3d63 evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
-<!-- refusal-inventory workorder/project_tests.py f65af83dd6885820c0d9a8d739d12aebd6dce97a1ff859b821b252d545f32b34 project-test,records -->
+<!-- refusal-inventory workorder/project_tests.py c319e88f96bb25083ad30ab8bcd002fc9613d1b2f86614ddae27095f6579a995 project-test,records -->
 <!-- refusal-inventory workorder/pytest_selection.py bcff8a23918c0320f921d46b229359bc41237be3055be093a6e746860395d35b weak-tests,imports -->
 <!-- refusal-inventory workorder/python_imports.py 6c7412fae56fed15a3a03a97cce2e13a2c817e8ad8d3edacc2d5f84de537d420 imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
-<!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
+<!-- refusal-inventory workorder/review_labels.py 27e56b94db10987ac9bfd41b7da7d9a5598cb9d14cf0655648573d3aa2970159 definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
 <!-- refusal-inventory workorder/store.py 7ce5092167a284491e8dbacc6780f3ff00b624f52a06660ed44a4c1b3cf5bb0d records,evidence,current-tests,removal,pending -->
 <!-- refusal-inventory workorder/git_reads.py c406e897d3776a2eefb175775f1cf8144f2d6991a666432e1337bb739c5c0371 records,evidence -->

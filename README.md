@@ -67,7 +67,7 @@ Run it locally to see what the reviewer will see.
 
 ## The review rule
 
-An approving review clears every finding except changes to existing tests and changes to the Workorder workflow file; those need a label from someone other than the author.
+An approving review clears every finding except changes to existing tests and changes to the Workorder workflow file; those need a label from someone other than the author ([solo mode](docs/reference.md#solo-mode): the owner).
 
 | Finding | What clears it |
 |---|---|

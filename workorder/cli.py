@@ -46,6 +46,9 @@ def parser():
     init.add_argument("--update-workflow", action="store_true", help="rewrite the workflow and show its diff; --check previews only")
     init.add_argument("--light", action="store_true", help="write a trial workflow with review warnings and no task requirement")
     init.add_argument('--test-first', action='store_true', help='require tests to land before implementation in the workflow')
+    init.add_argument('--solo', action='store_true',
+                      help='solo mode: your own workorder-allow labels count as owner acceptance (never review) when'
+                           ' GitHub confirms you as owner or admin; recorded in .workorder/config.json and the workflow')
     project = init.add_mutually_exclusive_group()
     project.add_argument('--project-test', metavar='CMD', help="set the project's test command in .workorder/config.json"
                          " (a first init turns on python -m pytest -q when it finds pytest tests)")
@@ -137,6 +140,9 @@ def parser():
                             " (comma-separated ids; tests for test-file edits, no-task for changes without task work)")
     check.add_argument('--approving-review', action='store_true',
                        help='accept review findings except old-test failures and test-first exceptions; --allow names explicit labels')
+    check.add_argument('--owner-accepts', metavar='LABELS', default='',
+                       help='with --base in solo mode: labels the repository owner added (same ids as --allow);'
+                            ' they clear what --allow would and print as owner acceptance, never as review')
     check.add_argument('--require-test-first', action='store_true', help='with --base: require tests to land before implementation')
     check.add_argument("--run-tests", action="store_true",
                        help="run selected tasks' tests; with --base, include tasks with changed tests and REF comparisons")
@@ -514,8 +520,9 @@ def run_command(options, command, run):
                 raise s.Refused("give the task once, positionally or with --task")
             options.task = options.task or options.named_task
             if (options.allow or options.strict_tests or options.require_task or options.require_test_first
-                    or options.approving_review) and not options.base:
-                raise s.Refused("--allow, --approving-review, --strict-tests, --require-task and --require-test-first go with --base")
+                    or options.approving_review or options.owner_accepts) and not options.base:
+                raise s.Refused("--allow, --approving-review, --owner-accepts, --strict-tests, --require-task"
+                                " and --require-test-first go with --base")
             if options.review and not options.base:
                 raise s.Refused("--review goes with --base")
             if options.all_tests and not options.run_tests:
@@ -534,7 +541,8 @@ def run_command(options, command, run):
             from .bootstrap import initialize
             return initialize(root, options.check, options.force, claude=options.claude,
                               update_workflow=options.update_workflow, light=options.light, test_first=options.test_first,
-                              project_test=options.project_test, no_project_test=options.no_project_test)
+                              project_test=options.project_test, no_project_test=options.no_project_test,
+                              solo=options.solo)
         elif options.action == "hook":
             from .hooks import run
             return run(root, options.event)
@@ -705,11 +713,22 @@ def run_command(options, command, run):
             notes = []
             counts = {}
             allow = {item.strip() for item in options.allow.split(",") if item.strip()}
-            problems = gate.check(root, options.staged, options.base, notes, allow, options.run_tests, counts,
+            owner = {item.strip() for item in options.owner_accepts.split(",") if item.strip()}
+            from . import project_tests
+            # Solo mode holds only when the base records it too: a change cannot turn it on for itself.
+            solo = bool(options.base) and project_tests.solo(root) and project_tests.solo(root, options.base)
+            if owner and not solo:
+                notes.append(f'owner labels not used ({", ".join(sorted(owner))}): solo mode is not recorded in'
+                             f' .workorder/config.json both on {options.base} and in this change'
+                             ' (workorder init --update-workflow --solo records it)')
+                owner = set()
+            # The owner's labels clear what the same labels from a reviewer would; a reviewer's label stays review.
+            problems = gate.check(root, options.staged, options.base, notes, allow | owner, options.run_tests, counts,
                                   options.strict_tests, options.all_tests, options.require_task,
                                   timeout=options.timeout, review=options.review or "refuse",
                                   approving_review=options.approving_review, require_test_first=options.require_test_first,
-                                  jobs=options.jobs, require_task_ignore=options.require_task_ignore)
+                                  jobs=options.jobs, require_task_ignore=options.require_task_ignore,
+                                  owner_accepts=owner - allow)
             if (options.staged and not counts["tasks"] and not problems and not notes
                     and not counts.get("warnings") and not options.run_tests):
                 return 0
@@ -736,7 +755,8 @@ def run_command(options, command, run):
                                     unchanged_base=bool(options.base and not counts['tasks']),
                                     unchanged_all_tests=bool(options.base and options.all_tests
                                                              and not counts['tasks']
-                                                             and counts.get('tested_tasks'))))
+                                                             and counts.get('tested_tasks')),
+                                    solo=solo))
             return int(bool(problems))
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:

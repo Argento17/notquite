@@ -69,6 +69,41 @@ def remove(root, *, check=False):
     return True
 
 
+def solo(root, rev=None):
+    """Whether .workorder/config.json records solo mode (workorder init --solo), here or at rev.
+
+    A missing or unreadable file at rev records nothing.
+    """
+    if rev is None:
+        value = _settings(root).get('solo', False)
+    else:
+        shown = s.git(root, 'show', f'{rev}:{CONFIG}', required=False)
+        try:
+            settings = json.loads(shown.stdout) if shown.returncode == 0 else {}
+        except ValueError:
+            settings = {}
+        value = settings.get('solo', False) if isinstance(settings, dict) else False
+    if not isinstance(value, bool):
+        raise s.Refused(f'{CONFIG}: solo must be true or false')
+    return value
+
+
+def set_solo(root, on, *, check=False):
+    """Record or clear solo mode, preserving other settings; a check reports whether it already matches."""
+    settings = _settings(root)
+    if check or settings.get('solo', False) is on:
+        return settings.get('solo', False) is on
+    if on:
+        settings['solo'] = True
+    else:
+        settings.pop('solo', None)
+    path = s.local_path(root, CONFIG)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2) + '\n', encoding='utf-8')
+    s.invalidate_reads()
+    return True
+
+
 def detect(root):
     """The file or folder showing that the project's tests run with pytest, or None."""
     sections = {'pyproject.toml': r'(?m)^\s*\[\s*tool\s*\.\s*pytest\b', 'setup.cfg': r'(?m)^\s*\[\s*tool:pytest\s*\]',

@@ -68,17 +68,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        # Optional: append --require-task-ignore GLOB for each code path exception, for example:
+@AUTHOR_ENV@        # Optional: append --require-task-ignore GLOB for each code path exception, for example:
         # --require-task-ignore 'docs/**' --require-task-ignore '*.md'
         run: |
           trap 'status=$?; if [ "$status" -ne 0 ]; then echo "Reviewer guide: https://github.com/Argento17/workorder/blob/main/docs/reviewer-guide.md" >&2; fi; exit "$status"' 0
           # Reviewed task ids, unowned tests, or the code-to-task requirement.
           gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/events" > "$RUNNER_TEMP/workorder-label-events.json"
           gh api --paginate --slurp "repos/$GH_REPO/pulls/$PR_NUMBER/reviews" > "$RUNNER_TEMP/workorder-reviews.json"
-          allowances=$(python -m workorder.review_labels "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/workorder-label-events.json" "$RUNNER_TEMP/workorder-reviews.json" "$BASE")
+@SOLO_LOOKUP@          allowances=$(python -m workorder.review_labels @SOLO_OPTION@"$GITHUB_EVENT_PATH" "$RUNNER_TEMP/workorder-label-events.json" "$RUNNER_TEMP/workorder-reviews.json" "$BASE")
           @REVIEW_COMMENT@
           workorder check --base "$BASE" --run-tests --all-tests @REVIEW_OPTIONS@ $allowances
 """
+
+# Solo mode (init --solo) adds the author's permission lookup; without it the workflow is unchanged.
+SOLO_AUTHOR_ENV = '          PR_AUTHOR: ${{ github.event.pull_request.user.login }}\n'
+SOLO_LOOKUP = (
+    "          # Solo mode: the author's own labels count only if GitHub confirms the author as owner or admin.\n"
+    '          gh api "repos/$GH_REPO/collaborators/$PR_AUTHOR/permission" > "$RUNNER_TEMP/workorder-permission.json"'
+    """ || echo '{}' > "$RUNNER_TEMP/workorder-permission.json"\n""")
+SOLO_OPTION = '--solo "$RUNNER_TEMP/workorder-permission.json" '
+SOLO_LIMIT = ('Solo mode: your own workorder-allow labels count as owner acceptance when GitHub confirms you as the'
+              ' repository owner or an admin; the check prints them as owner acceptance, never as review, and'
+              ' every check still runs. Your labels are the only human step: an agent that acts with your GitHub'
+              ' credentials could add them, so give agents a token without permission to label pull requests.')
 
 
 def default_branch(root):
@@ -217,10 +229,14 @@ def earlier_agent_block(text):
 
 @s.changing_repository()
 def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False,
-               project_test=None, no_project_test=False):
+               project_test=None, no_project_test=False, solo=False):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
     from .python_imports import installed_src
     from . import project_tests
+    if solo and light:
+        raise s.Refused('--solo and --light do not combine: --light only warns, so it asks nobody to accept')
+    if solo and not update_workflow and s.local_path(root, '.github/workflows/workorder.yml').exists():
+        raise s.Refused('solo mode changes the existing workflow: run workorder init --update-workflow --solo')
     detected = None
     if project_test is None and not no_project_test and 'project_test' not in project_tests._settings(root):
         # Only a first setup turns it on: re-running init after an upgrade keeps existing choices.
@@ -318,7 +334,10 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             '@REVIEW_OPTIONS@', ('--review warn' if light else '--require-task')
             + (' --require-test-first' if test_first else '')).replace(
             '@REVIEW_COMMENT@', '# Trial setup: restore defaults with workorder init --update-workflow.' if light
-            else '# Test changes are refused unless a reviewer other than the author adds the label or approves this head; --review warn is optional.')
+            else "# Solo mode: the owner's own labels count as owner acceptance, never as review; an approval by someone else still counts." if solo
+            else '# Test changes are refused unless a reviewer other than the author adds the label or approves this head; --review warn is optional.').replace(
+            '@AUTHOR_ENV@', SOLO_AUTHOR_ENV if solo else '').replace(
+            '@SOLO_LOOKUP@', SOLO_LOOKUP if solo else '').replace('@SOLO_OPTION@', SOLO_OPTION if solo else '')
         original = path.read_text(encoding='utf-8') if path.exists() else ''
         if update_workflow:
             print(''.join(difflib.unified_diff(original.splitlines(keepends=True),
@@ -334,6 +353,21 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             written.append('.github/workflows/workorder.yml')
             print('.github/workflows/workorder.yml: written')
         print('CI dependencies: ' + (dependencies or 'no project test dependencies detected'))
+        # The record follows the workflow just written or previewed: solo mode only with --solo.
+        if project_tests.set_solo(root, solo, check=True):
+            if solo:
+                print('.workorder/config.json: solo mode already recorded')
+        elif check:
+            missing = True
+            print('.workorder/config.json: ' + ('solo mode not recorded' if solo
+                                                else 'solo mode recorded; init --update-workflow turns it off'))
+        else:
+            project_tests.set_solo(root, solo)
+            written.append(project_tests.CONFIG)
+            print('.workorder/config.json: ' + ('solo mode recorded' if solo
+                                                else 'solo mode turned off (init --update-workflow --solo keeps it)'))
+        if solo:
+            print(SOLO_LIMIT)
     if settings:
         path, updated, changed = settings
         if not changed:
@@ -375,6 +409,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             written.append(project_tests.CONFIG)
             print('.workorder/config.json: project test turned off')
     if not check:
+        written = list(dict.fromkeys(written))
         print('Files written:' if written else 'No files written.')
         for name in written:
             print(f'  {name}')

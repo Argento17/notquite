@@ -27,7 +27,7 @@ Contents: [Commands](#commands) · [Task files](#task-files) ·
 
 | Command | What it does |
 |---|---|
-| `workorder init [--check] [--force] [--claude] [--update-workflow] [--light] [--test-first] [--project-test CMD \| --no-project-test]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs the pre-commit hook, and writes the workflow if absent. A first init that finds pytest sets the project test `python -m pytest -q` ([project test](#current-runs-cache-and-summaries)); `--project-test` stores another command in `.workorder/config.json`, `--no-project-test` turns it off. `--update-workflow` rewrites the workflow and shows a diff (only a preview with `--check`). `--check` reports missing setup without writing and exits 1 if incomplete. `--force` keeps a different hook as `pre-commit.workorder-previous` and calls it first. `--claude` merges hooks into `.claude/settings.json` |
+| `workorder init [--check] [--force] [--claude] [--update-workflow] [--light] [--test-first] [--solo] [--project-test CMD \| --no-project-test]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs the pre-commit hook, and writes the workflow if absent. A first init that finds pytest sets the project test `python -m pytest -q` ([project test](#current-runs-cache-and-summaries)); `--project-test` stores another command in `.workorder/config.json`, `--no-project-test` turns it off. `--update-workflow` rewrites the workflow and shows a diff (only a preview with `--check`). `--check` reports missing setup without writing and exits 1 if incomplete. `--force` keeps a different hook as `pre-commit.workorder-previous` and calls it first. `--claude` merges hooks into `.claude/settings.json`. `--solo`: [solo mode](#solo-mode) |
 | `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple] [--test COMMAND] [--test-paths PATH ...] [--code-paths PATH ...] [--acceptance TEXT ...] [--kind feature\|fix\|refactor\|verification] [--local] [--test-first]` | Reserves the next id on `origin`, or numbers it locally with no `origin` or with `--local` (no tag pushed), and writes `tasks/<id>.md` (extended by default; `simple` writes the seven required fields). `ships` defaults to `none`. `--acceptance` (repeatable) writes Acceptance items; `--kind` writes `kind` (none by default) |
 | `workorder done --task ID [--note TEXT] [--timeout SECONDS] [--jobs N] [--needs-review] [--no-code-change] [--refactor] [--require-test-first] [--take-over] [--verbose]` | Runs the declared test and writes DONE, receipts and the note together when the evidence supports it; a refusal changes nothing. Prints the Acceptance list for confirmation. Never commits or pushes |
 | `workorder show --task ID [--verbose]` | The task as a record: claimed and evidence status, what is owed, dependencies, kind, mission, summary, next, body sections, a dated receipt timeline, any computed merge and Progress. Prints a next step for owed evidence or unclaimed Acceptance work |
@@ -41,7 +41,7 @@ Contents: [Commands](#commands) · [Task files](#task-files) ·
 | `workorder receipt live --task ID --target NAME -- CMD...` | The same, recorded after the deployment |
 | `workorder check [ID]` / `check --task ID` | No argument: every task, one line per problem, or `check: OK`. With a task (or `tasks/ID.md`): that task explained |
 | `workorder check --staged` | The pre-commit hook: checks the staged tasks this commit touches (task file, receipts, contract or its evidence) and their dependents. Refuses a commit that newly claims DONE or CLOSED on code other than the implemented code, and command changes on unfinished tasks |
-| `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--review warn\|refuse] [--all-tests] [--require-task] [--require-task-ignore GLOB] [--require-test-first] [--approving-review] [--timeout SECONDS] [--jobs N]` | The pull-request check: changed task records and receipts, all repository test roots, every task whose tests changed, and dependents. Refuses stale claims, changed receipts, unsupported definitions and removed tasks; see [checks against a base](#checks-against-a-base) |
+| `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--review warn\|refuse] [--all-tests] [--require-task] [--require-task-ignore GLOB] [--require-test-first] [--approving-review] [--owner-accepts LABELS] [--timeout SECONDS] [--jobs N]` | The pull-request check: changed task records and receipts, all repository test roots, every task whose tests changed, and dependents. Refuses stale claims, changed receipts, unsupported definitions and removed tasks; see [checks against a base](#checks-against-a-base) |
 | `workorder repair --task ID` | Verifies a conflicted legacy append, keeps the common prefix and converts each side's extra lines to receipt files |
 | `workorder claim --task ID` / `release --task ID [--force]` | Takes or gives up a task with a pushed tag; see [claims](#claims-and-ids) |
 | `workorder claims` / `workorder ready` | Active claims / open tasks: free, held, blocked or waiting for delivery |
@@ -999,7 +999,8 @@ jobs:
 ```
 
 A label counts only when its latest add event (from every page of issue events) was made by someone
-other than the pull request author; author-added labels are ignored with a notice. Removing a label
+other than the pull request author; author-added labels are ignored with a notice (in
+[solo mode](#solo-mode), a confirmed owner's are owner acceptance). Removing a label
 cancels it, and an author re-adding it does not restore a reviewer's add. An APPROVED review counts
 only when someone other than the author made it on the current head; old-head, dismissed and author
 reviews do not, and a later request for changes from that reviewer replaces it. Missing history or
@@ -1227,7 +1228,7 @@ prints `No files written.`. `init --check` writes nothing, advises init when the
 exits 1 if setup is incomplete. `init --update-workflow` prints a diff and rewrites an existing
 workflow (with `--check`, it only previews). `init --light` writes a trial workflow with `--review warn`
 and no `--require-task`; `--light --update-workflow` switches to it, and `--update-workflow` restores
-the defaults.
+the defaults. `--update-workflow --solo` switches to [solo mode](#solo-mode); `--update-workflow` alone leaves it.
 
 A generated workflow installs project test dependencies from the first match, and says which:
 
@@ -1280,6 +1281,28 @@ receipts without paths use their code tree); `done` uses the same scope. Unsuppo
 1. Passing output is quiet; failures are shortened, with the full text in
 `.git/workorder/last-output.txt` (`WORKORDER_VERBOSE=1` prints everything). The summary counts tasks whose tests ran and marks fully cached comparisons `(cached)`. Temporary copies drop inherited Git variables, so the index stays intact in linked
 worktrees. The hook never fetches.
+
+### Solo mode
+
+For a developer working alone with coding agents. `workorder init --solo` records `"solo": true` in
+`.workorder/config.json` and writes a workflow that also asks GitHub for the author's permission
+(`gh api repos/OWNER/REPO/collaborators/AUTHOR/permission`, read-only token). Without `--solo` nothing changes.
+Solo mode applies only when the base branch records it too: a pull request cannot turn it on for itself.
+
+A `workorder-allow:*` label the author added then counts only if GitHub confirms the author as the
+repository owner (by account ID in the event) or an admin (`"permission": "admin"` for that account);
+an unverifiable answer accepts nothing. It clears what the same label from a reviewer would, reaches
+the check as `--owner-accepts` (locally: `check --base REF --owner-accepts TASK-3,tests`), and prints as
+owner acceptance, never review:
+
+```text
+Note: accepted by the owner (solo mode; no independent review): TASK-3 (new task), tests/test_calc.py (changed lines)
+checked 1 task (1 claimed DONE or CLOSED); solo mode: the owner's labels count as acceptance, not independent review
+```
+
+Every check still runs and no finding disappears; another person's label or approval still counts
+as review. The limit: the owner's labels are the only human step, and an agent acting with the
+owner's GitHub credentials could add them, so give agents a token without permission to label pull requests.
 
 ## Agent hooks
 
