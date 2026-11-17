@@ -3,7 +3,7 @@
 **Every task recorded. A clear history. Agents always go back to it.**
 [Reviewer guide](docs/reviewer-guide.md) · [Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder flags](docs/shortcuts.md)
 
-![Terminal recording of the Workorder 0.17.0 quick start: init adds the agent block to AGENTS.md and CLAUDE.md, new opens TASK-1, done records the passing test, and show prints the task's history and progress note](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)
+![Comic: a coding agent says DONE and Workorder refuses until the task's test passes; then the next session picks up where the work left off from `workorder show`](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)
 
 Workorder keeps each task as a record in your repository. A coding agent starts every session from the task, works within it, and leaves it up to date. The next session, or the next agent, picks up where the last one stopped.
 

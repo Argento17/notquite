@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workorder 0.17.0: the task record for coding agents</title>
+<!--
+  Workorder 0.17.0 demo comic, adapted from the approved v3 comic and its Workorder 0.3.0 version (same style, cast, fonts, animation engine).
+  Every command and terminal line is copied from transcript.txt (a real Workorder 0.17.0 run made by run.sh, 2026-11-17).
+  Excerpted output marks skipped lines with a grey ellipsis line. setTime(t) drives every frame; ?t=12.5 freezes, ?play loops.
+-->
+<style>
+@font-face{font-family:'Dela Gothic One';font-weight:400;font-display:block;src:url(fonts/DelaGothicOne-400.woff2) format('woff2')}
+@font-face{font-family:'IBM Plex Mono';font-weight:400;font-display:block;src:url(fonts/IBMPlexMono-400.woff2) format('woff2')}
+@font-face{font-family:'IBM Plex Mono';font-weight:600;font-display:block;src:url(fonts/IBMPlexMono-600.woff2) format('woff2')}
+@font-face{font-family:'IBM Plex Mono';font-weight:700;font-display:block;src:url(fonts/IBMPlexMono-700.woff2) format('woff2')}
+@font-face{font-family:'Shantell Sans';font-weight:300 800;font-display:block;src:url(fonts/ShantellSans-500.woff2) format('woff2')}
+
+:root{
+  --page:#101219; --panel:#191C26; --inner:#222737; --ink:#0B0C11;
+  --main:#ECEBE3; --sec:#A3A8B6; --pink:#FF6A9F; --blue:#5E9DF2; --yellow:#F2C94C;
+  --red:#FF5C70; --green:#47C38A; --amber:#F0A43A; --pencil:#7D8496; --skin:#F6EBDC;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1280px;height:720px;overflow:hidden;background:var(--page)}
+#stage{position:relative;width:1280px;height:720px;overflow:hidden;
+  background-color:var(--page);
+  background-image:radial-gradient(circle at 4.5px 4.5px, rgba(94,157,242,.11) 0 1px, transparent 1.01px);
+  background-size:9px 9px;color:var(--main);font-family:'IBM Plex Mono',monospace}
+.scene{position:absolute;inset:0;visibility:hidden}
+.anim{visibility:hidden}
+
+/* titles */
+.title{position:absolute;font-family:'Dela Gothic One';font-size:38px;line-height:1;letter-spacing:.05em;word-spacing:.12em;color:var(--main);
+  -webkit-text-stroke:7px var(--ink);paint-order:stroke fill;
+  filter:drop-shadow(4px 4px 0 var(--pink));white-space:nowrap;transform-origin:left center}
+.title .n{color:var(--yellow)}
+
+/* panels */
+.panel{position:absolute;background:var(--panel);border:3px solid var(--main)}
+.inner{position:absolute;background:var(--inner);border:3px solid var(--ink)}
+.plabel{position:absolute;font:600 15px/1 'IBM Plex Mono';color:var(--sec);letter-spacing:.5px}
+
+/* file + terminal text */
+.code{position:absolute;font:400 20px/26px 'IBM Plex Mono';white-space:pre;color:var(--main)}
+.code.lines{white-space:normal}
+.ln{height:26px;position:relative;white-space:pre}
+.k{color:var(--sec)}
+.blk{position:relative}
+.hlbg{position:absolute;left:-12px;right:-12px;top:-1px;bottom:-1px;border-left:5px solid;transform-origin:left center}
+.gap{height:18px;position:relative}
+.gap svg{position:absolute;left:-6px;top:3px}
+.tagl{position:absolute;right:0;top:3px;font:700 14px/1 'IBM Plex Mono';color:#17181F;padding:3px 7px;border:2px solid var(--ink);
+  letter-spacing:.5px;text-transform:uppercase;transform-origin:right center}
+
+/* speech bubbles */
+.bub{position:absolute;filter:drop-shadow(3px 3px 0 var(--ink));transform-origin:50% 100%}
+.bbox{background:#F5F4EE;color:#14151B;border:3px solid var(--ink);border-radius:24px;padding:12px 16px 13px;
+  font:600 20px/1.32 'Shantell Sans'}
+.who{display:inline-block;font:700 12px/1 'IBM Plex Mono';letter-spacing:1px;text-transform:uppercase;color:#17181F;
+  padding:4px 6px 3px;border:2px solid var(--ink);margin-right:6px;vertical-align:3px}
+.tail{position:absolute;bottom:-30px}
+
+/* captions */
+.cap{position:absolute;background:var(--yellow);color:#17181F;border:2px solid var(--ink);box-shadow:3px 3px 0 var(--ink);
+  font:600 18px/1.35 'IBM Plex Mono';padding:8px 12px;transform-origin:left center}
+
+/* stamps */
+.stamp{position:absolute;font-family:'Dela Gothic One';line-height:1;padding:8px 14px 9px;border:3px solid currentColor;white-space:nowrap;
+  background:rgba(16,18,25,.82)}
+/* sound effects: coloured fill over a ~6px dark stroke */
+.fx{position:absolute;font-family:'Dela Gothic One';line-height:1;white-space:nowrap}
+.fx b{font-weight:400;position:absolute;left:0;top:0}
+.fx b.s{-webkit-text-stroke:12px var(--ink);color:var(--ink)}
+
+/* pencil = not backed by evidence */
+.pencil{stroke:var(--pencil);stroke-width:3;stroke-dasharray:6 5;fill:none;stroke-linecap:round;stroke-linejoin:round}
+
+.chip{position:absolute;font:700 24px/1 'IBM Plex Mono';padding:10px 14px;border:3px solid var(--main);background:var(--inner);color:var(--main)}
+.chip.p{border:3px dashed var(--pencil);background:transparent;color:var(--main)}
+.small{position:absolute;font:600 14px/1 'IBM Plex Mono';color:var(--sec);letter-spacing:.5px;text-transform:uppercase}
+.figure{position:absolute}
+</style>
+</head>
+<body>
+<div id="stage">
+
+<!-- ===== character symbols (new cast: AGENT and the WORKORDER inspector) ===== -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <!-- AGENT: hoodie, headset, little antenna. 3px dark outline, round joins, flat fills -->
+    <symbol id="agent" viewBox="0 0 170 240">
+      <g stroke="#0B0C11" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+        <line x1="85" y1="22" x2="85" y2="44" fill="none"/>
+        <circle cx="85" cy="17" r="7" fill="#FF6A9F"/>
+        <path d="M38 236 L44 168 Q48 140 85 138 Q122 140 126 168 L132 236 Z" fill="#5E9DF2"/>
+        <path d="M70 140 L85 162 L100 140" fill="none"/>
+        <path d="M44 168 Q30 196 34 222" fill="none"/>
+        <path d="M126 168 Q140 196 136 222" fill="none"/>
+        <circle cx="34" cy="224" r="9" fill="#F6EBDC"/>
+        <circle cx="136" cy="224" r="9" fill="#F6EBDC"/>
+        <rect x="74" y="122" width="22" height="20" fill="#F6EBDC"/>
+        <rect x="45" y="44" width="80" height="84" rx="26" fill="#F6EBDC"/>
+        <path d="M41 86 Q41 34 85 34 Q129 34 129 86" fill="none"/>
+        <rect x="33" y="74" width="14" height="26" rx="5" fill="#2B3042"/>
+        <rect x="123" y="74" width="14" height="26" rx="5" fill="#2B3042"/>
+        <path d="M40 100 Q44 120 66 116" fill="none"/>
+      </g>
+      <circle cx="70" cy="84" r="5" fill="#0B0C11"/><circle cx="100" cy="84" r="5" fill="#0B0C11"/>
+      <path d="M72 104 Q85 112 98 104" stroke="#0B0C11" stroke-width="3" fill="none" stroke-linecap="round"/>
+    </symbol>
+    <!-- AGENT cheering (claims DONE) -->
+    <symbol id="agentCheer" viewBox="0 0 170 240">
+      <g stroke="#0B0C11" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+        <line x1="85" y1="22" x2="85" y2="44" fill="none"/>
+        <circle cx="85" cy="17" r="7" fill="#FF6A9F"/>
+        <path d="M38 236 L44 168 Q48 140 85 138 Q122 140 126 168 L132 236 Z" fill="#5E9DF2"/>
+        <path d="M70 140 L85 162 L100 140" fill="none"/>
+        <path d="M46 162 Q22 140 18 104" fill="none"/>
+        <path d="M124 162 Q148 140 152 104" fill="none"/>
+        <circle cx="18" cy="98" r="9" fill="#F6EBDC"/>
+        <circle cx="152" cy="98" r="9" fill="#F6EBDC"/>
+        <rect x="74" y="122" width="22" height="20" fill="#F6EBDC"/>
+        <rect x="45" y="44" width="80" height="84" rx="26" fill="#F6EBDC"/>
+        <path d="M41 86 Q41 34 85 34 Q129 34 129 86" fill="none"/>
+        <rect x="33" y="74" width="14" height="26" rx="5" fill="#2B3042"/>
+        <rect x="123" y="74" width="14" height="26" rx="5" fill="#2B3042"/>
+        <path d="M40 100 Q44 120 66 116" fill="none"/>
+        <path d="M70 100 Q85 118 100 100 Z" fill="#0B0C11"/>
+      </g>
+      <path d="M63 84 Q70 76 77 84" stroke="#0B0C11" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <path d="M93 84 Q100 76 107 84" stroke="#0B0C11" stroke-width="3" fill="none" stroke-linecap="round"/>
+    </symbol>
+    <!-- WORKORDER inspector: hat, long coat, magnifying glass -->
+    <symbol id="inspector" viewBox="0 0 190 240">
+      <g stroke="#0B0C11" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+        <path d="M40 236 L48 160 Q54 136 92 134 Q130 136 136 160 L144 236 Z" fill="#F2C94C"/>
+        <path d="M92 136 L92 236" fill="none"/>
+        <path d="M74 136 L92 170 L110 136" fill="#ECEBE3"/>
+        <path d="M48 166 Q36 196 44 222" fill="none"/>
+        <circle cx="46" cy="224" r="9" fill="#F6EBDC"/>
+        <path d="M136 164 Q154 150 152 120" fill="none"/>
+        <line x1="152" y1="112" x2="160" y2="88" stroke-width="7"/>
+        <circle cx="166" cy="66" r="22" fill="#CFE0F7"/>
+        <path d="M156 56 Q160 50 168 50" fill="none" stroke="#FFFFFF" stroke-width="3"/>
+        <circle cx="152" cy="116" r="9" fill="#F6EBDC"/>
+        <rect x="81" y="118" width="22" height="20" fill="#F6EBDC"/>
+        <rect x="54" y="52" width="76" height="74" rx="24" fill="#F6EBDC"/>
+        <path d="M40 58 L144 58 L144 50 Q130 46 124 46 L118 14 Q92 6 66 14 L60 46 Q54 46 40 50 Z" fill="#2B3042"/>
+        <path d="M62 40 L122 40 L121 48 L63 48 Z" fill="#FF6A9F"/>
+      </g>
+      <circle cx="78" cy="84" r="5" fill="#0B0C11"/><circle cx="106" cy="84" r="5" fill="#0B0C11"/>
+      <path d="M70 72 L86 75" stroke="#0B0C11" stroke-width="3" stroke-linecap="round"/>
+      <path d="M80 106 L104 104" stroke="#0B0C11" stroke-width="3" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="tear" viewBox="0 0 720 12">
+      <path d="M0 6 L10 1 L20 11 L30 1 L40 11 L50 1 L60 11 L70 1 L80 11 L90 1 L100 11 L110 1 L120 11 L130 1 L140 11 L150 1 L160 11 L170 1 L180 11 L190 1 L200 11 L210 1 L220 11 L230 1 L240 11 L250 1 L260 11 L270 1 L280 11 L290 1 L300 11 L310 1 L320 11 L330 1 L340 11 L350 1 L360 11 L370 1 L380 11 L390 1 L400 11 L410 1 L420 11 L430 1 L440 11 L450 1 L460 11 L470 1 L480 11 L490 1 L500 11 L510 1 L520 11 L530 1 L540 11 L550 1 L560 11 L570 1 L580 11 L590 1 L600 11 L610 1 L620 11 L630 1 L640 11 L650 1 L660 11 L670 1 L680 11 L690 1 L700 11 L710 1 L720 6"
+        fill="none" stroke="#A3A8B6" stroke-opacity=".45" stroke-width="2" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="tailL" viewBox="0 0 44 34"><path d="M6 0 L4 31 L30 0" fill="#F5F4EE" stroke="#0B0C11" stroke-width="3" stroke-linejoin="round"/></symbol>
+    <symbol id="tailR" viewBox="0 0 44 34"><path d="M14 0 L40 31 L38 0" fill="#F5F4EE" stroke="#0B0C11" stroke-width="3" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<style>
+.bbox.big{font-size:28px;line-height:1.28;padding:14px 20px 15px}
+.bbox.big .who{font-size:14px;padding:5px 7px 4px;vertical-align:5px}
+.cap.big{font:700 30px/1.3 'IBM Plex Mono';padding:14px 18px}
+.term{position:absolute;font:400 28px/40px 'IBM Plex Mono';white-space:normal;color:var(--main)}
+.term .ln{height:40px;white-space:pre}
+.term .dim{color:#7D8496}
+</style>
+
+<!-- ================= SCENE 1: DEFINE THE TASK ================= -->
+<section class="scene" data-in="0.0" data-out="7.5">
+  <div class="title anim" data-type="pop" data-t="-1.0" style="left:40px;top:24px;font-size:42px"><span class="n">1</span> DEFINE THE TASK</div>
+
+  <div class="panel anim" data-type="panel" data-t="-1.0" data-c="#5E9DF2" style="left:40px;top:92px;width:1200px;height:130px">
+    <div class="inner" style="left:12px;top:12px;width:1170px;height:100px">
+      <div class="term" style="left:24px;top:10px">
+        <div class="ln"><span style="color:#47C38A">$</span> workorder new --title "Add calc" --owner you</div>
+        <div class="ln">  --test "python3 test_calc.py" --code-paths calc.py</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel anim" data-type="panel" data-t="0.9" data-c="#FF6A9F" style="left:40px;top:244px;width:902px;height:450px">
+    <div class="plabel" style="left:18px;top:13px;font-size:18px">tasks/TASK-1.md</div>
+    <div class="inner" style="left:12px;top:42px;width:872px;height:392px">
+      <div class="term" style="left:22px;top:22px;width:830px">
+        <div class="blk"><div class="hlbg anim" data-type="hl" data-t="1.8" style="border-color:#47C38A;background:rgba(71,195,138,.16)"></div>
+          <div class="ln"><span class="k">test:</span> "python3 test_calc.py"</div></div>
+        <div class="ln dim">⋯</div>
+        <div class="blk"><div class="hlbg anim" data-type="hl" data-t="2.5" style="border-color:#5E9DF2;background:rgba(94,157,242,.16)"></div>
+          <div class="ln">## Scope</div>
+          <div class="ln"></div>
+          <div class="ln">In: add two numbers with `add(a, b)` in calc.py.</div></div>
+        <div class="ln dim">⋯</div>
+        <div class="blk"><div class="hlbg anim" data-type="hl" data-t="3.2" style="border-color:#F2C94C;background:rgba(242,201,76,.16)"></div>
+          <div class="ln">## Acceptance</div>
+          <div class="ln"></div>
+          <div class="ln">- `add(2, 2)` returns `4`.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel anim" data-type="panel" data-t="1.0" data-c="#F2C94C" style="left:970px;top:244px;width:270px;height:450px">
+    <div class="inner" style="left:12px;top:12px;width:240px;height:420px">
+      <div class="cap big anim" data-type="pop" data-t="3.9" style="left:10px;top:12px;width:214px;font-size:27px">Every task gets a structure.</div>
+      <svg class="figure" width="160" height="226" style="left:38px;top:186px"><use href="#agent"/></svg>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SCENE 2: THE AGENT CLAIMS DONE ================= -->
+<section class="scene" data-in="7.5" data-out="14.0">
+  <div class="title anim" data-type="pop" data-t="7.5" style="left:40px;top:24px;font-size:42px"><span class="n">2</span> THE AGENT CLAIMS DONE</div>
+
+  <div class="panel anim" data-type="panel" data-t="7.5" data-c="#5E9DF2" style="left:40px;top:92px;width:720px;height:236px">
+    <div class="inner" style="left:12px;top:12px;width:690px;height:206px">
+      <svg class="figure" width="150" height="212" style="left:12px;top:-12px;overflow:visible"><use href="#agentCheer" width="150" height="212"/></svg>
+      <div class="bub anim" data-type="pop" data-t="7.7" style="left:190px;top:30px;width:470px;transform-origin:0 70%">
+        <div class="bbox big"><span class="who" style="background:#5E9DF2">Agent</span>All done! Marking <span style="white-space:nowrap">TASK-1</span> DONE.</div>
+        <svg width="40" height="40" style="position:absolute;left:-31px;top:50px"><path d="M34 2 L2 24 L34 30" fill="#F5F4EE" stroke="#0B0C11" stroke-width="3" stroke-linejoin="round"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel anim" data-type="panel" data-t="7.6" data-c="#FF6A9F" style="left:788px;top:92px;width:452px;height:236px">
+    <div class="inner" style="left:12px;top:12px;width:422px;height:206px">
+      <div class="cap big anim" data-type="pop" data-t="9.9" style="left:18px;top:30px;width:384px">Workorder runs the test first.</div>
+    </div>
+  </div>
+
+  <div class="panel anim" data-type="panel" data-t="7.7" data-c="#FF6A9F" style="left:40px;top:350px;width:1200px;height:344px">
+    <div class="inner" style="left:12px;top:12px;width:1170px;height:314px">
+      <div class="term" style="left:24px;top:18px">
+        <div class="ln anim" data-type="show" data-t="8.0"><span style="color:#47C38A">$</span> workorder done --task TASK-1</div>
+        <div class="ln anim" data-type="show" data-t="8.0">  --note "add() works; next: subtraction"</div>
+        <div class="ln dim anim" data-type="show" data-t="8.6">⋯</div>
+        <div class="ln anim" data-type="show" data-t="8.8" style="color:#FF5C70;font-weight:700">TASK-1: DONE was not written; the status stays IN_PROGRESS</div>
+      </div>
+      <div class="stamp anim" data-type="stamp" data-t="9.2" style="left:560px;top:206px;font-size:48px;color:#FF5C70">NOT QUITE</div>
+      <div class="fx anim" data-type="fx" data-t="9.2" style="left:220px;top:214px;font-size:58px;width:260px;height:70px;transform-origin:50% 60%">
+        <b class="s">BZZT!</b><b style="color:#F0A43A">BZZT!</b></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SCENE 3: WORKORDER RECORDS THE EVIDENCE ================= -->
+<section class="scene" data-in="14.0" data-out="20.5">
+  <div class="title anim" data-type="pop" data-t="14.0" style="left:40px;top:24px;font-size:42px"><span class="n">3</span> WORKORDER RECORDS THE EVIDENCE</div>
+
+  <div class="panel anim" data-type="panel" data-t="14.0" data-c="#F2C94C" style="left:40px;top:92px;width:720px;height:236px">
+    <div class="inner" style="left:12px;top:12px;width:690px;height:206px">
+      <svg class="figure" width="160" height="202" style="left:8px;top:-10px;overflow:visible"><use href="#inspector" width="160" height="202"/></svg>
+      <div class="bub anim" data-type="pop" data-t="16.4" style="left:190px;top:30px;width:470px;transform-origin:0 70%">
+        <div class="bbox big"><span class="who" style="background:#FF6A9F">Workorder</span>Test passed. DONE, with the receipt.</div>
+        <svg width="40" height="40" style="position:absolute;left:-31px;top:50px"><path d="M34 2 L2 24 L34 30" fill="#F5F4EE" stroke="#0B0C11" stroke-width="3" stroke-linejoin="round"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel anim" data-type="panel" data-t="14.1" data-c="#5E9DF2" style="left:788px;top:92px;width:452px;height:236px">
+    <div class="inner" style="left:12px;top:12px;width:422px;height:206px">
+      <div class="cap big anim" data-type="pop" data-t="14.2" style="left:18px;top:30px;width:384px">Fixed. Test passed. Evidence recorded.</div>
+    </div>
+  </div>
+
+  <div class="panel anim" data-type="panel" data-t="14.2" data-c="#47C38A" style="left:40px;top:350px;width:1200px;height:344px">
+    <div class="inner" style="left:12px;top:12px;width:1170px;height:314px">
+      <div class="term" style="left:24px;top:16px">
+        <div class="ln anim" data-type="show" data-t="14.5"><span style="color:#47C38A">$</span> workorder done --task TASK-1</div>
+        <div class="ln anim" data-type="show" data-t="14.5">  --note "add() works; next: subtraction"</div>
+        <div class="ln dim anim" data-type="show" data-t="15.0">⋯</div>
+        <div class="ln anim" data-type="show" data-t="15.2" style="color:#47C38A;font-weight:700">TASK-1 DONE: its declared test passed on this code</div>
+        <div class="ln anim" data-type="show" data-t="15.5">commit tasks/ and .workorder/</div>
+      </div>
+      <div class="stamp anim" data-type="stamp" data-t="15.9" style="left:820px;top:22px;font-size:46px;color:#47C38A">DONE <svg width="44" height="38" viewBox="0 0 46 40" style="vertical-align:-3px"><path d="M4 21 L17 34 L42 5" fill="none" stroke="#47C38A" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="fx anim" data-type="fx" data-t="15.9" style="left:900px;top:206px;font-size:54px;width:220px;height:64px;transform-origin:50% 60%">
+        <b class="s">DING!</b><b style="color:#47C38A">DING!</b></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SCENE 4: THE NEXT SESSION PICKS UP ================= -->
+<section class="scene" data-in="20.5" data-out="27.5">
+  <div class="title anim" data-type="pop" data-t="20.5" style="left:40px;top:24px;font-size:42px"><span class="n">4</span> THE NEXT SESSION PICKS UP</div>
+
+  <div class="panel anim" data-type="panel" data-t="20.5" data-c="#5E9DF2" style="left:40px;top:92px;width:720px;height:236px">
+    <div class="inner" style="left:12px;top:12px;width:690px;height:206px">
+      <svg class="figure anim" data-type="show" data-t="20.5" data-off="24.2" width="150" height="212" style="left:12px;top:-12px;overflow:visible"><use href="#agent" width="150" height="212"/></svg>
+      <svg class="figure anim" data-type="show" data-t="24.2" width="150" height="212" style="left:12px;top:-12px;overflow:visible"><use href="#agentCheer" width="150" height="212"/></svg>
+      <div class="bub anim" data-type="pop" data-t="21.0" data-off="24.2" style="left:190px;top:40px;width:470px;transform-origin:0 70%">
+        <div class="bbox big"><span class="who" style="background:#5E9DF2">Agent</span>Where did we leave off?</div>
+        <svg width="40" height="40" style="position:absolute;left:-31px;top:30px"><path d="M34 2 L2 24 L34 30" fill="#F5F4EE" stroke="#0B0C11" stroke-width="3" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="bub anim" data-type="pop" data-t="24.2" style="left:190px;top:40px;width:470px;transform-origin:0 70%">
+        <div class="bbox big"><span class="who" style="background:#5E9DF2">Agent</span>Got it. Next: subtraction!</div>
+        <svg width="40" height="40" style="position:absolute;left:-31px;top:30px"><path d="M34 2 L2 24 L34 30" fill="#F5F4EE" stroke="#0B0C11" stroke-width="3" stroke-linejoin="round"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel anim" data-type="panel" data-t="20.6" data-c="#F2C94C" style="left:788px;top:92px;width:452px;height:236px">
+    <div class="inner" style="left:12px;top:12px;width:422px;height:206px">
+      <div class="cap big anim" data-type="pop" data-t="20.7" style="left:18px;top:30px;width:384px">New session. It reads the task record.</div>
+    </div>
+  </div>
+
+  <div class="panel anim" data-type="panel" data-t="20.7" data-c="#F2C94C" style="left:40px;top:350px;width:1200px;height:344px">
+    <div class="inner" style="left:12px;top:12px;width:1170px;height:314px">
+      <div class="term" style="left:24px;top:24px;width:1120px">
+        <div class="ln anim" data-type="show" data-t="21.9"><span style="color:#47C38A">$</span> workorder show --task TASK-1</div>
+        <div class="ln anim" data-type="show" data-t="22.4" style="font-weight:700">TASK-1</div>
+        <div class="ln anim" data-type="show" data-t="22.5"><span class="k">  Claimed:</span>  DONE</div>
+        <div class="ln dim anim" data-type="show" data-t="22.6">⋯</div>
+        <div class="blk anim" data-type="show" data-t="22.7"><div class="hlbg anim" data-type="hl" data-t="23.2" style="border-color:#F2C94C;background:rgba(242,201,76,.18)"></div>
+          <div class="ln"><span class="k">progress:</span></div>
+          <div class="ln">  - 2026-11-17: add() works; next: subtraction</div>
+          <div class="tagl anim" data-type="pop" data-t="23.4" style="background:#F2C94C;font-size:18px;top:6px">next step</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= END CARD ================= -->
+<section class="scene" data-in="27.5" data-out="99.0">
+  <div class="panel anim" data-type="panel" data-t="27.5" data-c="#F2C94C" style="left:40px;top:34px;width:1194px;height:648px">
+    <svg class="figure" width="170" height="240" style="left:36px;top:384px"><use href="#agent"/></svg>
+    <svg class="figure" width="190" height="240" style="left:966px;top:384px"><use href="#inspector"/></svg>
+    <div class="title anim" data-type="pop" data-t="27.6" style="left:0;width:1188px;text-align:center;top:76px;font-size:54px;transform-origin:center">Every task recorded.</div>
+    <div class="title anim" data-type="pop" data-t="27.8" style="left:0;width:1188px;text-align:center;top:160px;font-size:54px;transform-origin:center">A clear history.</div>
+    <div class="title anim" data-type="pop" data-t="28.0" style="left:0;width:1188px;text-align:center;top:244px;font-size:54px;transform-origin:center">Agents always <span style="color:#F2C94C">go back to it</span>.</div>
+    <div class="inner anim" data-type="pop" data-t="28.4" style="left:314px;top:374px;width:560px;height:82px;transform-origin:center">
+      <div class="code" style="left:0;width:554px;text-align:center;top:21px;font-size:32px;line-height:36px;font-weight:600"><span style="color:#47C38A">$</span> pipx install workorder</div>
+    </div>
+    <div class="code anim" data-type="pop" data-t="28.6" style="left:0;width:1188px;text-align:center;top:486px;font-size:30px;line-height:36px;font-weight:600;transform-origin:center">github.com/Argento17/workorder</div>
+    <div class="small anim" data-type="pop" data-t="28.8" style="left:0;width:1188px;text-align:center;top:546px;font-size:20px;text-transform:none">Workorder 0.17.0 · open source · MIT</div>
+  </div>
+</section>
+
+</div>
+<script>
+// cubic-bezier evaluator
+function bezier(x1,y1,x2,y2){
+  const cx=3*x1,bx=3*(x2-x1)-cx,ax=1-cx-bx, cy=3*y1,by=3*(y2-y1)-cy,ay=1-cy-by;
+  const X=t=>((ax*t+bx)*t+cx)*t, Y=t=>((ay*t+by)*t+cy)*t, dX=t=>(3*ax*t+2*bx)*t+cx;
+  return x=>{ if(x<=0)return 0; if(x>=1)return 1; let t=x;
+    for(let i=0;i<8;i++){const e=X(t)-x,d=dX(t); if(Math.abs(e)<1e-6)break; if(Math.abs(d)<1e-6)break; t-=e/d;}
+    let lo=0,hi=1; if(Math.abs(X(t)-x)>1e-4){t=x; for(let i=0;i<30;i++){ if(X(t)<x)lo=t; else hi=t; t=(lo+hi)/2;}}
+    return Y(t); };
+}
+const spring=bezier(.3,1.6,.5,1), easeOut=bezier(.2,.8,.3,1);
+const clamp=v=>Math.max(0,Math.min(1,v));
+const scenes=[...document.querySelectorAll('.scene')], anims=[...document.querySelectorAll('.anim')];
+function setTime(t){
+  for(const s of scenes){ s.style.visibility=(t>=+s.dataset.in && t<+s.dataset.out)?'visible':'hidden'; }
+  for(const el of anims){
+    const t0=+el.dataset.t, off=el.dataset.off!==undefined?+el.dataset.off:1e9, u=t-t0;
+    const on=u>=0 && t<off;
+    el.style.visibility=on?'inherit':'hidden';
+    if(!on) continue;
+    const type=el.dataset.type;
+    if(type==='panel'){                     // snap into register: shadow (14,-8) -> (6,6)
+      const e=easeOut(clamp(u/0.3)); const x=14+(6-14)*e, y=-8+(6+8)*e;
+      el.style.boxShadow=`${x.toFixed(2)}px ${y.toFixed(2)}px 0 0 ${el.dataset.c}`;
+    } else if(type==='pop'){                // scale .965 / -0.8deg -> 1 / 0, springy, 0.45s
+      const p=spring(clamp(u/0.45)); const s=.965+.035*p, r=-.8*(1-p);
+      el.style.transform=`scale(${s.toFixed(4)}) rotate(${r.toFixed(3)}deg)`; el.style.opacity=clamp(u/0.07+0.35);
+    } else if(type==='hl'){
+      const p=spring(clamp(u/0.45)); el.style.transform=`scaleX(${(.965+.035*p).toFixed(4)})`; el.style.opacity=clamp(u/0.07+0.35);
+    } else if(type==='stamp'){              // slam down, rotated -3deg
+      const e=easeOut(clamp(u/0.22)); const s=1+0.45*(1-e);
+      el.style.transform=`rotate(-3deg) scale(${s.toFixed(4)})`; el.style.opacity=clamp(u/0.05+0.4);
+    } else if(type==='fx'){
+      const p=spring(clamp(u/0.45)); const s=.7+.3*p, r=-6+3*p;
+      el.style.transform=`scale(${s.toFixed(4)}) rotate(${r.toFixed(3)}deg)`; el.style.opacity=clamp(u/0.05+0.4);
+    }
+  }
+}
+window.setTime=setTime; window.DURATION=33.8;
+const q=new URLSearchParams(location.search);
+if(q.has('play')){ const st=performance.now(); (function f(){ setTime(((performance.now()-st)/1000)%DURATION); requestAnimationFrame(f);})(); }
+else setTime(q.has("t")?+q.get("t"):7.5);
+</script>
+</body>
+</html>
