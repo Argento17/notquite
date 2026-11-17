@@ -2706,7 +2706,53 @@ def review_problem(root, base, text, path, staged=False, label_only=False):
 def comparison_message(line, revision, ref, label):
     text = re.sub(r'(since )?' + re.escape(revision),
                   lambda match: 'since ' + label if match[1] else ref, line)
+    if isinstance(line, AcceptedNote):
+        return AcceptedNote(text, line.labels)
     return type(line)(text, line.path, line.line, line.label_only) if isinstance(line, ReviewProblem) else text
+
+
+class AcceptedNote(str):
+    """An 'accepted: ' note that names the labels it rests on, so solo mode can name the owner's."""
+
+    def __new__(cls, text, labels):
+        note = super().__new__(cls, text)
+        note.labels = frozenset(labels)
+        return note
+
+
+OWNER_ACCEPTANCE = 'accepted by the owner (solo mode; no independent review)'
+ACCEPTED_SUFFIX = re.compile(r' \((?:allowed|definition allowed|allowed by workorder-allow:tests|accepted by review)\)$')
+OWNER_SUFFIX = ' (accepted by the owner in solo mode; no independent review)'
+
+
+def owner_notes(notes, owner):
+    """Solo mode: acceptance resting only on the owner's labels is named as owner acceptance, never review.
+
+    Returns the rewritten notes and the accepted items for the summary note. Acceptance that a
+    reviewer's label also supports stays as it was; with an approving review as well, an item a
+    label of the owner names is still listed as the owner's (the stricter reading).
+    """
+    def labels(note):
+        if note.startswith('accepted: '):
+            return getattr(note, 'labels', None) or {note.removeprefix('accepted: ').split(' (', 1)[0]}
+        suffix = ACCEPTED_SUFFIX.search(note)
+        if not suffix:
+            return set()
+        if suffix[0] in {' (allowed by workorder-allow:tests)', ' (accepted by review)'}:
+            return {'tests'}
+        cited = set(re.findall(r'workorder-allow:([^\s;,()]+)', note))
+        # Otherwise the finding's owner leads it: "TASK-3: ...", "TASK-3, TASK-4: ..." or "tests: ...".
+        head = re.match(r'((?:[A-Z][A-Z0-9]*-[1-9][0-9]*)(?:, [A-Z][A-Z0-9]*-[1-9][0-9]*)*|tests)(?:: | )', note)
+        return cited or (set(head[1].split(', ')) if head else set())
+
+    owned = [note for note in notes if labels(note) and labels(note) <= owner]
+    items = [note.removeprefix('accepted: ') for note in owned if note.startswith('accepted: ')]
+    listed = {label for note in owned if note.startswith('accepted: ') for label in labels(note)}
+    # Labels without an item of their own (the workflow, unowned tests) are listed by name.
+    items += sorted({label for note in owned for label in labels(note)} - listed)
+    rewritten = [note[:ACCEPTED_SUFFIX.search(note).start()] + OWNER_SUFFIX if note in owned else note
+                 for note in notes if not (note in owned and note.startswith('accepted: '))]
+    return rewritten, list(dict.fromkeys(items))
 
 
 # One rule: an approving review clears every finding except edits to existing
@@ -4267,7 +4313,7 @@ def has_work_receipt(root, base, changed, staged=False, allow=(), new_tasks=None
 
 
 def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all_tests=False,
-                  unchanged_base=False):
+                  unchanged_base=False, solo=False):
     claims = "not claimed finished" if single_unclaimed else f"{counts['claimed']} claimed DONE or CLOSED"
     if counts.get('retired'):
         claims += f", {counts['retired']} retired"
@@ -4293,6 +4339,8 @@ def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all
         rest = ("supported claim rests on its declared test only." if n == 1
                 else "supported claims rest on their declared tests only.")
         line = f"Acceptance lists are not checked; {n} {rest}\n" + line
+    if solo:
+        line += "; solo mode: the owner's labels count as acceptance, not independent review"
     return line
 
 
@@ -4466,7 +4514,8 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
                     reviewer_label(line, line_owners[0] if line_owners else 'tests', True), path, staged,
                     label_only=True))
             elif notes is not None:
-                notes.append(f'accepted: {path} (changed lines)')
+                notes.append(AcceptedNote(f'accepted: {path} (changed lines)',
+                                          ({'tests'} | set(line_owners)) & labels))
     return problems
 
 
@@ -4492,7 +4541,8 @@ def code_path_problems(root, base, changed, code, all_records, staged, allow, no
     problems = []
     for path in outside:
         if {'scope:' + tid for tid in scoped} & set(allow):
-            notes.append(f'accepted: {path} (outside code paths of {", ".join(scoped)})')
+            notes.append(AcceptedNote(f'accepted: {path} (outside code paths of {", ".join(scoped)})',
+                                      {'scope:' + tid for tid in scoped} & set(allow)))
         else:
             finding = AssertionProblem(f'{path} is outside the code paths of {", ".join(scoped)}', path)
             problems.append(AssertionProblem(reviewer_label(finding, 'scope:' + scoped[0]), path))
@@ -4503,7 +4553,10 @@ def code_path_problems(root, base, changed, code, all_records, staged, allow, no
 @s.test_output_session()
 def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, counts=None,
           strict_tests=False, all_tests=False, require_task=False, timeout=None, review="refuse",
-          approving_review=False, require_test_first=False, jobs=None, require_task_ignore=(), local_hook=False):
+          approving_review=False, require_test_first=False, jobs=None, require_task_ignore=(), local_hook=False,
+          owner_accepts=()):
+    """owner_accepts: labels in allow that only the repository owner added (solo mode); they clear
+    exactly what the same labels would and are reported as owner acceptance, never as review."""
     counts = {} if counts is None else counts
     notes = [] if notes is None else notes
     # Share validation across the gate's reads, rather than observing the whole
@@ -4551,10 +4604,15 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
     problems = [problem for problem in problems if problem not in warnings]
     refused = set(re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', '\n'.join(problems)))
     counts['tests_only'] = len(counts.pop('_supported', set()) - refused)
+    owned = []
+    if owner_accepts:
+        notes[start:], owned = owner_notes(notes[start:], set(owner_accepts))
     accepted = sorted({note.removeprefix('accepted: ') for note in notes if note.startswith('accepted: ')})
     notes[:] = [note for note in notes if not note.startswith('accepted: ')]
     if approving_review and accepted:
         notes.append('accepted by an approving review: ' + ', '.join(accepted))
+    if owned:
+        notes.append(f'{OWNER_ACCEPTANCE}: ' + ', '.join(sorted(owned)))
     return list(dict.fromkeys(problems))
 
 
