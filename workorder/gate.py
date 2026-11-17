@@ -1846,6 +1846,61 @@ def _removed_lines_after_import_additions(old, new):
                if tag in {'delete', 'replace'})
 
 
+def _test_function_dumps(source):
+    """Test functions and methods by qualified name: (source of their statements, their asserts)."""
+    import ast
+    tree = ast.parse(source)
+    found = {}
+
+    def visit(body, prefix):
+        for node in body:
+            if isinstance(node, ast.ClassDef):
+                visit(node.body, prefix + node.name + '.')
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                asserts = [ast.dump(item) for item in ast.walk(node) if isinstance(item, ast.Assert)
+                           or isinstance(item, ast.Call) and 'assert' in ast.dump(item.func).lower()]
+                found[prefix + node.name] = ast.dump(node), asserts
+    visit(tree.body, '')
+    return found
+
+
+def changed_test_functions(old, new):
+    """What changed in each existing test function of one Python file, as short phrases, or None."""
+    try:
+        before, after = _test_function_dumps(old), _test_function_dumps(new)
+    except (SyntaxError, ValueError, UnicodeError):
+        return None
+    changes = []
+    for name, (code, asserts) in before.items():
+        if name not in after:
+            changes.append(f'{name} removed')
+        elif after[name][0] != code:
+            kept = after[name][1]
+            if len(kept) < len(asserts):
+                changes.append(f'assertion removed in {name}')
+            elif any(item not in kept for item in asserts):
+                changes.append(f'assertion changed in {name}')
+            else:
+                changes.append(f'{name} changed')
+    return changes
+
+
+def _named_changes(root, base, paths, staged=False):
+    """Each path, followed by the test functions that changed in it and how, when Python can tell."""
+    shown = []
+    for path in paths:
+        functions = None
+        if path.endswith('.py'):
+            functions = changed_test_functions(_test_bytes(root, path, base) or b'',
+                                               _test_bytes(root, path, staged=staged) or b'')
+        shown.append(f"{path}: {', '.join(functions)}" if functions else path)
+    return ('; ' if any(': ' in item for item in shown) else ', ').join(shown)
+
+
+def _plural(count, word):
+    return f'{count} {word}' + ('' if count == 1 else 's')
+
+
 @s.cached_read
 def test_file_changes(root, base, record, staged=False, strict=False, protected=None, existing_only=False):
     if protected is None:
@@ -1859,7 +1914,8 @@ def test_file_changes(root, base, record, staged=False, strict=False, protected=
     if existing_only:
         python = [path for path in paths if path.endswith('.py') and posixpath.basename(path) != 'conftest.py']
         if python:
-            return f"{record['id']}: its test files lost or changed existing Python statements since {base} ({', '.join(python)})"
+            return (f"{record['id']}: its test files lost or changed existing Python statements since {base} ("
+                    + _named_changes(root, base, python, staged) + ")")
     # Disabling rename detection makes a rename remove the old file's lines, even when identical.
     args = ["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv"]
     if staged:
@@ -1883,8 +1939,13 @@ def test_file_changes(root, base, record, staged=False, strict=False, protected=
             binary |= removed == "-"
             affected.append(path)
     if affected:
-        change = "changed binary content" if binary else f"lost or changed {lost} lines"
-        return f"{record['id']}: its test files {change} since {base} ({', '.join(affected)})"
+        change = "changed binary content" if binary else f"lost or changed {_plural(lost, 'line')}"
+        # Name the test functions and what changed in them, not only the file.
+        existing = [path for path in affected if not binary and (
+            path in repository_files(root) if staged else s.local_path(root, path).is_file())]
+        named = _named_changes(root, base, existing, staged) if existing else ''
+        shown = named + ''.join(', ' + path for path in affected if path not in existing) if named else ', '.join(affected)
+        return f"{record['id']}: its test files {change} since {base} ({shown})"
     return None
 
 
@@ -2084,11 +2145,11 @@ def _run_test(root, command, timeout, counts, *, quiet=False, cache_root=None, l
     # test result did not run a command and must not evict fresh Git reads.
 
 
-def test_result(run, counts, *, quiet=False, failures_only=False):
+def test_result(run, counts, *, quiet=False, failures_only=False, label=None):
     if run.cached:
         s.print_once(f"(result reused from the run at {run.reused_at} UTC; nothing it covers changed since)")
     if not quiet and isinstance(run.returncode, int) and (not failures_only or run.returncode):
-        s.print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0)
+        s.print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0, label=label)
     if counts is not None:
         counts['tests'] = counts.get('tests', 0) + 1
         if run.cached:
@@ -2102,8 +2163,10 @@ def _test_key(record, timeout):
 
 
 def prefetch_tests(root, records, results, counts=None, timeout=None, staged=False, jobs=None, snapshot=False,
-                   protected=()):
-    """Run distinct commands concurrently, then print their output in task order."""
+                   protected=(), labels=None):
+    """Run distinct commands concurrently, then print their output in task order.
+
+    `labels` maps a task id to the line that names whose output follows."""
     pending = {}
     for record in sorted(records, key=lambda value: value['id']):
         key = _test_key(record, timeout)
@@ -2148,7 +2211,8 @@ def prefetch_tests(root, records, results, counts=None, timeout=None, staged=Fal
                 continue
             if not hasattr(run, 'cached'):
                 run.cached = False
-            results[key] = test_result(run, counts, failures_only=staged)
+            label = (labels or {}).get(pending[key]['id'])
+            results[key] = test_result(run, counts, failures_only=staged, label=label)
     s.invalidate_reads()
 
 
@@ -3359,12 +3423,16 @@ def acceptance_check(root, record, base=None, *, exempt=False, timeout=None):
     tid = record['id']
     items = s.acceptance_items(s.read_text(root, f'tasks/{tid}.md'))
     tied = [(text, node) for text, node in items if node is not None]
-    if not tied:
-        return [], None
-    problems, candidates = [], []
 
     def item(text):
         return s.ACCEPTANCE_TEST.sub('', re.sub(r'^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?', '', text)).strip()
+
+    # An item that mentions (test: without a tie the parser reads is refused, not silently unchecked.
+    untied = [f"{tid}: acceptance item '{item(text)}': {s.acceptance_tie_problem(text)}"
+              for text, node in items if node is None and s.acceptance_tie_problem(text)]
+    if untied or not tied:
+        return untied, None
+    problems, candidates = [], []
 
     def refuse(text, node, why):
         problems.append(f"{tid}: acceptance item '{item(text)}': its test {node} {why}")
@@ -3520,13 +3588,16 @@ def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None,
 
 
 def local_regression_problems(root, base, *, exclude=(), staged=False, timeout=None,
-                              notes=None, results=None, counts=None, pending_review=False, jobs=None):
-    """Run finished tasks whose recorded code or selected tests the change touches."""
+                              notes=None, results=None, counts=None, pending_review=False, jobs=None,
+                              labelled=False):
+    """Run finished tasks whose recorded code or selected tests the change touches.
+
+    `labelled` (done) names each such task above its test output, with why it ran."""
     with s.read_scope(root):
         revision, _ = comparison_base(root, base)
         changed = changed_paths(root, revision, staged)
         results = {} if results is None else results
-        problems, selected = [], []
+        problems, selected, labels = [], [], {}
         for tid, record in sorted(records(root, staged, errors={}).items()):
             if tid in exclude or record['status'] not in FINISHED:
                 continue
@@ -3535,12 +3606,15 @@ def local_regression_problems(root, base, *, exclude=(), staged=False, timeout=N
                 if advice and notes is not None and advice not in notes:
                     notes.append(advice)
                 protected = strict_test_files(root, record, revision, staged)
-                protected |= task_code_paths(root, record, revision, staged)
-                if protected & changed:
+                code = task_code_paths(root, record, revision, staged)
+                if (protected | code) & changed:
                     selected.append(record)
+                    labels[tid] = (f"{tid}'s test (its "
+                                   + ('code' if code & changed else 'test files')
+                                   + ' changed in this change):')
             except (s.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
                 problems.append(f'{tid}: could not select its current test: {error}')
-    prefetch_tests(root, selected, results, counts, timeout, staged, jobs)
+    prefetch_tests(root, selected, results, counts, timeout, staged, jobs, labels=labels if labelled else None)
     for record in selected:
         tid = record['id']
         try:
@@ -3845,6 +3919,21 @@ def prefetch_comparison(root, base, record, results, pool, *, timeout=None):
         if not dict.__contains__(results, key) and key not in results.pending:
             seed = parent.fork() if parent is not None else None
             results.pending[key] = pool.submit(copy_context().run, captured(function), seed)
+
+
+def current_code_run(root, base, record, results, *, timeout=None):
+    """done's one run of the task's test on the new code: in the copy the base-code and stubbed runs use.
+
+    The three runs then differ only in the code, so a failure on the base is the change's doing.
+    The comparison reads this result instead of running the test again. Returns (code, output).
+    """
+    key = _test_key(record, timeout)
+    if not dict.__contains__(results, key):
+        with s.temporary_checkout(prefix='workorder-tests-') as temporary:
+            results[key] = run_snapshot_test(root, Path(temporary) / 'current', declared_test(record),
+                                             s.test_timeout(record, timeout), None,
+                                             protected=repository_files(root, base))
+    return dict.__getitem__(results, key)
 
 
 def _test_change_problems(root, base, record, timeout=None, *, staged=False, strict=False, allow=False,
@@ -4417,6 +4506,9 @@ def acceptance_summary(tally):
     return ', '.join(f'{tally[key]} {words[key]}' for key in words if tally.get(key))
 
 
+NAMES_SHOWN = 5
+
+
 def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all_tests=False,
                   unchanged_base=False, solo=False):
     claims = "not claimed finished" if single_unclaimed else f"{counts['claimed']} claimed DONE or CLOSED"
@@ -4431,12 +4523,26 @@ def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all
         tasks = len(counts.get('tested_tasks', ()))
         if unchanged_all_tests:
             line = 'no task changed in this change'
-        line += f"; ran {tasks} " + ('finished ' if unchanged_all_tests else '')
-        line += "task's declared test" if tasks == 1 else "tasks' declared tests"
+        details = []
+        tested = sorted(counts.get('tested_tasks', ()))
+        if tested and not unchanged_base and not unchanged_all_tests and len(tested) > counts['tasks']:
+            # More tasks ran than were checked: name them, and why a finished one ran.
+            details.append(', '.join(tested[:NAMES_SHOWN]) + (f', ... (+{len(tested) - NAMES_SHOWN} more)'
+                                                              if len(tested) > NAMES_SHOWN else ''))
         if cached and cached == ran:
-            line += " (cached)"
-        elif cached:
-            line += " (some comparisons cached)"
+            # Nothing ran: every result was reused from an earlier run of the same code.
+            line += f"; reused {tasks} " + ('finished ' if unchanged_all_tests else '')
+            line += ("task's declared test result" if tasks == 1 else "tasks' declared test results")
+            details.append('cached, not run again')
+        else:
+            line += f"; ran {tasks} " + ('finished ' if unchanged_all_tests else '')
+            line += "task's declared test" if tasks == 1 else "tasks' declared tests"
+            if cached:
+                details.append('some comparisons cached')
+        if details and tested and len(tested) > counts['tasks'] and not unchanged_base and not unchanged_all_tests:
+            details.append("a finished task's test also runs when this change touches its code or tests")
+        if details:
+            line += ' (' + '; '.join(details) + ')'
         if counts.get('unowned_tests'):
             line += f"; compared {_count(counts['unowned_tests'], 'unowned test file')}"
     if counts.get('tests_only'):
@@ -5339,9 +5445,14 @@ def done_step(record):
     return prerequisite + f"run workorder done --task {record['id']}"
 
 
+DONE_RUN = 'a done run (it records the committed code and runs the test)'
+
+
 def next_step(item, record, code_changed=False, root=None, finish=False):
     tid = record["id"]
     command = record.get("test", "").strip() or "<your test command>"
+    if item == DONE_RUN:
+        return done_step(record)
     if '--no-code-change is for verification tasks' in item:
         return f'record the code change with workorder renew --task {tid}, without --no-code-change'
     if item.startswith('its test ran but no test passed'):
@@ -5553,6 +5664,56 @@ def timeline(root, record, history):
     return lines
 
 
+def _refusal_path(root, tid):
+    return root / s.git(root, 'rev-parse', '--git-path', f'workorder/done-refused/{tid}.json').stdout.strip()
+
+
+def remember_done_refusal(root, tid, reasons):
+    """Keep done's refusal reasons for this code in Git's private directory; a DONE clears them."""
+    try:
+        path = _refusal_path(root, tid)
+        if not reasons:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'code': s.code_digest(root, s.head(root)), 'reasons': reasons}),
+                        encoding='utf-8')
+    except (OSError, ValueError, s.Refused, subprocess.SubprocessError):
+        pass  # only show's advice depends on it
+
+
+def done_refusal_on_this_code(root, tid):
+    """done's refusal reasons when its last run refused this same code, else None."""
+    try:
+        path = _refusal_path(root, tid)
+        if not path.is_file():
+            return None
+        saved = json.loads(path.read_text(encoding='utf-8'))
+        if saved.get('code') != s.code_digest(root, s.head(root)) or s.dirty_paths(root):
+            return None
+        return [str(reason) for reason in saved.get('reasons') or []] or None
+    except (OSError, ValueError, s.Refused, subprocess.SubprocessError):
+        return None
+
+
+WEAK_TEST = ('does not show the change', 'does not exercise the change', 'asserts nothing that can fail',
+             'no test passed')
+
+
+def committed_unrecorded(root, record):
+    """Code for this unfinished task is committed, but done has not recorded it yet."""
+    try:
+        if any(needs_task_receipt(path) for path in s.dirty_paths(root)):
+            return False
+        revision, _ = implementation_base(root, record)
+        changed = changed_paths(root, revision)
+        if 'code_paths' in record:
+            return bool(declared_code_paths(record, {path for path in changed if needs_task_receipt(path)}))
+        return any(needs_task_receipt(path) for path in changed)
+    except (OSError, ValueError, s.Refused, subprocess.SubprocessError):
+        return False
+
+
 @s.read_session()
 def record_lines(root, tid):
     """The task as a record to come back to: what it is, where it stands, what happened, what is next."""
@@ -5577,9 +5738,16 @@ def record_lines(root, tid):
         if not debt:
             headline += '\n' + acceptance_line(acceptance_state(root, record), tid=tid)
     else:
+        if 'implementation' in done and committed_unrecorded(root, record):
+            # The code is committed; what is missing is done's run, which records it.
+            done = [DONE_RUN if item == 'implementation' else item for item in done]
         headline = unfinished_headline(record, done, delivery, open_waits)
     lines = [headline,
              "still owes: " + owes(record, stale_debt + done + open_waits, delivery)]
+    refusal = done_refusal_on_this_code(root, tid) if record['status'] not in FINISHED | ENDED else None
+    if refusal:
+        lines.append(f'done refused this code: {refusal[0]}'
+                     + (f' (+{len(refusal) - 1} more)' if len(refusal) > 1 else ''))
     pending = waiting_for_review(root, record)
     if pending:
         findings = pending_findings(root, record)
@@ -5623,7 +5791,12 @@ def record_lines(root, tid):
                 if heading == "Progress" for line in body if line.strip() and not line.strip().startswith("<!--")]
     lines += ["", "progress:"] + ([f"  {line}" for line in progress] or ["  (no notes yet)"])
     owed = stale_debt + done + delivery + open_waits
-    if stale:
+    if refusal and any(phrase in reason for reason in refusal for phrase in WEAK_TEST):
+        lines += ["", "next step: make the test show the change: it must fail on the code before the change"
+                  " (and, for Python, with the change stubbed out), then " + done_step(record)]
+    elif refusal:
+        lines += ["", "next step: address what done refused on this code, then " + done_step(record)]
+    elif stale:
         lines += ["", f"next step: workorder renew --task {tid} on the branch before pushing"]
     elif owed:
         lines += ["", f"next step: {next_step(owed[0], record, root=root, finish=True)}"]

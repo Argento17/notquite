@@ -8,6 +8,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
+from contextvars import ContextVar
 import re
 import subprocess
 import sys
@@ -97,7 +98,8 @@ def parser():
                      help="extended: planning fields and Context/Scope/Lanes/Acceptance/Progress sections;"
                           " simple: the seven required fields only, as in 0.1.0 (default: extended)")
     accept = commands.add_parser("accept", help="record that a person confirms a DONE task's Acceptance items"
-                                 " (refused for an agent: WORKORDER_AGENT is set)")
+                                 " (refused for an agent: WORKORDER_AGENT or a coding agent's session variable,"
+                                 " such as CLAUDECODE, is set)")
     accept.add_argument("--task", required=True)
     accept.add_argument("--note", help="what the person checked (kept in the acceptance receipt)")
     receipt = commands.add_parser("receipt", help="record evidence: implemented, test, merged, deployed, live")
@@ -271,6 +273,13 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
             steps = [f'  Next:     fix the test, or run workorder done --task {tid} --needs-review; '
                      f'the pull request needs workorder-allow:{tid} or an approving review']
     print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
+    refused = _REFUSED.get()
+    if refused is not None:
+        refused.extend(own)
+
+
+# done's refusal reasons for this run, kept so workorder show can name the next step on the same code.
+_REFUSED = ContextVar('workorder_done_refused', default=None)
 
 
 def base_code_findings(root, base, record, timeout, results):
@@ -361,11 +370,11 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         base = gate.local_test_base(root, record)
         if base:
             unchanged, origin = gate.test_origin(root, record, revision, base)
-            print(origin)
+            print(f'Note: {origin}')  # as check prints it
             if require_test_first and not unchanged:
                 raise s.Refused(gate.test_first_problem(tid, base))
         else:
-            print(f"{tid}'s test origin is unknown: no target is available locally")
+            print(f"Note: {tid}'s test origin is unknown: no target is available locally")
             if require_test_first:
                 raise s.Refused('test-first needs a locally available target')
         if refactor and not base:
@@ -395,8 +404,18 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         implemented = gate.newest_implementation(s.entries(root, tid))
         if implemented is None or implemented["code"] != s.code_digest(root, s.head(root)):
             item = s.receipt(root, tid, "implemented")
+        results = gate.ConcurrentResults()
+        run = None
+        if base:
+            # The task's test runs once on the new code, in the copy the base-code and stubbed runs
+            # use; its receipt records that run and the comparison reads it instead of rerunning.
+            run = gate.current_code_run(root, gate.comparison_base(root, base)[0], record, results,
+                                        timeout=timeout)
+            if not isinstance(run[0], int):
+                del results[gate._test_key(record, timeout)]
+                run = None  # the copy could not run it: the work tree run below decides
         item = s.receipt(root, tid, "test", command, timeout=timeout, no_code_change=no_code_change,
-                         refactor=refactor, pending_review=needs_review, completion=True)
+                         refactor=refactor, pending_review=needs_review, completion=True, run=run)
         if item['exit_code'] == 0 and not item['valid']:
             print('test does not count: ' + invalid_reason(root, item))
             if s.dirty_paths(root):
@@ -432,7 +451,6 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if tied:
             s.annotate_acceptance_tests(root, tid, [node for _, node in s.acceptance_items(
                 s.read_text(root, f"tasks/{tid}.md")) if node is not None])
-        results = gate.ConcurrentResults()
         notes = []
         proven = set()  # done's comparison showed the task's tests fail on the base code
         if base and (jobs or 3) > 1:
@@ -479,7 +497,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                                                     completed=True, pending_review=needs_review, results=results,
                                                     proven=proven)
             problems += gate.local_regression_problems(root, base, exclude={tid}, timeout=timeout,
-                                                       notes=notes, results=results, pending_review=needs_review, jobs=jobs)
+                                                       notes=notes, results=results, pending_review=needs_review,
+                                                       jobs=jobs, labelled=True)
             if not needs_review:
                 problems += [note for note in notes if gate._accepts_allow_label(note)]
             blocking = []
@@ -574,13 +593,35 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             pool.shutdown(wait=True, cancel_futures=True)
 
 
+# Variables coding agents set in the shells they run commands in. accept refuses while any is set;
+# an agent can unset them, so this stops an accidental acceptance, not a determined one.
+AGENT_SESSIONS = {
+    'CLAUDECODE': 'a Claude Code',
+    'CODEX_THREAD_ID': 'a Codex',
+    'CODEX_SANDBOX': 'a Codex',
+    'CODEX_SANDBOX_NETWORK_DISABLED': 'a Codex',
+    'CURSOR_AGENT': 'a Cursor agent',
+    'GEMINI_CLI': 'a Gemini CLI',
+    'AI_AGENT': 'a coding-agent',
+}
+
+
+def agent_session():
+    """The variable that marks this shell as an agent's: WORKORDER_AGENT, then known agent sessions."""
+    if 'WORKORDER_AGENT' in os.environ:
+        return 'WORKORDER_AGENT'
+    return next((name for name in AGENT_SESSIONS if os.environ.get(name, '').strip()), None)
+
+
 @s.read_session()
 def accept_task(root, tid, note=None):
     """A person confirms a DONE task's Acceptance items on the tested code; an agent cannot."""
-    if 'WORKORDER_AGENT' in os.environ:
-        raise s.Refused(f"{tid}: an agent cannot accept a task (WORKORDER_AGENT is set); acceptance is a person"
-                        f" confirming the Acceptance items: ask a person to run workorder accept --task {tid}"
-                        " or to approve the pull request")
+    variable = agent_session()
+    if variable:
+        raise s.Refused(f"{tid}: an agent cannot accept a task ({variable} is set"
+                        + ('' if variable == 'WORKORDER_AGENT' else f': {AGENT_SESSIONS[variable]} session')
+                        + "); acceptance is a person confirming the Acceptance items: ask a person to run"
+                        f" workorder accept --task {tid} in their own terminal or to approve the pull request")
     if note is not None and not note.strip():
         raise s.Refused('a note needs some text')
     record = s.record(root, tid)
@@ -628,7 +669,9 @@ def main(argv=None):
             timing.session() as clock:
         code = run_command(options, command, run)
         if timed and clock.opened:  # a refusal before any run has no time to show
-            # On stderr: a diagnostic about this run, not part of its findings.
+            # On stderr: a diagnostic about this run, not part of its findings; last, after every
+            # line of output (stdout is flushed first, so a pipe keeps that order).
+            sys.stdout.flush()
             print(timing.line(clock), file=sys.stderr)
         return code
 
@@ -673,9 +716,16 @@ def run_command(options, command, run):
             from .hooks import run
             return run(root, options.event)
         elif options.action == "done":
-            return finish_task(root, s.task_id(options.task), options.note, options.timeout,
-                               options.needs_review, options.no_code_change, options.refactor, options.require_test_first, options.jobs,
-                               take_over=options.take_over, project_test=options.project_test)
+            refused = []
+            token = _REFUSED.set(refused)
+            try:
+                code = finish_task(root, s.task_id(options.task), options.note, options.timeout,
+                                   options.needs_review, options.no_code_change, options.refactor, options.require_test_first, options.jobs,
+                                   take_over=options.take_over, project_test=options.project_test)
+            finally:
+                _REFUSED.reset(token)
+            gate.remember_done_refusal(root, s.task_id(options.task), refused if code else None)
+            return code
         elif options.action == "new":
             shared = s.has_origin(root) and not options.local
             if options.test_paths is None and gate.wrapper_paths({'test': options.test}) is not None:
@@ -872,8 +922,9 @@ def run_command(options, command, run):
             if (options.staged and not counts["tasks"] and not problems and not notes
                     and not counts.get("warnings") and not options.run_tests):
                 return 0
+            shown = 0
             if problems:
-                console.print_lines(problems)
+                shown = console.print_lines(problems)
                 if options.staged and not options.base and any(gate._accepts_allow_label(p) for p in problems):
                     print(gate.LOCAL_REVIEW_HINT)
             for warning in counts.get('warnings', []):
@@ -885,8 +936,6 @@ def run_command(options, command, run):
                     print(f'::warning file={escape(warning.path, True)},line={warning.line}::{escape(warning)}')
             if counts.get('warnings'):
                 print(f"Review: {len(counts['warnings'])} test changes need a reviewer's look")
-            if not problems:
-                print("check: OK")
             if notes:
                 console.print_lines(gate.summarize_notes(notes, options.verbose), prefix='Note: ')
             if options.run_tests and counts["tests"] == 0 and not (options.base and not counts['tasks']):
@@ -897,9 +946,13 @@ def run_command(options, command, run):
                                                              and not counts['tasks']
                                                              and counts.get('tested_tasks')),
                                     solo=solo))
+            # The verdict comes last, after the findings, notes and summary, in both outcomes.
             if problems:
                 count = len(problems)
-                print(f"check: NOT OK ({count} finding{'s' if count != 1 else ''})")
+                grouped = f', {shown} shown grouped' if shown and shown != count else ''
+                print(f"check: NOT OK ({count} finding{'s' if count != 1 else ''}{grouped})")
+            else:
+                print("check: OK")
             return int(bool(problems))
         return 0
     except (s.Refused, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:

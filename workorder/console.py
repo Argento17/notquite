@@ -18,6 +18,7 @@ BODY = 20          # lines of the first test failure
 FAILED_LINES = 5   # pytest short-summary lines
 OTHER_OUTPUT = 40  # lines of other long test output (its end is kept)
 SHORT = 30         # pytest output this short is printed whole the first time
+LINE = 300         # characters of one printed line of test output; the full line is saved
 LOG = 'workorder/last-output.txt'
 
 _RUN = ContextVar('workorder_output', default=None)
@@ -216,13 +217,14 @@ def group(messages):
 
 
 def print_lines(lines, *, prefix='', file=None):
-    """Print grouped messages, keeping every message in the full output."""
+    """Print grouped messages, keeping every message in the full output; return how many were shown."""
     lines = list(lines)
     shown = group(lines)
     if not shown:
-        return
+        return 0
     print('\n'.join(prefix + line for line in shown), file=file,
           full='\n'.join(prefix + line for line in lines) + '\n')
+    return len(shown)
 
 
 _HEADER = re.compile(r'=+ (?:FAILURES|ERRORS) =+')
@@ -299,6 +301,18 @@ def _short_output(output):
     return '\n'.join(out) + ('\n' if out else '') + short
 
 
+def capped(text):
+    """Test output with each line cut to LINE characters, unless --verbose prints it all."""
+    if verbose() or not text:
+        return text
+    lines = text.split('\n')
+    if all(len(line) <= LINE for line in lines):
+        return text
+    return '\n'.join(line if len(line) <= LINE else
+                     f'{line[:LINE]} [... {len(line) - LINE} more characters in the full output]'
+                     for line in lines)
+
+
 def test_output(output, errors=''):
     """A test command's output, shortened unless --verbose; the full text is kept."""
     run = _RUN.get()
@@ -306,9 +320,9 @@ def test_output(output, errors=''):
         print(output, end='', dedupe=False)
         print(errors, end='', file=sys.stderr, dedupe=False)
         return
-    print(_short_output(output) if output else '', end='', full=output, dedupe=False)
+    print(capped(_short_output(output)) if output else '', end='', full=output, dedupe=False)
     if errors:
         lines = errors.splitlines()
         short = errors if len(lines) <= BODY else (
             f'[{len(lines) - BODY} earlier lines in the full output]\n' + '\n'.join(lines[-BODY:]) + '\n')
-        print(short, end='', file=sys.stderr, full=errors, dedupe=False)
+        print(capped(short), end='', file=sys.stderr, full=errors, dedupe=False)

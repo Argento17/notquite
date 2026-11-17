@@ -197,7 +197,8 @@ def test_all_tests_summary_when_no_task_changed(local_repo, count):
     output = ok(root, 'check', '--base', 'origin/main', '--run-tests', '--all-tests')
     expected = ("no task changed in this change; ran 1 finished task's declared test" if count == 1
                 else "no task changed in this change; ran 2 finished tasks' declared tests")
-    assert output.splitlines()[-1].startswith(expected), output
+    assert output.splitlines()[-2].startswith(expected), output  # 1.0 lane P2: the verdict comes last
+    assert output.splitlines()[-1] == 'check: OK', output
     assert 'checked 0 tasks' not in output
 
 

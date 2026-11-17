@@ -284,7 +284,8 @@ def test_project_base_classifies_each_failure_separately(local_repo):
     problems = helper.run(root, base='origin/main', notes=notes)
     assert len(problems) == 1 and '::test_regression (passes on origin/main)' in problems[0]
     assert len(notes) == 2
-    assert notes[0].startswith('the project test on origin/main (1 failed, 1 passed in ')
+    assert notes[0].startswith('the rerun on origin/main of the 2 project tests that fail on this code '
+                               '(1 failed, 1 passed in ')
     assert '::test_project' in notes[1] and 'origin/main' in notes[1]
 
 
