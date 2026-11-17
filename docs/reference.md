@@ -1294,9 +1294,13 @@ A generated workflow installs project test dependencies from the first match, an
 1. A `test`, `tests` or `dev` group under `[dependency-groups]`:
    `python -m pip install --upgrade 'pip>=25.1' && python -m pip install --group GROUP .`.
 2. A `test` extra in pyproject.toml: `python -m pip install -e '.[test]'`.
-3. requirements-dev.txt, otherwise requirements.txt: `python -m pip install -r FILE`.
-4. A task command that uses pytest: `python -m pip install pytest`.
-5. Otherwise a warning step says `No project test dependencies detected` and installs nothing; add
+3. Poetry's `test`, `tests` and `dev` groups (`[tool.poetry.group.NAME.dependencies]` or the older
+   `[tool.poetry.dev-dependencies]`): `python -m pip install -e .` and their packages, written into
+   the workflow as pip requirements (`^7.0` becomes `>=7.0,<8`). Neither Poetry nor poetry.lock is
+   used; after changing the groups, run `init --update-workflow`.
+4. requirements-dev.txt, otherwise requirements.txt: `python -m pip install -r FILE`.
+5. A task command that uses pytest: `python -m pip install pytest`.
+6. Otherwise a warning step says `No project test dependencies detected` and installs nothing; add
    what your tests need. The check reports `pytest is not installed` when a command needs it.
 
 `--group` needs pip 25.1; the workflow upgrades pip and fails rather than skipping a group. Otherwise
