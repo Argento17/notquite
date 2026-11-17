@@ -62,6 +62,19 @@
 - `done` records `completion: true` in its test receipt. Pre-commit and Stop refuse a
   DONE/CLOSED claim new since the target on a task this change worked on without that
   record (a hand-set status); claims already on the target are not re-judged.
+- Shorter docs: the README (1,935 to under 1,100 words) now leads with the task
+  record, a quick start, the review rule with a one-screen table of findings and
+  what clears each, and what Workorder does not do; edge cases moved to the
+  reference. The reviewer guide starts with the same table. The reference has a
+  contents list and lost its repetition (17,207 to under 13,000 words), and its
+  review statements follow the one rule.
+- The agent block added to AGENTS.md and CLAUDE.md is down from 339 to under 170
+  words: start from `workorder show`, claim, work with a test that fails without
+  it, `done`, `note --next`, never hand-edit status or receipts, run the
+  pull-request check, and where the full output is saved. `init` appends the new
+  block to files that hold the old one; delete the old block by hand.
+- A project test that fails on the new code now needs `workorder-allow:tests`, as
+  the one review rule says; an approving review alone no longer clears it.
 
 ## 0.17.0 (17 Nov 2026)
 

@@ -215,7 +215,7 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
     """Run current code once, then only failed pytest nodes on the available base.
 
     Returned failures are ordinary strings: warning mode cannot turn an observed
-    current failure into a pass. A PR review or its explicit tests label can.
+    current failure into a pass. Only its explicit tests label can.
     """
     notes = [] if notes is None else notes
     try:
