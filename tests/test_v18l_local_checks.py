@@ -82,16 +82,31 @@ def fable(tmp_path):
     return root
 
 
+def test_staged_notes_unowned_test_changes_in_work_in_progress(tmp_path):
+    # An honest bug fix may change what an old test expects: work in progress commits with a
+    # note; done refuses it until a review is requested, and the pull request needs the label.
+    root = fable(tmp_path)
+    result = staged(root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ('Note: tests/test_style.py: its version from origin/main fails on this code (behaviour changed); '
+            'a reviewer accepts it with the label workorder-allow:tests') in result.stdout
+    assert 'done refuses this until you run workorder done --task ID --needs-review' in result.stdout
+
+
 def test_staged_refuses_new_skip_and_changed_old_test_no_task_owns(tmp_path):
     root = fable(tmp_path)
+    path = root / 'tasks/TASK-1.md'
+    path.write_text(path.read_text().replace('status: "IN_PROGRESS"', 'status: "DONE"'))
+    git(root, 'add', '-A')
     result = staged(root)
     assert result.returncode == 1, result.stdout + result.stderr
     assert ('tests/test_style.py: its version from origin/main fails on this code (behaviour changed); '
             'a reviewer accepts it with the label workorder-allow:tests') in result.stdout
     assert 'tests: new skip or xfail behavior since origin/main' in result.stdout
     warned = staged(root, warn())
-    assert warned.returncode == 0, warned.stdout + warned.stderr
+    # Warning mode turns the review findings into notes; the hand-set DONE still owes its evidence.
     assert 'Note: tests: new skip or xfail behavior' in warned.stdout
+    assert 'NOT DONE' not in warned.stdout.replace('NOT DONE  TASK-1 says DONE but owes', '')
 
 
 def test_done_refuses_new_skip_and_changed_old_test_no_task_owns(tmp_path):
@@ -275,3 +290,32 @@ def test_renew_after_done_on_the_same_branch_still_commits(tmp_path):
     assert 'without a workorder done completion record' not in result.stdout + result.stderr
     git(root, 'commit', '-qm', 'renew')
     assert stop(root).returncode == 0
+
+
+def test_an_honest_change_to_what_an_old_test_expects_needs_one_label(tmp_path):
+    """Work commits with a note, done refuses, done --needs-review records it, and the task's
+    own label then accepts the recorded change to the old test: one label, not two."""
+    root = repo(tmp_path, {'calc.py': 'def half(x):\n    return x / 2\n',
+                           'tests/test_half.py': 'from calc import half\n\n\ndef test_half():\n'
+                                                 '    assert half(5) == 2.5\n'})
+    new_task(root, 'tests/test_floor.py')
+    git(root, 'switch', '-qc', 'fix')
+    (root / 'calc.py').write_text('def half(x):\n    return x // 2\n')
+    (root / 'tests/test_floor.py').write_text('from calc import half\n\n\ndef test_floor():\n    assert half(5) == 2\n')
+    (root / 'tests/test_half.py').write_text('from calc import half\n\n\ndef test_half():\n    assert half(5) == 2\n')
+    git(root, 'add', '-A')
+    result = staged(root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'done refuses this until you run workorder done --task ID --needs-review' in result.stdout
+    commit(root, 'fix')
+    assert cli(root, 'done', '--task', 'TASK-1').returncode == 1
+    ok(root, 'done', '--task', 'TASK-1', '--needs-review')
+    git(root, 'add', '-A')
+    assert staged(root).returncode == 0
+    commit(root, 'done pending review')
+    flags = ('check', '--base', 'origin/main', '--run-tests', '--all-tests', '--require-task')
+    assert cli(root, *flags).returncode == 1
+    assert cli(root, *flags, '--approving-review').returncode == 1
+    result = cli(root, *flags, '--allow', 'TASK-1')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "(accepted with its task's pending review)" in result.stdout

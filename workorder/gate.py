@@ -3010,8 +3010,8 @@ def covered_pending_findings(root, record, base):
     return findings
 
 
-LOCAL_REVIEW_HINT = ('If intended: the pull request needs the label named above; commit with WORKORDER_REVIEW=warn '
-                     'and record the request with workorder done --task ID --needs-review')
+LOCAL_REVIEW_HINT = ('If intended: the pull request needs the label named above; commit the work without the DONE '
+                     'status, then record the request with workorder done --task ID --needs-review')
 
 
 def local_review_warn():
@@ -3061,11 +3061,31 @@ def local_unowned_problems(root, target, all_records, *, staged=False, timeout=N
                                        counts=counts, notes=None)
     lines = [comparison_message(line, revision, target, label) for line in lines
              if not re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', str(line).split(':', 1)[0])]
+    if lines and not unreviewed_new_claim(root, revision, all_records, staged, target):
+        # Work in progress may change what old tests expect (an honest bug fix); the commit
+        # goes through, done refuses until a review is requested, and the pull request needs the label.
+        if notes is not None:
+            notes.extend(f'{line}; done refuses this until you run workorder done --task ID --needs-review'
+                         for line in lines if line not in notes)
+        return []
     if local_review_warn():
         if notes is not None:
             notes.extend(line for line in lines if line not in notes)
         return []
     return lines
+
+
+def unreviewed_new_claim(root, revision, all_records, staged=False, target=None):
+    """A DONE/CLOSED claim new since REVISION with no review request: what the local hooks protect."""
+    for tid, record in all_records.items():
+        if record.get('status') not in FINISHED or committed_status(root, tid, revision) in FINISHED:
+            continue
+        try:
+            if not local_review_pending(root, record, staged, target):
+                return True
+        except s.Refused:
+            return True
+    return False
 
 
 def missing_completion_problem(root, revision, record, staged=False, target=None):
@@ -4312,6 +4332,11 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
                         for line in counts.pop('_pending_findings', ())} if base else set()
     problems = [problem for problem in problems
                 if not (isinstance(problem, ReviewProblem) and str(problem) in pending_messages)]
+    accepted_pending = {comparison_message(line, revision, base, label)
+                        for line in counts.pop('_accepted_pending', ())} if base else set()
+    notes += [advice_head(problem).rstrip() + ' (accepted with its task\'s pending review)'
+              for problem in problems if str(problem) in accepted_pending]
+    problems = [problem for problem in problems if str(problem) not in accepted_pending]
     if approving_review:
         notes += ['approval did not cover: ' + str(problem) for problem in problems
                   if getattr(problem, 'label_only', False)]
@@ -4611,6 +4636,9 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 line += ''.join('\n  Pending: ' + item['message'] for item in findings)
                 if tid in (explicit_allow if label_only else allow):
                     notes.append(f'accepted: {tid} (pending review)')
+                    # The task's label accepts what its done --needs-review recorded, so one
+                    # label clears an honest change to what an old test expects.
+                    counts.setdefault('_accepted_pending', []).extend(item['message'] for item in findings)
                 else:
                     counts.setdefault('_pending_findings', []).extend(item['message'] for item in findings)
                     if label_only or any(warn_exempt_finding(item['message']) for item in findings):

@@ -2,6 +2,11 @@
 
 ## 0.18.0 (unreleased)
 
+- An honest change to what an old test expects commits as work in progress with a note; `done` refuses it until
+  `done --needs-review` records it, and the task's own label `workorder-allow:ID` then accepts what that run
+  recorded, so one label clears the change. Local hooks refuse such findings only alongside a new DONE claim.
+- A `done` run anywhere in the change counts as the completion record, so `renew` after `done` still commits.
+- Project tests that newly fail need `workorder-allow:tests`; an approving review is not enough.
 - Add `workorder retire ID --reason TEXT`: a DONE or CLOSED task becomes RETIRED,
   keeping its record, notes and receipts. It no longer owns its test files and its
   test no longer reruns in later checks. The pull-request check reports the
