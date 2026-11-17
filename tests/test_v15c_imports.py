@@ -46,12 +46,12 @@ def editable(root, tmp_path):
     return str(python)
 
 
-def setup_task(root, python, test_text):
+def setup_task(root, python, test_text, kind=None):
     (root / 'tests').mkdir(exist_ok=True)
     if test_text:
         (root / 'tests/test_value.py').write_text(test_text)
     command = [python, '-m', 'pytest', '-q', 'tests/test_value.py']
-    fill_sections(task(root, ships='none', test=store.join_command(command)))
+    fill_sections(task(root, ships='none', test=store.join_command(command), kind=kind))
     base = commit_all(root)
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
     git(root, 'checkout', '-qb', 'feature')

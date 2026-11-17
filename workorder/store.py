@@ -377,7 +377,7 @@ CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract"
 # Optional fields. Dependencies and the test add requirements; merge_ref selects delivery's target,
 # and test_paths selects files guarded by a base check. Planning fields never stand in for evidence.
 EXTENDED_FIELDS = ("business_owner", "priority", "created_at", "mission", "depends_on", "blocks",
-                   "next", "summary", "test", "test_paths", "code_paths", "test_timeout", "merge_ref")
+                   "next", "summary", "test", "test_paths", "code_paths", "test_timeout", "merge_ref", "kind")
 EXTENDED_ORDER = ("id", "title", "owner", "business_owner", "priority", "created_at", "mission",
                   "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "test",
                   "contract")
@@ -545,6 +545,8 @@ def record(root, tid, staged=False):
         raise Refused(f"{tid}: unknown status {fields['status']!r}; use {', '.join(STATUSES)}")
     if fields["ships"] not in {"none", "repo", "live"}:
         raise Refused(f"{tid}: ships must be none, repo or live")
+    if "kind" in fields and fields["kind"] not in ("refactor", "verification"):
+        raise Refused(f"{tid}: kind must be refactor or verification")
     if "merge_ref" in fields:
         ref = fields["merge_ref"]
         if (not isinstance(ref, str) or not ref.startswith(("refs/heads/", "refs/remotes/"))

@@ -14,11 +14,11 @@ EDITED = TEST + '    assert add(-1, 1) == 0\n'
 REFACTOR = 'def add(a, b):\n    result = a + b\n    return result\n'
 
 
-def prepare(root, test_text=TEST, code=CODE):
+def prepare(root, test_text=TEST, code=CODE, kind=None):
     ok(root, 'init')
     (root / '.gitignore').write_text('__pycache__/\n.pytest_cache/\n')
     (root / 'tests').mkdir()
-    path = task(root, ships='none', test='python -m pytest -q tests/test_add.py')
+    path = task(root, ships='none', test='python -m pytest -q tests/test_add.py', kind=kind)
     fill_sections(path)
     path.write_text(path.read_text().replace('contract: "none"', 'contract: "none"\ncode_paths: ["calc.py"]'))
     commit_with_hook(root)
@@ -125,7 +125,7 @@ def test_label_only_findings_have_done_route(local_repo, test_text, finding):
 
 def test_shared_file_stub_finding_reaches_pending_review(local_repo):
     root = local_repo
-    prepare(root, code=CODE + '\ndef mul(a, b):\n    return a * b\n')
+    prepare(root, code=CODE + '\ndef mul(a, b):\n    return a * b\n', kind='refactor')
     path = task(root, 'TASK-2', ships='none', test='python -m pytest -q tests/test_mul.py')
     fill_sections(path)
     path.write_text(path.read_text().replace('contract: "none"', 'contract: "none"\ncode_paths: ["calc.py"]'))
@@ -150,7 +150,8 @@ def test_shared_file_stub_finding_reaches_pending_review(local_repo):
 @pytest.mark.parametrize('action', ['hook', 'done', 'check', 'refactor'])
 def test_comment_only_finished_test_is_unchanged(local_repo, action):
     root = local_repo
-    prepare(root)
+    # Predeclare the exemption so only a changed test could need review here.
+    prepare(root, kind='refactor' if action == 'refactor' else None)
     land(root)
     if action == 'refactor':
         (root / 'calc.py').write_text(REFACTOR)

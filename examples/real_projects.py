@@ -75,10 +75,12 @@ def click_shared_case(repo, log, env, python, case, commit_id):
     if case == 'shared-folder-second-task':
         # The finished task owns the folder, including the shared file that
         # TASK-2 will extend. Its existing tests and definition stay intact.
-        define_task('TASK-1', [python, '-m', 'pytest', '-q', 'tests', '-k', 'boolean'],
-                    'click: simplify boolean normalization',
-                    'Name the normalized boolean input before looking up its value.',
-                    'Existing boolean options keep their behavior.')
+        first = define_task('TASK-1', [python, '-m', 'pytest', '-q', 'tests', '-k', 'boolean'],
+                            'click: simplify boolean normalization',
+                            'Name the normalized boolean input before looking up its value.',
+                            'Existing boolean options keep their behavior.')
+        # A refactor is planned as one: its kind lands with the definition.
+        replace(first, '\ncontract:', '\nkind: refactor\ncontract:')
         commit(repo, log, env, 'Define the first task before its implementation')
         start_branch('first-task')
         replace(source, '        return BoolParamType.bool_states.get(value.strip().lower())',
@@ -214,6 +216,9 @@ def cases(seed, commit_id, project, package_path, output, env, prepared_python=N
         definition = repo / 'tasks/TASK-1.md'
         replace(definition, '## Scope\n', '\n## Scope\n\nProvide clean_label using the project API.\n')
         replace(definition, '## Acceptance\n', '\n## Acceptance\n\n- clean_label removes surrounding whitespace and preserves plain labels.\n')
+        if case == 'refactor':
+            # A refactor is planned as one: its kind lands with the definition.
+            replace(definition, '\ncontract:', '\nkind: refactor\ncontract:')
         commit(repo, log, env, 'Define the task before its implementation')
         base = git(repo, log, env, 'rev-parse', 'HEAD').strip()
         git(repo, log, env, 'update-ref', 'refs/remotes/origin/main', base)

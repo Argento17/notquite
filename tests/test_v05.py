@@ -160,7 +160,7 @@ def test_check_reports_actual_tests_run(local_repo, kind, expected):
         command = 'any'
     else:
         command = f'{PYTHON} -c pass'
-    task(root, ships='none', test=command)
+    task(root, ships='none', test=command, kind='verification')
     base = commit_all(root)
     if kind != 'empty':
         task(root, ships='none', status='DONE', test=command)

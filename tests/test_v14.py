@@ -16,7 +16,7 @@ CODE = 'def div(a, b):\n    return a / b\n'
 TEST = 'from calc import div\n\ndef test_div():\n    assert div(6, 3) == 2\n'
 
 
-def branch(root, tid='TASK-2', test_text=None, code=CODE, new=False):
+def branch(root, tid='TASK-2', test_text=None, code=CODE, new=False, kind=None):
     (root / '.gitignore').write_text('__pycache__/\n.pytest_cache/\n')
     (root / 'tests').mkdir(exist_ok=True)
     if code is not None:
@@ -24,13 +24,13 @@ def branch(root, tid='TASK-2', test_text=None, code=CODE, new=False):
     if test_text is not None:
         (root / 'tests/test_div.py').write_text(test_text)
     if not new:
-        fill_sections(task(root, tid, ships='none', test=store.join_command(
+        fill_sections(task(root, tid, ships='none', kind=kind, test=store.join_command(
             [PYTHON, '-m', 'pytest', '-q', 'tests/test_div.py'])))
     base = commit_all(root)
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
     git(root, 'checkout', '-qb', 'feature')
     if new:
-        fill_sections(task(root, tid, ships='none', test=store.join_command(
+        fill_sections(task(root, tid, ships='none', kind=kind, test=store.join_command(
             [PYTHON, '-m', 'pytest', '-q', 'tests/test_div.py'])))
     return base
 
@@ -56,6 +56,8 @@ def test_declared_refactor_completes_and_is_visible_to_reviewer(local_repo):
     assert store.record(root, 'TASK-3')['status'] == 'DONE'
     assert store.entries(root, 'TASK-3')[-1].get('refactor') is True
     result = check(root)
+    assert result.returncode == 1 and 'refactor completion needs review' in result.stdout
+    result = check(root, '--allow', 'TASK-3')
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.count('TASK-3 is a declared refactor: tests unchanged, passing before and after') == 1
     # A later ordinary run must not inherit the declaration.

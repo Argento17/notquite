@@ -114,7 +114,7 @@ def test_changed_finished_test_uses_staged_code_and_refuses_failure(local_repo, 
 @pytest.mark.parametrize('mode', ['plain', 'explicit', 'drop'])
 def test_renew_refactor_after_later_commit(local_repo, mode):
     root = local_repo
-    branch(root, test_text=TEST)
+    branch(root, test_text=TEST, kind='refactor')
     (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-2', '--refactor')

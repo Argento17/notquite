@@ -69,7 +69,7 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
     pin = shlex.quote(bootstrap.workorder_install())
     generated = snapshot[3].decode()
     assert pin in generated
-    assert generated.strip().replace(pin, 'workorder==0.16.0') in reference.replace(
+    assert generated.strip().replace(pin, 'workorder==0.17.0') in reference.replace(
         example_dependencies, placeholder)
 
 
@@ -251,7 +251,7 @@ def test_require_task_records_code_changes(local_repo):
 @pytest.mark.parametrize('mode', ['plain', 'single', 'named', 'staged', 'base'])
 def test_check_explains_supported_claims_without_contract(local_repo, mode):
     root = local_repo
-    task(root, ships='none', test=PASS)
+    task(root, ships='none', test=PASS, kind='verification')
     base = commit_all(root)
     supported(root)
     git(root, 'add', '-A')
@@ -515,7 +515,7 @@ def test_acceptance_summary_counts_only_supported_contractless_claims(local_repo
 def test_docs_state_review_rights_and_opt_in_policies():
     text = (PACKAGE / 'docs/reference.md').read_text()
     for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
-                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.16.0'):
+                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.17.0'):
         assert phrase in text
     readme = (PACKAGE / 'README.md').read_text()
     for target in ('docs/reference.md', 'docs/guarantees.md', 'docs/shortcuts.md'):
@@ -533,7 +533,7 @@ def test_strict_pytest_counts_quiet_and_expected_failure_outcomes(local_repo, qu
     probe.write_text(f'import pytest\n@pytest.mark.{mark}(reason="later")\ndef test_later(): assert False\n'
                      + ('def test_ok(): assert True\n' if outcome == 'mixed' else ''))
     test = f'{PYTHON} -m pytest {quiet} test_outcomes.py'
-    task(root, ships='none', test=test)
+    task(root, ships='none', test=test, kind='verification')
     base = commit_all(root)
     supported(root, test=test)
     result = cli(root, 'check', '--base', base, '--run-tests', '--strict-tests')

@@ -102,7 +102,7 @@ test_code = ("import pytest\nfrom calc import mul\n\n\ndef test_mul():\n"
              "    assert mul(3, 4) == 12\n" + negative_test)
 
 
-def base(number, honest=False, split_tests=False, complete=True, code=None):
+def base(number, honest=False, split_tests=False, complete=True, code=None, kind=None):
     folder = output / f"{number:02d}"
     folder.mkdir()
     repo = folder / "repo"
@@ -124,6 +124,8 @@ def base(number, honest=False, split_tests=False, complete=True, code=None):
     commit(repo, log, "Working multiplication and two tests")
     task(repo, log, "Multiply", "mul in calc.py.",
          "mul(a, b) returns a * b, also for negative numbers.", "TASK-1", command=command)
+    if kind:
+        replace(repo, "tasks/TASK-1.md", "\ncontract:", f"\nkind: {kind}\ncontract:")
     commit(repo, log, "Define multiplication task")
     if complete:
         # This setup verifies multiplication already present before the task.
@@ -304,7 +306,7 @@ try:
            command=["python", "-m", "pytest", "-q", "tests"],
            reasons=("TASK-1: its test files lost or changed", "TASK-1: its tests from main fail"))
 
-    repo, log = base(12, complete=False)
+    repo, log = base(12, complete=False, kind="refactor")
     git(repo, log, "checkout", "-q", "main")
     write(repo, "test_probe.py", "def test_probe():\n    assert True\n")
     (repo / "src").mkdir()
@@ -322,7 +324,7 @@ try:
     report(repo, "Refactor production code; tests and the root probe stay unchanged",
            command=["python", "-m", "pytest", "-q", "tests"], check_exit=0)
 
-    repo, log = base(13, complete=False, code=broken_code)
+    repo, log = base(13, complete=False, code=broken_code, kind="verification")
     replace(repo, "tests/test_calc.py", "def test_mul_negative():\n",
             "def test_mul_negative():\n    return\n")
     commit(repo, log, "Return before the failing assertion")

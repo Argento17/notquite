@@ -164,6 +164,7 @@ def test_timeout_option_overrides_task_field(local_repo, action):
     path = filled_task(root)
     path.write_text(path.read_text().replace(json.dumps(PASS), json.dumps(f'{PYTHON} -c "import time; time.sleep(0.06)"')))
     field(path, 'test_timeout', '0.001')
+    field(path, 'kind', 'verification')
     base = commit_all(root)
     if action == 'check':
         store.receipt(root, 'TASK-1', 'implemented')

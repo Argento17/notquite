@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.17.0 (17 Nov 2026)
+
+- Let pending-review "could not compare" claims commit with a Note while the
+  pull request still requires the task label. Print a label-requirement Note in
+  `done` and pre-commit for refactor/verification completions not predeclared on the base.
+- Treat declared code paths and package source as code even when named like tests;
+  explicit test paths take precedence. Configure test filename and folder globs
+  in `.workorder/config.json`. Comparison failures carry reviewer labels and
+  pytest exits include their plain meaning.
+- Require a task label for refactor or verification completions unless the base
+  task already declares `kind: refactor` or `kind: verification`. This also covers
+  hand-written completion claims with receipts but no implementation change.
+- Enforce declared code scopes in pull-request checks, including light mode;
+  unrelated receipts and approving reviews cannot bypass the required scope label.
+
 ## 0.16.0 (16 Nov 2026)
 
 - Keep the read cache active with Git for Windows' default diff drivers. Raw

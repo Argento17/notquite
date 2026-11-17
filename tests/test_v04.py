@@ -43,7 +43,7 @@ def legacy_file(root, items, folder=".workorder"):
 
 def test_two_clones_merge_receipts_and_join_both_heads(clones):
     one, two = clones
-    task(one, ships="none")
+    task(one, ships="none", kind='verification')
     implement(one)
     base = commit_receipts(one)
     git(two, "fetch", "-q", str(one), "main")

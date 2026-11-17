@@ -36,7 +36,7 @@ def test_app_with_editable_dependency_reaches_done(local_repo, tmp_path, mode):
     source = root / 'src/wo_sample/__init__.py'
     source.write_text('import helperlib\ndef value():\n    return helperlib.value()\n')
     test = 'from wo_sample import value\ndef test_value():\n    assert value() == 1\n'
-    setup_task(root, python, test if mode == 'refactor' else '')
+    setup_task(root, python, test if mode == 'refactor' else '', kind='refactor' if mode == 'refactor' else None)
     source.write_text('import helperlib\ndef value():\n    return helperlib.value() + '
                       + ('0' if mode == 'refactor' else '1') + '\n')
     if mode == 'feature':

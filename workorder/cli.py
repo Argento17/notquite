@@ -406,6 +406,10 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             return 1
         if note is not None:
             print(f"{tid}: {s.add_note(root, tid, note)}")
+        if base and (refactor or no_code_change):
+            exemption = gate.completion_kind_note(root, revision, s.record(root, tid))
+            if exemption:
+                print(f'Note: {exemption}')
         if base and gate.fields_at(root, tid, revision) is None:
             lines.append(f'  Next:     the pull request needs an approving review or workorder-allow:{tid}; '
                          'a reviewer reads and accepts the task definition')
@@ -518,7 +522,7 @@ def main(argv=None):
                 command = gate.declared_test(s.record(root, options.task)) or []  # the task's own test
             item = s.receipt(root, options.task, options.kind, command, options.target, options.ref,
                              timeout=options.timeout)
-            detail = f" exit {item['exit_code']}" if "exit_code" in item else ""
+            detail = f" exit {gate.test_exit_meaning(item['exit_code'], command)}" if "exit_code" in item else ""
             print(f"{options.task} {options.kind} {item['commit'][:7]}{detail} - recorded")
             if command:
                 print("command: " + s.join_command(command))
@@ -577,7 +581,7 @@ def main(argv=None):
             for kind in ("implemented", "test"):
                 item = s.receipt(root, options.task, kind, command if kind == "test" else (),
                                  timeout=options.timeout, refactor=refactor if kind == "test" else False)
-                detail = f" exit {item['exit_code']}" if "exit_code" in item else ""
+                detail = f" exit {gate.test_exit_meaning(item['exit_code'], command)}" if "exit_code" in item else ""
                 print(f"{options.task} {kind} {item['commit'][:7]}{detail} - recorded")
                 reason = gate.uncounted(root, s.record(root, options.task), s.entries(root, options.task))
                 if item.get("exit_code", 0) != 0 or not item.get("valid", True) or reason:
