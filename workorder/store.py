@@ -1759,11 +1759,14 @@ def run_test(command, root, timeout=None, capture_output=True, *, isolated=False
 
 def _run_test_process(command, root, timeout=None, capture_output=True, *, isolated=False, cache_root=None,
                       verify_imports=None):
-    from .python_imports import ImportFailure, bytecode_cache, environment, pytest_guard
+    from .python_imports import ImportFailure, bytecode_cache, copy_imports, environment, pytest_guard
     # pytest parses this environment option with shlex even on Windows. Each
     # subprocess owns its pytest cache; neither cache affects our result key.
     env = environment(root, copy_environment() if isolated else os.environ.copy())
     with tempfile.TemporaryDirectory(prefix="workorder-pytest-", ignore_cleanup_errors=True) as cache:
+        if isolated and cache_root is not None:
+            # A comparison copy: the project's editable install must serve the copy.
+            env = copy_imports(root, cache_root, env, Path(cache) / "workorder-site")
         env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "")
                                  + " -o cache_dir=" + shlex.quote(cache))
         with pytest_guard(command, root, verify_imports, env) as guard, \

@@ -26,6 +26,115 @@ def environment(root, env):
     return dict(env, PYTHONPATH=os.pathsep.join(roots))
 
 
+# Loaded as sitecustomize in a comparison copy's test interpreter (and the
+# import probe) through PYTHONPATH, after site has processed .pth files and
+# before any other sitecustomize. Standard editable installs of a flat or src
+# layout put the work tree's root or src/ on sys.path (.pth path lines:
+# hatchling, flit_core, poetry-core, pdm-backend, setuptools' src layout and
+# compat mode) or map each top-level name to its standard place there
+# (setuptools' __editable___*_finder MAPPING/NAMESPACES, the editables
+# redirector of hatchling dev-mode-exact and pdm-backend). Exactly those
+# locations move to the same place in the copy, and only where the copy holds
+# that place itself. Anything else stays and the import check still refuses
+# it: other folders (a package-dir remap), ignored or linked folders (a build
+# tree, a virtualenv), another checkout's install, and PYTHONPATH entries, the
+# caller's own choice. Any sitecustomize that follows runs after this, unchanged.
+_COPY_SITE = r'''
+def _workorder_copy_imports():
+    import json, os, sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        data = json.loads(os.environ['WORKORDER_COPY_IMPORTS'])
+        sources = [os.path.normcase(os.path.abspath(path)) for path in data['sources']]
+        copy = os.path.abspath(data['copy'])
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return here
+    real_copy = os.path.normcase(os.path.realpath(copy))
+    chosen = {os.path.normcase(os.path.abspath(path))
+              for path in os.environ.get('PYTHONPATH', '').split(os.pathsep) if path}
+
+    def inside(path, folder):
+        try:
+            relative = os.path.relpath(path, folder)
+        except ValueError:
+            return None
+        if relative == os.pardir or relative.startswith(os.pardir + os.sep) or os.path.isabs(relative):
+            return None
+        return relative
+
+    def moved(path, places):
+        if not isinstance(path, str) or not path:
+            return path
+        full = os.path.normcase(os.path.abspath(path))
+        places = {os.path.normcase(os.path.normpath(place)) for place in places}
+        for source in sources:
+            relative = inside(full, source)
+            if relative is None or relative not in places:
+                continue
+            target = os.path.normpath(os.path.join(copy, relative))
+            if os.path.exists(target) and inside(os.path.normcase(os.path.realpath(target)), real_copy) is not None:
+                return target
+        return path
+
+    def standard(name, *suffixes):
+        folder = name.replace('.', '/')
+        return {prefix + folder + suffix for prefix in ('', 'src/') for suffix in suffixes}
+
+    sys.path[:] = [entry if os.path.normcase(os.path.abspath(entry or '.')) in chosen
+                   else moved(entry, {'.', 'src'}) for entry in sys.path]
+    for name, module in list(sys.modules.items()):
+        if name.startswith('__editable__') and name.endswith('_finder'):
+            mapping = getattr(module, 'MAPPING', None)
+            if isinstance(mapping, dict):
+                for key, value in list(mapping.items()):
+                    if isinstance(key, str):
+                        mapping[key] = moved(value, standard(key, '', '.py'))
+            namespaces = getattr(module, 'NAMESPACES', None)
+            if isinstance(namespaces, dict):
+                for key, value in list(namespaces.items()):
+                    if isinstance(key, str) and isinstance(value, list):
+                        value[:] = [moved(path, standard(key, '')) for path in value]
+    redirector = sys.modules.get('editables.redirector')
+    redirections = getattr(getattr(redirector, 'RedirectingFinder', None), '_redirections', None)
+    if isinstance(redirections, dict):
+        for key, value in list(redirections.items()):
+            if isinstance(key, str):
+                redirections[key] = moved(value, standard(key, '/__init__.py', '.py'))
+    sys.path_importer_cache.clear()
+    return here
+
+
+def _workorder_next_sitecustomize(here):
+    import importlib, os, sys
+    this = sys.modules.get(__name__)
+    sys.path[:] = [entry for entry in sys.path
+                   if os.path.normcase(os.path.abspath(entry or '.')) != os.path.normcase(here)]
+    sys.modules.pop(__name__, None)
+    try:
+        importlib.import_module(__name__)
+    except ImportError as error:
+        if sys.modules.get(__name__) is None:
+            sys.modules[__name__] = this
+        if error.name != __name__:
+            raise
+
+
+_workorder_next_sitecustomize(_workorder_copy_imports())
+'''
+
+
+def copy_imports(root, source, env, directory):
+    """Point the project's editable install at a comparison copy (see _COPY_SITE)."""
+    if source is None or Path(source).resolve() == Path(root).resolve():
+        return env
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / 'sitecustomize.py').write_text(_COPY_SITE, encoding='utf-8')
+    sources = list(dict.fromkeys([str(Path(source).absolute()), str(Path(source).resolve())]))
+    return dict(env, WORKORDER_COPY_IMPORTS=json.dumps({'sources': sources, 'copy': str(root)}),
+                PYTHONPATH=os.pathsep.join(filter(None, (str(directory), env.get('PYTHONPATH')))))
+
+
 def packages(root, *, modules=False):
     """Find package roots in repository source, including flat namespaces.
 
@@ -339,8 +448,19 @@ def import_locations(names, projects):
             if path.suffix not in ('.py', '.so', '.pyd') or not path.parts:
                 continue
             name = path.parts[0].split('.')[0]
-            if name.isidentifier() and not name.startswith('__editable__'):
+            # Generated loaders of an editable install live in site-packages:
+            # setuptools' __editable__ finders, editables' _editable_impl_ modules.
+            if name.isidentifier() and not name.startswith(('__editable__', '_editable_impl_')):
                 names.add(name)
+            if path.name.startswith('_editable_impl_') and path.suffix == '.py':
+                # The editables redirector (hatchling dev-mode-exact, pdm-backend)
+                # maps each top-level name with a literal map_module call.
+                tree = ast.parse(pathlib.Path(distribution.locate_file(entry)).read_text(encoding='utf-8'))
+                for node in ast.walk(tree):
+                    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                            and node.func.attr == 'map_module' and node.args
+                            and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+                        names.add(node.args[0].value.split('.')[0])
             if path.name.startswith('__editable__') and path.suffix == '.py':
                 # Read the installed finder without importing additional modules or
                 # evaluating its mapping expressions. Setuptools emits literal maps.
@@ -414,7 +534,38 @@ print('WORKORDER_IMPORTS=' + json.dumps(import_locations(names, projects)))
 '''
 
 
-def import_advice(name, root, source):
+def ignores_environment(python):
+    """-I or -E: the interpreter ignores PYTHONPATH, so copy_imports cannot act."""
+    flags = iter(python[1:])
+    for flag in flags:
+        if flag in {'-W', '-X', '--check-hash-based-pycs'}:
+            next(flags, None)
+        elif flag.startswith('-') and not flag.startswith('--') and set(flag[1:]) & {'I', 'E'}:
+            return True
+    return False
+
+
+def import_advice(name, root, source, path=None, isolated=False):
+    try:
+        outside = Path(path).resolve() if path is not None and source is not None else None
+        work = Path(source).resolve() if outside is not None else None
+    except (OSError, ValueError):
+        outside = None
+    if outside is not None and outside.is_relative_to(work):
+        counterpart = root / outside.relative_to(work)
+        installed = {'site-packages', 'dist-packages'} & set(outside.parts)
+        if not installed and (not counterpart.exists() or not counterpart.resolve().is_relative_to(root.resolve())):
+            # e.g. setuptools' strict link tree under an ignored build/ folder;
+            # not a package installed into an ignored virtualenv (pythonpath fixes that).
+            return ('it comes from a work-tree folder the comparison copy does not have (Git ignores it); '
+                    'install the project non-editable, or editable from its tracked sources '
+                    '(setuptools: editable_mode=compat)')
+        if isolated and any((base / name).is_dir() and not (base / name / '__init__.py').is_file()
+                            for base in (root, root / 'src')):
+            # A namespace spans every sys.path folder; pytest's pythonpath only adds the copy.
+            return ('the project\'s editable install puts the work tree on the import path and -I/-E stops '
+                    'Workorder from pointing it at the comparison copy; drop -I/-E from the test command '
+                    'or install the project non-editable')
     for relative in ('src', '.'):
         for checkout in (root, source):
             base = checkout / relative
@@ -425,12 +576,12 @@ def import_advice(name, root, source):
     return "install the project non-editable or run the tests so they import this checkout's code"
 
 
-def _import_failure(report, root, source):
+def _import_failure(report, root, source, isolated=False):
     for name, paths in report.items():
         for path in paths:
             if not Path(path).resolve().is_relative_to(root.resolve()):
                 return ImportFailure(f'the tests import {name} from {path}, outside the comparison copy; '
-                                     + import_advice(name, root, source))
+                                     + import_advice(name, root, source, path, isolated))
     return None
 
 
@@ -522,13 +673,7 @@ class _ImportGuard:
                     root=str(root), report=str(self.report))
         plugin.write_text(_IMPORT_REPORT + '\n_DATA = ' + repr(data) + '\n' + _GUARD, encoding='utf-8')
         python = interpreter(command, root, env)
-        flags = iter(python[1:])
-        ignore_environment = False
-        for flag in flags:
-            if flag in {'-W', '-X', '--check-hash-based-pycs'}:
-                next(flags, None)
-            elif flag.startswith('-') and not flag.startswith('--') and set(flag[1:]) & {'I', 'E'}:
-                ignore_environment = True
+        self.ignore_environment = ignore_environment = ignores_environment(python)
         self.command, self.env = list(command), dict(env)
         if ignore_environment or ISOLATED_RUNNER in command:
             kind = ('selection' if ISOLATED_RUNNER in command else
@@ -588,7 +733,7 @@ class _ImportGuard:
             # imports, outside this guard's temporary environment and lease.
             run.import_guard_missing_pytest = run.returncode
         try:
-            failure = (_import_failure(report['imports'], self.root, self.source)
+            failure = (_import_failure(report['imports'], self.root, self.source, self.ignore_environment)
                        if report and 'imports' in report else
                        ImportFailure('could not verify project imports: '
                                      + (report.get('error', 'invalid import guard report') if report
@@ -641,7 +786,9 @@ def check(root, source, command, env, timeout=None, *, require_missing_pytest=Fa
         probe = [*python, '-c', PROBE, json.dumps(names), json.dumps(projects),
                  json.dumps(pytest_arguments(command)), json.dumps(ISOLATED_RUNNER in command)]
         from . import store as s
-        with s.changing_repository(), bytecode_cache(probe, root, env, cache_root=source) as (words, probe_env):
+        with tempfile.TemporaryDirectory(prefix='workorder-imports-', ignore_cleanup_errors=True) as site, \
+                s.changing_repository(), \
+                bytecode_cache(probe, root, copy_imports(root, source, env, site), cache_root=source) as (words, probe_env):
             run = subprocess.run(words, cwd=root, env=probe_env,
                                  capture_output=True, text=True, errors='replace', timeout=PROBE_TIMEOUT)
         line = next(line for line in run.stdout.splitlines() if line.startswith('WORKORDER_IMPORTS='))
@@ -654,7 +801,7 @@ def check(root, source, command, env, timeout=None, *, require_missing_pytest=Fa
             if (len(available) != 1
                     or json.loads(available[0].split('=', 1)[1]) is not False):
                 return ImportFailure('could not verify project imports: the import guard did not complete')
-        return _import_failure(report, root, source)
+        return _import_failure(report, root, source, ignores_environment(python))
     except (OSError, ValueError, configparser.Error, StopIteration, subprocess.SubprocessError) as error:
         return ImportFailure(f'could not verify project imports: {error or "the import probe failed"}')
     return None

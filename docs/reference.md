@@ -1332,6 +1332,8 @@ Tests run with the checkout's `src/` (when present) and root ahead of the inheri
 For pytest the import probe applies pytest's actual configuration and `pythonpath` (relative to the
 selected file, including `-c`), also under `-I` and `-E`, so another checkout's editable install
 cannot supply the project. Base-code, old-test, stub and REF runs use the temporary copy's roots.
+Editable installs of a flat or src layout (`.pth` roots, setuptools' finder, editables) serve the
+copy; remaps, ignored folders, other checkouts, `PYTHONPATH` and `-I`/`-E` still refuse.
 
 Before using a copy's result, even a cached one or an inline `python -c`, a probe with the same
 interpreter, flags, environment and directory locates the project's own top-level packages and
@@ -1345,7 +1347,8 @@ TASK-1: could not compare with origin/main: the tests import click from /checkou
 ```
 
 The advice names `src` or `.` only when that layout holds the package; otherwise it says to install
-non-editable. `could not compare` also covers failed copies, unavailable base runs and an
+non-editable; under `-I`/`-E`, for a namespace folder, to drop the flag. `could not compare` also
+covers failed copies, unavailable base runs and an
 unidentified Python interpreter in a wrapper. It proves nothing about the test. An approving review
 or `workorder-allow:TASK-1` (`workorder-allow:tests` for an unowned file) accepts it; warning mode and
 a base task's kind do not. `done --needs-review` can record it, and pre-commit then allows the commit
