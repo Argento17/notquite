@@ -816,6 +816,9 @@ def run_command(options, command, run):
                              f' .workorder/config.json both on {options.base} and in this change'
                              ' (workorder init --update-workflow --solo records it)')
                 owner = set()
+            if (options.staged and not options.base and not options.run_tests
+                    and not options.all_tests and gate.staged_change_unchecked(root)):
+                return 0  # the quiet result of a commit that touches no task, receipt, test or code
             # The owner's labels clear what the same labels from a reviewer would; a reviewer's label stays review.
             problems = gate.check(root, options.staged, options.base, notes, allow | owner, options.run_tests, counts,
                                   options.strict_tests, options.all_tests, options.require_task,
