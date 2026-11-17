@@ -1,28 +1,28 @@
 # Workorder: the task record for coding agents
 
-Coding agents often say DONE when nothing proves it, and the next session does not know what was done.
-Workorder gives every task the same structure: one form (mission, scope, acceptance, test, dependencies, progress), one lifecycle, and sessions that start from `workorder show` and end with `workorder done` or `workorder note --next`.
-A DONE counts only when the task's test passes now and failed before the change, so whoever picks up a task next finds it in the same form, checked the same way.
+A coding agent's session ends mid-task; the next session does not know what was being done, where it stopped or what remains. Workorder keeps the task outside the conversation, with the same structure every time: mission, scope, acceptance, test, dependencies, progress and the next step. Any later session or agent runs `workorder show` and recovers it, so tasks survive new conversations and handoffs.
+
+Agents also say DONE when nothing proves it. Workorder refuses that DONE until the task's test passes now, failed on the code before the change, and fails with the change stubbed out.
+
+**A verified test result is not a verified task.** DONE means the test proves the change did something; whether the task was done right is a person's acceptance, a separate state recorded with `workorder accept`.
 
 ```mermaid
 flowchart TD
-    A["Write the task and land it on main<br/><small>tasks/TASK-1.md</small>"] --> B["An agent starts from the record<br/><small>workorder show</small>"]
-    B --> C["It works on a branch, with a test"]
-    C --> D{"It claims DONE<br/><small>workorder done runs the task's test: it must pass now,<br/>fail on the code before the change,<br/>and fail with the change stubbed out</small>"}
-    D -- "not supported" --> E["Refused, with what is missing"]
-    E --> C
-    D -- "supported" --> F["DONE, with receipts"]
-    F --> G["Pull request<br/><small>workorder check reruns the evidence</small>"]
-    G --> H["A reviewer decides<br/><small>an approving review clears most findings<br/>a label clears changes to existing tests</small>"]
-    H --> I["Merge"]
-    I --> J["The next session picks up from the record"]
-    J -.-> B
+    A["An agent works on a task<br/><small>workorder new wrote tasks/TASK-1.md</small>"] --> B["The session ends mid-task<br/><small>progress and the next step stay in the task</small>"]
+    B --> C["A new session picks it up<br/><small>workorder show: the same structure every time</small>"]
+    C --> D["It finishes the work, with a test"]
+    D --> E{"It claims DONE<br/><small>workorder done</small>"}
+    E -- "nothing proves it" --> F["Refused, with what is missing"]
+    F --> G["It adds the proof<br/><small>the task's test passes now, failed on the code<br/>before the change, and fails with the change stubbed out</small>"]
+    G --> E
+    E -- "the test proves it" --> H["DONE, with receipts"]
+    H --> I["One pull request<br/><small>workorder check reruns the evidence</small>"]
+    I --> J["A person reviews and merges<br/><small>whether it was done right is theirs to accept</small>"]
 ```
 
 ![Comic: a coding agent says DONE and Workorder refuses until the task's test passes; then the next session picks up where the work left off from `workorder show`](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)
 
-Every task is a Markdown file in `tasks/`, written by `workorder new`; receipts go in `.workorder/`.
-`workorder done` refuses a DONE while Scope or Acceptance is empty or the evidence does not support it.
+Every task is a Markdown file in `tasks/`; receipts go in `.workorder/`. `workorder done` refuses a DONE while Scope or Acceptance is empty.
 
 [How it works](docs/how-it-works.md) · [Reviewer guide](docs/reviewer-guide.md) · [Reference](docs/reference.md) · [Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder flags](docs/shortcuts.md)
 
@@ -30,62 +30,66 @@ Needs Git and Python 3.10 or newer; no server or database. Tested in CI on Linux
 
 ## Quick start
 
-```sh
-pipx install workorder
-```
-
-No pipx? On Ubuntu or Debian: `sudo apt install pipx && pipx ensurepath`.
-
-Try it in a throwaway folder:
+Install with `pipx install workorder` ([no pipx?](docs/reference.md#team-setup)). Try it in a throwaway repository; a local `origin` stands in for GitHub:
 
 ```sh
 mkdir demo && cd demo && git init -q -b main
 git config user.name "Your Name" && git config user.email you@example.com
+git init -q --bare ../demo-origin.git && git remote add origin ../demo-origin.git
 workorder init
 printf '__pycache__/\n' > .gitignore
-workorder new --title "Add calc" --owner you --test "python3 test_calc.py" --code-paths calc.py
+git add . && git commit -qm "Set up Workorder" && git push -qu origin main
 ```
 
-`new` warns that the test does not exist yet. In `tasks/TASK-1.md`, fill in Scope and Acceptance:
+The normal workflow is one branch and one pull request. Write the task on the branch, then fill in Scope and Acceptance in `tasks/TASK-1.md`:
+
+```sh
+git switch -c add-calc
+workorder new --title "Add calc" --owner you --test "python3 test_calc.py" --code-paths calc.py
+```
 
 ```markdown
 ## Scope
 
-In: add two numbers with `add(a, b)` in calc.py.
-Out: subtraction and other operations.
+In: add two numbers with `add(a, b)` in calc.py. Out: subtraction.
 
 ## Acceptance
 
 - `add(2, 2)` returns `4`.
 ```
 
-Land the task on main, then do the work on a branch:
+Do the work with a test, commit, finish the task, commit, push and open one pull request:
 
 ```sh
-git add . && git commit -qm "Workorder setup and TASK-1"
-git switch -c add-calc
 printf 'def add(a, b):\n    return a + b\n' > calc.py
 printf 'from calc import add\n\nassert add(2, 2) == 4\n' > test_calc.py
-git add . && git commit -qm "Add calc"
+git add . && git commit -qm "TASK-1: add calc"
 workorder done --task TASK-1 --note "add() works; next: subtraction"
-workorder show --task TASK-1
-git add tasks/ .workorder/ && git commit -qm "Record TASK-1 completion"
+git add tasks/ .workorder/ && git commit -qm "TASK-1 done" && git push -qu origin add-calc
 ```
 
-If `done` refuses, follow its Missing and Next lines; it never commits or pushes.
-If the task's own code or test files changed, run `workorder renew --task <id>`.
+If `done` refuses, follow its Next line. If the task's own code or test files changed, run `workorder renew --task <id>`.
 
-On a pull request, `workorder init` adds a workflow that runs the pull-request check:
+The pull-request workflow runs `workorder check --base origin/main --run-tests --all-tests --require-task`; run it locally to see what reviewers see. For a task written and finished in one pull request, it asks for an approving review or the label `workorder-allow:TASK-1`. Working alone, use solo mode (`workorder init --solo`). Landing the task on main first is [an option](docs/reference.md#task-first-development).
 
-```sh
-workorder check --base origin/main --run-tests --all-tests --require-task
-```
+## Language support
 
-Run it locally to see what reviewers see.
+Any test command works; the deeper checks are Python-only today.
+
+| Check | Python with pytest | Other test commands |
+|---|---|---|
+| Passes now | Yes | Yes, by exit code |
+| Fails on the code before the change | Per new or changed test | Whole command |
+| Fails with the changed functions stubbed out | Python code | Python code |
+| Existing tests edited, removed or skipped | Per test | Per file in `test_paths` |
+| Acceptance items tied to a test | Yes | No |
+| Project test failures compared with the base | Per failing test | No |
+
+A wrapper such as `sh test.sh` needs `--test-paths`; [full table](docs/reference.md#language-support).
 
 ## The review rule
 
-An approving review clears every finding except changes to existing tests and changes to the Workorder workflow file; those need a label from someone other than the author.
+An approving review clears every finding except changes to existing tests or the Workorder workflow file, which need a label from someone other than the author.
 
 | Finding | What clears it |
 |---|---|
@@ -109,7 +113,7 @@ The [reviewer guide](docs/reviewer-guide.md) explains each finding.
 
 ## Working with coding agents
 
-Run `workorder init` in every clone: Git does not clone hooks. It installs the pre-commit hook, writes the workflow when none exists, and adds this block to AGENTS.md and CLAUDE.md:
+Run `workorder init` in every clone (Git does not clone hooks); it also adds this block to AGENTS.md and CLAUDE.md:
 
 ```markdown
 ## Tasks
@@ -127,14 +131,11 @@ Run `workorder init` in every clone: Git does not clone hooks. It installs the p
 
 ## Speed
 
-`done` runs the task's test three times: on the new code, on the code before the change, and with the change stubbed out. The pre-commit hook adds under a second per commit.
-
-**The whole test suite runs by default.** When `init` finds pytest, it turns on the project test: `done` and the pull-request check also run your full suite once. So every `done` takes at least as long as your suite. If your suite takes minutes, turn it off with `workorder init --no-project-test`, or choose a faster command with `workorder init --project-test "CMD"`.
+`done` runs the task's test three times, and **the whole test suite runs by default**: when `init` finds pytest, `done` and the pull-request check also run your suite once. If it takes minutes, use `workorder init --no-project-test` or `--project-test "CMD"`.
 
 ## What it does not do
 
-- It does not check Acceptance items, except those ending `(test: path::name)`, which `done` ties to that pytest test. People or agents confirm the rest.
-- Per-test findings, tied Acceptance items and the project test's base comparison need pytest; the stubbed-out code check covers Python functions only. Other test commands count as a whole by exit code.
+- It does not judge whether the task was done right, or check Acceptance items other than those ending `(test: path::name)`.
 - Local hooks can be skipped with `git commit --no-verify`; the pull-request check is what counts.
 - It does not prove the software works in production or read agent conversations.
 

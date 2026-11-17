@@ -38,7 +38,9 @@ def test_project_regression_needs_the_tests_label_not_approval(local_repo):
 
 def test_readme_is_short_and_in_order():
     readme = (PACKAGE / 'README.md').read_text(encoding='utf-8')
-    assert words(readme) <= 1200  # 1,100 plus the Speed section
+    # 1,300 (was 1,200): the README now also carries the continuity story, the language support table
+    # and the line that DONE is not acceptance; the review table and agent block are fixed text.
+    assert words(readme) <= 1300
     order = ['Every task is a Markdown file', '`workorder done` refuses', '## Quick start', '## The review rule',
              '## What it does not do']
     positions = [readme.find(phrase) for phrase in order]

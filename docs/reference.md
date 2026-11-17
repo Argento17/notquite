@@ -20,8 +20,8 @@ Contents: [Commands](#commands) · [Task files](#task-files) ·
 [Receipts](#receipts) · [Contracts](#contracts) · [Claims and ids](#claims-and-ids) ·
 [Compatibility](#compatibility) · [Line endings](#line-endings) ·
 [Reading show and check results](#reading-show-and-check-results) ·
-[Task-first development](#task-first-development) · [Team setup](#team-setup) ·
-[Agent hooks](#agent-hooks)
+[Language support](#language-support) · [Task-first development](#task-first-development) ·
+[Team setup](#team-setup) · [Agent hooks](#agent-hooks)
 
 ## Commands
 
@@ -1191,9 +1191,30 @@ when the target changed implementation paths since the merge base. An unsupporte
 `Evidence: claim not supported on this code` and a Result such as
 `Result: the DONE claim is on code other than the tested code; run workorder renew --task TASK-1`.
 
+## Language support
+
+Any test command counts by its exit code. The deeper checks read pytest results or
+Python source, so they are Python-only today:
+
+| Check | Python with pytest | Any other test command |
+|---|---|---|
+| The test passes now | Yes | Yes, by exit code |
+| It fails on the code before the change | New or changed test functions; at least one must fail | The whole command |
+| It fails with the changed functions stubbed out | Changed Python functions | The same for Python code; nothing for other languages |
+| The test asserts something | Python test files | Python test files only |
+| Existing tests edited, removed, skipped or weakened | Per test, plus pytest configuration, `-k` and `--deselect` | Per file in `test_paths` |
+| Fewer passes, or more skips, xfails or deselections | Counted from pytest's results | Not counted |
+| Acceptance items tied to a test, `(test: path::name)` | The named test must pass now and fail on the base | Refused: `is not a pytest node id` |
+| Project test failures compared with the base | A test that failed on the base too is a Note | Any failure needs `workorder-allow:tests` |
+
+A command that runs a script, such as `sh test.sh` or `npm test`, is a wrapper: `new`
+refuses it without `--test-paths`, so changes to its tests are reviewed.
+
 ## Task-first development
 
-In a clone with an origin remote and the pre-commit hook:
+The README's normal workflow writes the task on the branch, so the pull-request check
+asks for an approving review of the new task; landing it first avoids that. In a
+clone with an origin remote and the pre-commit hook:
 
 1. Write the task (concrete test command, Scope, Acceptance) before the test exists. Commit and push
    it to the default branch without skipping the hook.

@@ -1,6 +1,6 @@
 # How Workorder works
 
-A coding agent can say a task is DONE when nothing shows that the work was done, and the next session often starts without knowing what happened before.
+A coding agent's session can end mid-task, and the next one starts without knowing what was done or what remains. Agents also say DONE when nothing shows the work was done.
 
 Workorder gives every task the same structure. `workorder new` writes each one in the same form: mission, scope, acceptance, test command, dependencies and progress, and the code paths when you name them. Every task follows the same lifecycle, and every agent session starts from `workorder show` and ends with `workorder done`, or with `workorder note --next` when the work is unfinished. So any agent or person who picks up a task finds it in the same form, checked the same way.
 
