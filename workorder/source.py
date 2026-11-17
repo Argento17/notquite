@@ -1,5 +1,6 @@
 """Compare code without documentation, while retaining historical receipt hashes."""
 import ast
+import hashlib
 from pathlib import PurePosixPath
 
 
@@ -28,11 +29,30 @@ def python_code(content):
         return None
 
 
+# Normalizing is a pure function of the source, and one command compares the same
+# sources many times (base, branch, index, stubbed copies): parse each source once.
+_DIGESTS = {}
+
+
+def python_digest(content):
+    """The digest of python_code(content), or None when it does not parse."""
+    raw = content if isinstance(content, bytes) else content.encode('utf-8', 'surrogatepass')
+    key = (isinstance(content, bytes), hashlib.sha256(raw).digest())
+    found = _DIGESTS.get(key, False)
+    if found is False:
+        code = python_code(content)
+        found = None if code is None else hashlib.sha256(code.encode()).hexdigest()
+        if len(_DIGESTS) >= 65536:
+            _DIGESTS.clear()
+        _DIGESTS[key] = found
+    return found
+
+
 def same_python(before, after):
     if before is None or after is None:
         return False
-    old = python_code(before)
-    return old is not None and old == python_code(after)
+    old = python_digest(before)
+    return old is not None and old == python_digest(after)
 
 
 def entries(root, tree, syntax=None, *, missing_ok=False, protected=None):
@@ -64,9 +84,9 @@ def _python_entries(root, tree, syntax=None, *, missing_ok=False):
     blobs = s.read_blobs(root, oids)
     for path, entry in python.items():
         mode, kind, oid = entry.split()
-        syntax = python_code(blobs[oid]) if oid in blobs else None
+        syntax = python_digest(blobs[oid]) if oid in blobs else None
         if syntax is not None:
-            tree[path] = mode + ' ' + kind + ' ' + s.digest(syntax.encode())
+            tree[path] = mode + ' ' + kind + ' ' + syntax
     return tree
 
 

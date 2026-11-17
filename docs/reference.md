@@ -852,6 +852,18 @@ own test:
   and the stubbed-out run when no new or changed tests are selected. The others run in full.
 - Comparison copies share the object store (`git clone --shared`); files, index and Git
   directory stay separate.
+- Most real repositories are too large for the read cache to observe in full. Reads
+  that cannot change are then still shared within one command: objects named by a full
+  ID, listings of a commit, index listings while the index file is unchanged, each Python
+  source's normalized form, and the work tree's changed paths within one comparison
+  (unless a `post-index-change` hook or `core.fsmonitor` could run). Replacement refs
+  turn object sharing off; a split index turns index listings off.
+- The pre-commit hook returns at once, silently, when only documentation is staged
+  (outside `tasks/` and the receipt folders) and no task file names it, its folder or
+  its suffix pattern; problems already committed are left to the pull-request check.
+- Measured on rich 15.0 (560 files, a 0.06 s task test): `done` 12.6 s before, 3.1 to
+  3.7 s now; the receipts commit 13 s before, 2.8 to 3.9 s now; a commit with only
+  documentation or nothing staged 7.6 s before, 0.2 s now.
 
 `done` and `check --run-tests` end with one stderr line, for example `Time: 3.3s: setup
 0.6s, new code 2.3s, base code 1.0s, stubbed 2.1s, project test not run, runs overlapped`.

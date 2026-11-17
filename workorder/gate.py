@@ -666,9 +666,12 @@ def claim_matches(root, record, implemented, claim, tree=None, staged=False, rec
     merged = merge_match(root, implemented, target[1]) if target else None
     if merged and s.contains(root, merged["commit"], claim):
         return unchanged_implementation_paths(root, implemented, merged, tree, staged, receipt_rev)
+    # The claimed code is the implemented code: no replay or source comparison can change that answer.
+    if s.code_digest(root, tree) == implemented["code"]:
+        return True
     if target and recorded_branch_code(root, implemented, target[1], claim, tree):
         return True
-    if s.code_digest(root, tree) == implemented["code"] or same_source_code(root, implemented['commit'], tree):
+    if same_source_code(root, implemented['commit'], tree):
         return True
     if merged and s.contains(root, claim, merged["commit"]):
         # Landing must not invalidate a claim whose patch matched before it landed.
@@ -795,7 +798,7 @@ def unpushed_target(root, record):
     return None
 
 
-@s.cached_read
+@partial(s.cached_read, scoped=True)
 def raw_changed_paths(root, reference, staged=False):
     """Paths that differ between reference and what is being checked (the index under --staged, the
     working tree otherwise, which in CI is the commit being checked), untracked task files included."""
@@ -4652,6 +4655,37 @@ def code_path_problems(root, base, changed, code, all_records, staged, allow, no
             finding = AssertionProblem(f'{path} is outside the code paths of {", ".join(scoped)}', path)
             problems.append(AssertionProblem(reviewer_label(finding, 'scope:' + scoped[0]), path))
     return problems
+
+
+@s.read_session()
+def staged_change_unchecked(root):
+    """True when the staged change holds nothing the pre-commit check reads.
+
+    Only documentation outside tasks/ and the receipt folders may be staged, and no task file
+    may name it (a doctest, its folder or its suffix pattern); a merge or the first commit is
+    always checked in full. Problems already committed are left to the pull-request check.
+    """
+    if s.git(root, 'rev-parse', '--verify', '--quiet', 'HEAD^{commit}', required=False).returncode:
+        return False
+    for name in ('MERGE_HEAD', 'SQUASH_MSG', 'CHERRY_PICK_HEAD', 'REVERT_HEAD'):
+        if (root / s.git(root, 'rev-parse', '--git-path', name).stdout.strip()).exists():
+            return False
+    listing = s.git(root, 'diff', '--cached', '--name-only', '-z', '--no-renames', 'HEAD', required=False)
+    if listing.returncode:
+        return False
+    paths = set(listing.stdout.split('\0')) - {''}
+    if not paths:
+        return True
+    if not all(source.documentation(path) and not s.generated_path(path)
+               and not path.startswith(('tasks/', '.workorder/', '.notquite/', '.github/')) for path in paths):
+        return False
+    texts = s.metadata_texts(root, staged=True).values()
+    for path in paths:
+        suffix = posixpath.splitext(path)[1]
+        names = {path, posixpath.basename(path), path.split('/', 1)[0] + '/'} | ({'*' + suffix} if suffix else set())
+        if any(name in text for name in names for text in texts):
+            return False
+    return True
 
 
 @s.read_session()

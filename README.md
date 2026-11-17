@@ -130,7 +130,7 @@ Run `workorder init` in every clone (Git does not clone hooks); it also adds thi
 
 ## Speed
 
-`done` runs only the task's own test, its three runs at the same time, and reuses an unchanged base result.
+`done` runs only the task's own test. Measured on rich: `done` 3 s, pre-commit 3-4 s, 0.2 s for documentation alone.
 
 **Your whole suite runs once, in the pull-request check.** `init` turns this on when it finds pytest; `workorder init --no-project-test` turns it off.
 
