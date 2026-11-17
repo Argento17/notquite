@@ -206,6 +206,15 @@ def claude_settings(root):
     return path, updated, changed
 
 
+def earlier_agent_block(text):
+    """An agent block written by an earlier version: its "## Tasks" section naming the workorder commands."""
+    for match in re.finditer(r'(?m)^## Tasks[ \t]*\n(?:(?!## ).*(?:\n|$))*', text):
+        section = match.group(0)
+        if 'workorder show' in section and 'workorder done' in section:
+            return match
+    return None
+
+
 @s.changing_repository()
 def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False,
                project_test=None, no_project_test=False):
@@ -216,9 +225,9 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
     if project_test is None and not no_project_test and 'project_test' not in project_tests._settings(root):
         # Only a first setup turns it on: re-running init after an upgrade keeps existing choices.
         configured = s.local_path(root, '.github/workflows/workorder.yml').exists() or any(
-            AGENT_BLOCK.strip() in (s.local_path(root, name).read_text(encoding='utf-8')
-                                    if s.local_path(root, name).is_file() else '')
-            for name in ('AGENTS.md', 'CLAUDE.md'))
+            AGENT_BLOCK.strip() in text or earlier_agent_block(text)
+            for text in (s.local_path(root, name).read_text(encoding='utf-8')
+                         if s.local_path(root, name).is_file() else '' for name in ('AGENTS.md', 'CLAUDE.md')))
         detected = None if configured else project_tests.detect(root)
         if detected:
             project_test = project_tests.default_command()
@@ -252,8 +261,18 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
     for name in ('AGENTS.md', 'CLAUDE.md'):
         path = s.local_path(root, name)
         original = path.read_text(encoding='utf-8') if path.exists() else ''
+        earlier = earlier_agent_block(original)
         if AGENT_BLOCK.strip() in original:
             print(f'{name}: agent block already present')
+        elif earlier and check:
+            missing = True
+            print(f'{name}: agent block from an earlier version (run workorder init to replace it)')
+        elif earlier:
+            path.write_text(original[:earlier.start()] + AGENT_BLOCK.rstrip('\n') + '\n'
+                            + ('\n' + original[earlier.end():].lstrip('\n') if original[earlier.end():].strip() else ''),
+                            encoding='utf-8', newline='\n')
+            written.append(name)
+            print(f'{name}: replaced the agent block from an earlier version')
         elif check:
             missing = True
             print(f'{name}: missing agent block')

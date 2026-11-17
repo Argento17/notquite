@@ -71,8 +71,8 @@
 - The agent block added to AGENTS.md and CLAUDE.md is down from 339 to under 170
   words: start from `workorder show`, claim, work with a test that fails without
   it, `done`, `note --next`, never hand-edit status or receipts, run the
-  pull-request check, and where the full output is saved. `init` appends the new
-  block to files that hold the old one; delete the old block by hand.
+  pull-request check, and where the full output is saved. Running `init` again
+  replaces a block an earlier version wrote, keeping the rest of the file.
 - A project test that fails on the new code now needs `workorder-allow:tests`, as
   the one review rule says; an approving review alone no longer clears it.
 
