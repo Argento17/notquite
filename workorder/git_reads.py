@@ -64,6 +64,12 @@ class ReadCache(dict):
                     for key in list(self.batches):
                         if key[0] == root:
                             self.batches.pop(key).close()
+            # A mutation ended the previous read phase. This full observation
+            # starts the next one for enclosing scopes of the same repository.
+            # Cached callers still compare their own starting generation before
+            # saving a result, so they cannot retain a value spanning a write.
+            self.stack[:] = [(identity, reusable, self.generation) if frame[0] == identity else frame
+                             for frame in self.stack]
         self.stack.append((identity, reusable, self.generation))
         try:
             yield reusable
@@ -223,9 +229,16 @@ def _git_configuration(root, gitdir, common, env, environment, configurations, c
         if name.startswith('diff.') and name.endswith(('.textconv', '.command')) and value:
             driver, kind = name[len('diff.'):].rsplit('.', 1)
             diff_helpers[kind].add(driver.encode('utf-8', 'surrogateescape'))
+    hooks = common / 'hooks'
+    if 'core.hookspath' in effective:
+        if not effective['core.hookspath']:
+            # Git treats an empty value as a filesystem-root hook directory.
+            # Keep that platform-specific spelling on the uncached path.
+            raise ValueError('hook directory is not observable')
+        hooks = _configuration_path(effective['core.hookspath'], root, env)
     result = {'configuration_paths': paths, 'signature': _configuration_files(paths, contents, observe),
               'inputs': inputs, 'attributes': attributes, 'filters': filters, 'unsafe': unsafe,
-              'diff_helpers': diff_helpers}
+              'diff_helpers': diff_helpers, 'index_hook': hooks / 'post-index-change'}
     configurations[key] = result
     return result
 
@@ -500,7 +513,7 @@ def repository_state(root, *, isolated=False, configurations=None, contents=None
                                      working_paths | indexed_paths, configurations, (working, metadata)):
                     return None
         digest.update(repr(environment).encode('utf-8', 'surrogateescape'))
-        result = working, digest.digest(), configuration['diff_helpers']
+        result = working, digest.digest(), configuration['diff_helpers'], configuration['index_hook']
         if snapshots is not None and os.name != 'nt':
             snapshots[identity] = environment, observed, result
         return result

@@ -8,6 +8,7 @@ Labels below must come from someone other than the pull request author. An appro
 ## Record, configuration or dependency cannot be read
 **Meaning:** A malformed task, missing field, invalid value/path/command, unreadable configuration or receipt, missing dependency, dependency cycle, or contradictory `blocks` prevents checking the record. A missing Git ref or merge base, or an incomplete/unreadable Git blob, also prevents a usable check.
 **Clear:** Correct the named file or value, restore missing dependencies, remove cycles, or fetch the target ref; rerun `workorder check ID` and the original check. If Git cannot read a blob, restore the missing/corrupt Git data and retry; a cached read never supplies missing evidence. Labels do not repair malformed records. Set wrappers' `test_paths` to the actual test files; a changed definition needs the acceptance below.
+Gate reads share validation until a test, hook/filter execution or Workorder write requires a fresh observation. Windows observations still reread file contents, including same-size edits with restored timestamps; a failed command also requires freshness before reuse.
 
 <!-- refusal-family evidence -->
 ## Finished claim lacks evidence
@@ -110,6 +111,6 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py 33bede98ae60a60d589b42a80ed9f8399a1464d7531522a33d18db822d85205e records,evidence,current-tests,removal -->
-<!-- refusal-inventory workorder/git_reads.py 494271e8e22ab5f2c93ae88af4a3597d6ce39b380081796979d23218845cb1da records,evidence -->
+<!-- refusal-inventory workorder/store.py ee20252f9a18fe3b8fd66c4dc893a06444d1db6f705ae1f379f66154c568cdea records,evidence,current-tests,removal -->
+<!-- refusal-inventory workorder/git_reads.py c406e897d3776a2eefb175775f1cf8144f2d6991a666432e1337bb739c5c0371 records,evidence -->
 <!-- refusal-inventory workorder/console.py 6634087244aa3cbf3741281f4b740117043f662e24e309c6c5af10d7c543b681 records,current-tests -->

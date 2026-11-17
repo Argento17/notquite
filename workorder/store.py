@@ -159,8 +159,9 @@ def _read_key(value):
 def read_scope(root):
     """Validate one compound read without caching its caller's side effects.
 
-    Keep scopes inside read-only preparation, outside test execution. Nested
-    reads still revalidate if a repository mutation changes the generation.
+    Read-only preparation can share one observation. A scope spanning test
+    execution or writes must use the mutation guards: nested reads revalidate
+    whenever invalidate_reads changes the generation.
     """
     cache = _READS.get()
     if cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0':
@@ -170,7 +171,7 @@ def read_scope(root):
             yield
 
 
-def cached_read(function, *, git_query=False, diff_query=False):
+def cached_read(function, *, git_query=False, diff_query=False, refresh_after=False):
     @wraps(function)
     def read(*args, **kwargs):
         cache = _READS.get()
@@ -179,8 +180,15 @@ def cached_read(function, *, git_query=False, diff_query=False):
         with cache.checking(args[0], isolated=kwargs.get('isolated', False)) as reusable:
             if not reusable:
                 return function(*args, **kwargs)
+            state = cache.states[(args[0], kwargs.get('isolated', False))]
+            if diff_query and args[1] in {'diff', 'status'} and (
+                    state[3].is_file() or os.name == 'nt' and state[3].with_suffix('.exe').is_file()):
+                # Index refresh can run external code even with no diff driver.
+                # Bypass the helper probe too: its diff can execute this hook.
+                with changing_repository():
+                    return function(*args, **kwargs)
             if diff_query and uses_diff_helper(args[0], args[1:],
-                    cache.states[(args[0], kwargs.get('isolated', False))][2],
+                    state[2],
                     isolated=kwargs.get('isolated', False)):
                 # A derived read enclosing this query must not retain helper
                 # output either. Ordinary plumbing reads remain reusable.
@@ -190,11 +198,19 @@ def cached_read(function, *, git_query=False, diff_query=False):
             key = (function, tuple(_read_key(arg) for arg in args),
                    tuple((key, _read_key(value)) for key, value in sorted(kwargs.items())))
             if key not in entries:
-                generation = cache.generation
-                result = function(*args, **kwargs)
-                if generation == cache.generation:
-                    entries[key] = result if git_query else deepcopy(result)
-                return result
+                try:
+                    generation = cache.generation
+                    result = function(*args, **kwargs)
+                    if generation == cache.generation:
+                        entries[key] = result if git_query else deepcopy(result)
+                    return result
+                finally:
+                    if refresh_after:
+                        # write-tree may write objects and refresh its copy.
+                        # Keep the query under its PRE-command state, then force
+                        # a full observation before any later reuse. A changed
+                        # state evicts it; unchanged inputs can reuse the result.
+                        cache.clear(queries=False)
             # A caller may annotate a receipt or task. Reuse must have the same
             # value semantics as a fresh read, including nested mutable fields.
             return entries[key] if git_query else deepcopy(entries[key])
@@ -1749,9 +1765,10 @@ def checkout_bytes(root, path):
     """Index contents with Git's checkout conversion, as a user would run them."""
     # Attribute rules must come from the index too, not unstaged .gitattributes.
     tree = index_tree(root)
-    result = subprocess.run(['git', 'cat-file', '--filters', f':{path}'], cwd=root,
-                            capture_output=True, timeout=30,
-                            env={**os.environ, 'GIT_ATTR_SOURCE': tree})
+    with changing_repository():
+        result = subprocess.run(['git', 'cat-file', '--filters', f':{path}'], cwd=root,
+                                capture_output=True, timeout=30,
+                                env={**os.environ, 'GIT_ATTR_SOURCE': tree})
     if result.returncode:
         raise Refused(f'could not read staged checkout content: {path}')
     return result.stdout
@@ -1769,17 +1786,18 @@ def checkout_contents(root, entries):
     requests = b''.join(os.fsencode(path) + b'\0' for path, _, _ in entries)
     with tempfile.TemporaryDirectory(prefix='workorder-checkout-') as temporary:
         destination = Path(temporary)
-        result = subprocess.run(['git', 'checkout-index', '--stdin', '-z', '--ignore-skip-worktree-bits',
-                                 '--prefix=' + destination.as_posix() + '/'], cwd=root,
-                                input=requests, capture_output=True, timeout=30,
-                                env={**os.environ, 'GIT_ATTR_SOURCE': index_tree(root)})
+        with changing_repository():
+            result = subprocess.run(['git', 'checkout-index', '--stdin', '-z', '--ignore-skip-worktree-bits',
+                                     '--prefix=' + destination.as_posix() + '/'], cwd=root,
+                                    input=requests, capture_output=True, timeout=30,
+                                    env={**os.environ, 'GIT_ATTR_SOURCE': index_tree(root)})
         if result.returncode:
             raise Refused('could not read staged checkout content: ' + result.stderr.decode('utf-8', 'replace').strip())
         for path, _, mode in entries:
             yield path, mode, (destination / path).read_bytes()
 
 
-@partial(cached_read, git_query=True)
+@partial(cached_read, git_query=True, refresh_after=True)
 def index_tree(root):
     # write-tree updates the index's tree cache. Preserve the caller's index,
     # including an alternate index supplied by Git while running a hook.

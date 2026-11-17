@@ -123,24 +123,38 @@ def test_completion_changed_observes_reopen_history_and_record_changes(local_rep
 
 @pytest.mark.parametrize('staged', [False, True])
 @pytest.mark.usefixtures('observable_git_environment')
-def test_changed_paths_checks_repository_once(local_repo, monkeypatch, staged):
+def test_changed_paths_checks_each_read_phase_once(local_repo, monkeypatch, staged):
     monkeypatch.delenv('WORKORDER_GIT_CACHE', raising=False)
     root = local_repo
     base = git(root, 'rev-parse', 'HEAD')
     (root / 'app.py').write_text('items = [1]\n')
     git(root, 'add', 'app.py')
-    inspections = []
+    events = []
     inspect = git_reads.repository_state
+    run = store.subprocess.run
 
     def counted(*args, **kwargs):
-        inspections.append(args[0])
+        events.append('observe')
         return inspect(*args, **kwargs)
 
+    def counted_run(args, *a, **kwargs):
+        if args == ['git', 'write-tree']:
+            events.append('write-tree')
+        return run(args, *a, **kwargs)
+
     monkeypatch.setattr(git_reads, 'repository_state', counted)
+    monkeypatch.setattr(store.subprocess, 'run', counted_run)
     with store.read_session():
-        for _ in range(2):
+        # Creating the index tree can write objects or run a hook. Require a
+        # full observation after each actual write, then one per warm read.
+        # The first post-write observation evicts the pre-write tree query;
+        # the second write changes no inputs, so subsequent reads reuse it.
+        phases = ([['observe', 'write-tree', 'observe']] * 2 + [['observe']] * 2
+                  if staged else [['observe']] * 4)
+        for expected in phases:
+            events.clear()
             assert gate.changed_paths(root, base, staged) == {'app.py'}
-    assert len(inspections) == 2, len(inspections)
+            assert events == expected
 
 
 def test_changed_paths_observes_worktree_index_head_and_return_mutation(local_repo):

@@ -2318,9 +2318,11 @@ def _link_ignored_dependencies(root, destination, protected, *, isolated=False, 
 
 def _test_snapshot(root, destination, staged=False, protected=()):
     """Copy selected current files, with an independent Git directory and shared dependencies."""
-    cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
-                            capture_output=True, encoding='utf-8', errors='replace', timeout=30,
-                            env=s.copy_environment())
+    # Even --no-checkout can run a reference-transaction hook.
+    with s.changing_repository():
+        cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
+                                capture_output=True, encoding='utf-8', errors='replace', timeout=30,
+                                env=s.copy_environment())
     if cloned.returncode:
         raise s.Refused('could not create a temporary test copy: ' + cloned.stderr.strip())
 
@@ -3034,9 +3036,10 @@ def local_regression_problems(root, base, *, exclude=(), staged=False, timeout=N
 
 
 def _ref_test_snapshot(root, destination, commit):
-    cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
-                            capture_output=True, encoding='utf-8', errors='replace', timeout=30,
-                            env=s.copy_environment())
+    with s.changing_repository():
+        cloned = subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-hardlinks', str(root), str(destination)],
+                                capture_output=True, encoding='utf-8', errors='replace', timeout=30,
+                                env=s.copy_environment())
     if cloned.returncode:
         raise s.Refused('could not create a temporary REF copy: ' + cloned.stderr.strip())
     for option in ('core.autocrlf', 'core.eol'):
@@ -3805,21 +3808,26 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
           approving_review=False, require_test_first=False, jobs=None, require_task_ignore=(), local_hook=False):
     counts = {} if counts is None else counts
     notes = [] if notes is None else notes
-    revision, label = comparison_base(root, base) if base else (None, None)
-    start = len(notes)
-    explicit_allow = set(allow)
-    if approving_review and base:
-        paths = s.metadata_texts(root, revision)
-        allow = explicit_allow | set(task_names(root, staged)) | {'tests', 'no-task'}
-        allow |= {'scope:' + tid for tid in task_names(root, staged)}
-        allow |= {Path(path).stem for path in paths if path.startswith('tasks/') and s.ID.fullmatch(Path(path).stem)}
-        allow |= {s.receipt_task(path) for path in paths} - {None}
-        allow |= {s.receipt_task(path) for path in s.receipt_paths(root, staged)} - {None}
-    with s.test_reuse(staged and not run_tests):
-        problems = _check(root, staged, revision, notes, allow, run_tests, counts,
-                          strict_tests, all_tests, require_task, timeout, base_label=base,
-                          explicit_allow=explicit_allow, require_test_first=require_test_first,
-                          jobs=jobs, require_task_ignore=require_task_ignore, local_hook=local_hook)
+    # Share validation across the gate's reads, rather than observing the whole
+    # repository again for each task/helper. Tests, Git writes and Workorder
+    # writes advance the read-cache generation, so the next nested read still
+    # revalidates in full (including file contents on Windows).
+    with s.read_scope(root):
+        revision, label = comparison_base(root, base) if base else (None, None)
+        start = len(notes)
+        explicit_allow = set(allow)
+        if approving_review and base:
+            paths = s.metadata_texts(root, revision)
+            allow = explicit_allow | set(task_names(root, staged)) | {'tests', 'no-task'}
+            allow |= {'scope:' + tid for tid in task_names(root, staged)}
+            allow |= {Path(path).stem for path in paths if path.startswith('tasks/') and s.ID.fullmatch(Path(path).stem)}
+            allow |= {s.receipt_task(path) for path in paths} - {None}
+            allow |= {s.receipt_task(path) for path in s.receipt_paths(root, staged)} - {None}
+        with s.test_reuse(staged and not run_tests):
+            problems = _check(root, staged, revision, notes, allow, run_tests, counts,
+                              strict_tests, all_tests, require_task, timeout, base_label=base,
+                              explicit_allow=explicit_allow, require_test_first=require_test_first,
+                              jobs=jobs, require_task_ignore=require_task_ignore, local_hook=local_hook)
     if base:
         notes[start:] = [comparison_message(line, revision, base, label) for line in notes[start:]]
         problems = [comparison_message(line, revision, base, label) for line in problems]
