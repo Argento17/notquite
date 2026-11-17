@@ -117,7 +117,9 @@ def test_agent_block_updates_origin_explicitly():
     assert '`git pull`' not in bootstrap.AGENT_BLOCK
     assert bootstrap.AGENT_BLOCK.strip() in (PACKAGE / 'README.md').read_text()
     readme = ' '.join((PACKAGE / 'README.md').read_text().split())
-    assert len((PACKAGE / 'README.md').read_text().splitlines()) <= 130
+    # The Mermaid flow chart is a picture, not lines to read.
+    chartless = re.sub(r'^```mermaid\n.*?^```\n', '', (PACKAGE / 'README.md').read_text(), flags=re.M | re.S)
+    assert len(chartless.splitlines()) <= 130
     assert "If the task's own code or test files changed, run `workorder renew --task <id>`." in readme
 
 

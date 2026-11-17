@@ -1,12 +1,30 @@
 # Workorder: the task record for coding agents
 
-Every task is a Markdown file in `tasks/` that agents and people read and write: its mission, scope, acceptance, test command and progress, with receipts in `.workorder/`.
-Together they give a clear history; the next session, or the next agent, picks up from it.
-`workorder done` refuses a DONE that the evidence does not support: the task's test must pass now and fail on the code before the change.
+Coding agents often say DONE when nothing proves it, and the next session does not know what was done.
+Workorder gives every task the same structure: one form (mission, scope, acceptance, test, dependencies, progress), one lifecycle, and sessions that start from `workorder show` and end with `workorder done` or `workorder note --next`.
+A DONE counts only when the task's test passes now and failed before the change, so whoever picks up a task next finds it in the same form, checked the same way.
+
+```mermaid
+flowchart TD
+    A["Write the task and land it on main<br/><small>tasks/TASK-1.md</small>"] --> B["An agent starts from the record<br/><small>workorder show</small>"]
+    B --> C["It works on a branch, with a test"]
+    C --> D{"It claims DONE<br/><small>workorder done runs the task's test: it must pass now,<br/>fail on the code before the change,<br/>and fail with the change stubbed out</small>"}
+    D -- "not supported" --> E["Refused, with what is missing"]
+    E --> C
+    D -- "supported" --> F["DONE, with receipts"]
+    F --> G["Pull request<br/><small>workorder check reruns the evidence</small>"]
+    G --> H["A reviewer decides<br/><small>an approving review clears most findings<br/>a label clears changes to existing tests</small>"]
+    H --> I["Merge"]
+    I --> J["The next session picks up from the record"]
+    J -.-> B
+```
 
 ![Comic: a coding agent says DONE and Workorder refuses until the task's test passes; then the next session picks up where the work left off from `workorder show`](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)
 
-[Reviewer guide](docs/reviewer-guide.md) · [Reference](docs/reference.md) · [Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder flags](docs/shortcuts.md)
+Every task is a Markdown file in `tasks/`, written by `workorder new`; receipts go in `.workorder/`.
+`workorder done` refuses a DONE while Scope or Acceptance is empty or the evidence does not support it.
+
+[How it works](docs/how-it-works.md) · [Reviewer guide](docs/reviewer-guide.md) · [Reference](docs/reference.md) · [Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder flags](docs/shortcuts.md)
 
 Needs Git and Python 3.10 or newer; no server or database. Tested in CI on Linux and Windows (Python 3.10, 3.12, 3.13).
 
@@ -16,7 +34,7 @@ Needs Git and Python 3.10 or newer; no server or database. Tested in CI on Linux
 pipx install workorder
 ```
 
-No pipx? On Ubuntu or Debian: `sudo apt install pipx && pipx ensurepath`; plain `pip install` outside a virtual environment is blocked there.
+No pipx? On Ubuntu or Debian: `sudo apt install pipx && pipx ensurepath`.
 
 Try it in a throwaway folder:
 
@@ -28,7 +46,7 @@ printf '__pycache__/\n' > .gitignore
 workorder new --title "Add calc" --owner you --test "python3 test_calc.py" --code-paths calc.py
 ```
 
-`new` warns that the test does not exist yet. In `tasks/TASK-1.md`, replace the comments under Scope and Acceptance:
+`new` warns that the test does not exist yet. In `tasks/TASK-1.md`, fill in Scope and Acceptance:
 
 ```markdown
 ## Scope
@@ -54,7 +72,7 @@ workorder show --task TASK-1
 git add tasks/ .workorder/ && git commit -qm "Record TASK-1 completion"
 ```
 
-`done` runs the declared test and sets DONE only when the evidence supports it, as the pull-request check would. If it refuses, follow its Missing and Next lines. It never commits or pushes.
+If `done` refuses, follow its Missing and Next lines; it never commits or pushes.
 If the task's own code or test files changed, run `workorder renew --task <id>`.
 
 On a pull request, `workorder init` adds a workflow that runs the pull-request check:
@@ -63,7 +81,7 @@ On a pull request, `workorder init` adds a workflow that runs the pull-request c
 workorder check --base origin/main --run-tests --all-tests --require-task
 ```
 
-Run it locally to see what the reviewer will see.
+Run it locally to see what reviewers see.
 
 ## The review rule
 
@@ -87,7 +105,7 @@ An approving review clears every finding except changes to existing tests and ch
 | Existing tests fail on the new code, including the project test | `workorder-allow:ID` (covers what `done --needs-review` recorded), or `workorder-allow:tests` for project and unowned tests; not an approving review |
 | The Workorder workflow file changed | `workorder-allow:workflow`; not an approving review |
 
-Each refusal says which applies; the [reviewer guide](docs/reviewer-guide.md) explains each finding.
+The [reviewer guide](docs/reviewer-guide.md) explains each finding.
 
 ## Working with coding agents
 
@@ -105,7 +123,7 @@ Run `workorder init` in every clone: Git does not clone hooks. It installs the p
 - Output is shortened; the full text is in `.git/workorder/last-output.txt`.
 ```
 
-`workorder init --claude` also installs Claude Code hooks that show held tasks at session start and check completion claims at stop. See [agent hooks](docs/reference.md#agent-hooks).
+`workorder init --claude` also installs [Claude Code hooks](docs/reference.md#agent-hooks) for session start and stop.
 
 ## Speed
 
@@ -117,7 +135,7 @@ Run `workorder init` in every clone: Git does not clone hooks. It installs the p
 
 - It does not check Acceptance items, except those ending `(test: path::name)`, which `done` ties to that pytest test. People or agents confirm the rest.
 - Per-test findings, tied Acceptance items and the project test's base comparison need pytest; the stubbed-out code check covers Python functions only. Other test commands count as a whole by exit code.
-- Local hooks can be skipped with `git commit --no-verify`. The pull-request check is the one that counts.
+- Local hooks can be skipped with `git commit --no-verify`; the pull-request check is what counts.
 - It does not prove the software works in production or read agent conversations.
 
 [Full reference](docs/reference.md) · [Team setup](docs/reference.md#team-setup) · [Examples](examples/) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
