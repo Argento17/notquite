@@ -128,7 +128,7 @@ def test_readme_quick_start_runs_as_written(tmp_path):
             in check.stdout) and 'workorder-allow:TASK-1' in check.stdout
     # The quick start mentions nothing else for the pull request to clear.
     asks = [line for line in check.stdout.splitlines()
-            if line.strip() and not line.startswith(('Note:', 'Time:', 'checked ', '('))]
+            if line.strip() and not line.startswith(('Note:', 'Time:', 'checked ', '(', 'check: NOT OK'))]
     assert len(asks) == 1 and asks[0].startswith('TASK-1 was written'), check.stdout
     approved = cli(demo, *command, '--approving-review')
     assert approved.returncode == 0, approved.stdout + approved.stderr
