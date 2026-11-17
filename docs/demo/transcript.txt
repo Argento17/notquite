@@ -1,0 +1,230 @@
+# workorder 0.17.0  git version 2.47.3  Python 3.13.5  dir: /tmp/wodemo  date: 2026-11-17 13:50 IST
+$ git init -q -b main
+[exit 0]
+
+$ git config user.name "Your Name"
+[exit 0]
+
+$ git config user.email you@example.com
+[exit 0]
+
+$ workorder init
+AGENTS.md: added agent block
+CLAUDE.md: added agent block
+.git/hooks/pre-commit: installed
+.github/workflows/workorder.yml: written
+CI dependencies: no project test dependencies detected
+Files written:
+  AGENTS.md
+  CLAUDE.md
+  .git/hooks/pre-commit
+  .github/workflows/workorder.yml
+git add AGENTS.md CLAUDE.md .github/workflows/workorder.yml && git commit -m 'Set up Workorder'
+[exit 0]
+
+$ printf '__pycache__/\n' > .gitignore
+[exit 0]
+
+$ workorder new --title "Add calc" --owner you --test "python3 test_calc.py" --code-paths calc.py
+Warning: test_calc.py does not exist; create it in this change or correct --test.
+TASK-1 opened: tasks/TASK-1.md (local id: no origin remote, so other clones could pick the same id)
+[exit 0]
+
+$ python3 - <<'PY'
+import pathlib,re
+p=pathlib.Path('tasks/TASK-1.md'); s=p.read_text()
+s=re.sub(r'(## Scope\n)(.*?)(\n## )', lambda m: m.group(1)+'\nIn: add two numbers with `add(a, b)` in calc.py.\nOut: subtraction and other operations.\n'+m.group(3), s, count=1, flags=re.S)
+s=re.sub(r'(## Acceptance\n)(.*?)(\n## |\Z)', lambda m: m.group(1)+'\n- `add(2, 2)` returns `4`.\n'+m.group(3), s, count=1, flags=re.S)
+p.write_text(s)
+PY
+[exit 0]
+
+$ cat tasks/TASK-1.md
+---
+id: "TASK-1"
+title: "Add calc"
+owner: "you"
+business_owner: ""
+priority: ""
+created_at: "2026-11-17"
+mission: ""
+depends_on: []
+blocks: []
+next: ""
+summary: ""
+status: "IN_PROGRESS"
+ships: "none"
+waits_on: []
+test: "python3 test_calc.py"
+code_paths: ["calc.py"]
+contract: "none"
+---
+
+# TASK-1
+
+## Context
+
+<!-- Why this task exists and what it touches. -->
+
+## Scope
+
+In: add two numbers with `add(a, b)` in calc.py.
+Out: subtraction and other operations.
+
+## Lanes
+
+<!-- Parallel streams of work and who or what owns each. -->
+
+## Acceptance
+
+- `add(2, 2)` returns `4`.
+
+## Progress
+
+<!-- Dated notes: workorder note adds one, workorder show prints them. The status line is your claim; workorder show and workorder check compute what the receipts support. workorder done sets DONE only when its check supports the claim. -->
+[exit 0]
+
+$ git add . && git commit -qm "Workorder setup and TASK-1"
+check: OK
+Note: TASK-1: its test file is not there yet; an unfinished task may land
+checked 1 task (0 claimed DONE or CLOSED)
+[exit 0]
+
+$ git switch -c add-calc
+Switched to a new branch 'add-calc'
+[exit 0]
+
+$ printf 'def add(a, b):\n    return a - b\n' > calc.py
+[exit 0]
+
+$ printf 'from calc import add\n\nassert add(2, 2) == 4\n' > test_calc.py
+[exit 0]
+
+$ git add . && git commit -qm "Add calc"
+[exit 0]
+
+$ workorder done --task TASK-1 --note "add() works; next: subtraction"
+Traceback (most recent call last):
+  File "/tmp/wodemo/test_calc.py", line 3, in <module>
+    assert add(2, 2) == 4
+           ^^^^^^^^^^^^^^
+AssertionError
+TASK-1's test was written in this change
+Failure:
+TASK-1: DONE was not written; the status stays IN_PROGRESS
+  Missing:  a passing test on a083c1a
+  Next:     fix the code or the test, then run workorder done again
+[exit 1]
+
+$ printf 'def add(a, b):\n    return a + b\n' > calc.py
+[exit 0]
+
+$ git add . && git commit -qm "Fix add"
+[exit 0]
+
+$ workorder done --task TASK-1 --note "add() works; next: subtraction"
+TASK-1's test was written in this change
+Note: only the declared tests ran; the project's other tests did not run (set a project test with workorder init --project-test)
+Acceptance:
+- `add(2, 2)` returns `4`.
+Acceptance is not checked by Workorder: confirm each item is met.
+Note: TASK-1: its test passed when this check ran it
+TASK-1: - 2026-11-17: add() works; next: subtraction
+DONE  TASK-1
+
+  Claimed:  DONE
+  Evidence: the declared test passed on this code
+  Commit:   f9e57c1
+  Test:     PASS (exit 0, f9e57c1)
+  Command:  python3 test_calc.py
+
+  Result: the declared test passed on this code
+TASK-1 DONE: its declared test passed on this code
+commit tasks/ and .workorder/
+[exit 0]
+
+$ workorder show --task TASK-1
+TASK-1
+  Claimed:  DONE
+  Evidence: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it); computed: CLOSED
+still owes: nothing
+
+title:    Add calc
+owner:    you
+test:     python3 test_calc.py
+
+context:
+  (empty)
+
+scope:
+  In: add two numbers with `add(a, b)` in calc.py.
+  Out: subtraction and other operations.
+
+lanes:
+  (empty)
+
+acceptance:
+  - `add(2, 2)` returns `4`.
+
+history:
+  2026-11-17 11:50  implemented f9e57c1  (Your Name)
+  2026-11-17 11:50  test PASS: python3 test_calc.py on f9e57c1  (Your Name)
+
+progress:
+  - 2026-11-17: add() works; next: subtraction
+[exit 0]
+
+$ git add tasks/ .workorder/ && git commit -qm "Record TASK-1 completion"
+(reused from 11:50 UTC)
+check: OK
+Note: TASK-1: its test passed when this check ran it
+Acceptance lists are not checked; 1 supported claim rests on its declared test only.
+checked 1 task (1 claimed DONE or CLOSED); ran 1 task's declared test (cached)
+[exit 0]
+
+$ cat tasks/TASK-1.md
+---
+id: "TASK-1"
+title: "Add calc"
+owner: "you"
+business_owner: ""
+priority: ""
+created_at: "2026-11-17"
+mission: ""
+depends_on: []
+blocks: []
+next: ""
+summary: ""
+status: "DONE"
+ships: "none"
+waits_on: []
+test: "python3 test_calc.py"
+code_paths: ["calc.py"]
+contract: "none"
+---
+
+# TASK-1
+
+## Context
+
+<!-- Why this task exists and what it touches. -->
+
+## Scope
+
+In: add two numbers with `add(a, b)` in calc.py.
+Out: subtraction and other operations.
+
+## Lanes
+
+<!-- Parallel streams of work and who or what owns each. -->
+
+## Acceptance
+
+- `add(2, 2)` returns `4`.
+
+## Progress
+
+<!-- Dated notes: workorder note adds one, workorder show prints them. The status line is your claim; workorder show and workorder check compute what the receipts support. workorder done sets DONE only when its check supports the claim. -->
+- 2026-11-17: add() works; next: subtraction
+[exit 0]
+

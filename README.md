@@ -4,6 +4,8 @@ Every task is a Markdown file in `tasks/` that agents and people read and write:
 Together they give a clear history; the next session, or the next agent, picks up from it.
 `workorder done` refuses a DONE that the evidence does not support: the task's test must pass now and fail on the code before the change.
 
+![Comic: a coding agent says DONE and Workorder refuses until the task's test passes; then the next session picks up where the work left off from `workorder show`](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)
+
 [Reviewer guide](docs/reviewer-guide.md) · [Reference](docs/reference.md) · [Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder flags](docs/shortcuts.md)
 
 Needs Git and Python 3.10 or newer; no server or database. Tested in CI on Linux and Windows (Python 3.10, 3.12, 3.13).

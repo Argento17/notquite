@@ -8,7 +8,8 @@ from test_v16b_project import FAILURE, project
 
 
 def words(text):
-    return len(text.split())
+    # Image alt text (the demo GIF) describes a picture; the limits are for prose.
+    return len(' '.join(line for line in text.splitlines() if not line.startswith('![')).split())
 
 
 def section(text, heading):
