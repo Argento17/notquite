@@ -382,6 +382,8 @@ EXTENDED_ORDER = ("id", "title", "owner", "business_owner", "priority", "created
                   "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "test",
                   "contract")
 TASK_REF = r"[A-Z][A-Z0-9]*-[1-9][0-9]*"
+# feature and fix are descriptive; refactor and verification predeclare completion exemptions.
+TASK_KINDS = ("feature", "fix", "refactor", "verification")
 FRONT_MATTER_HELP = ("front matter takes `key: value` lines: plain single-line text, a JSON string, or a"
                      ' list such as ["TASK-1"]; mission, next and summary may use > or | blocks, and'
                      " depends_on, blocks, waits_on, test_paths and code_paths may use indented - item lines")
@@ -545,8 +547,8 @@ def record(root, tid, staged=False):
         raise Refused(f"{tid}: unknown status {fields['status']!r}; use {', '.join(STATUSES)}")
     if fields["ships"] not in {"none", "repo", "live"}:
         raise Refused(f"{tid}: ships must be none, repo or live")
-    if "kind" in fields and fields["kind"] not in ("refactor", "verification"):
-        raise Refused(f"{tid}: kind must be refactor or verification")
+    if "kind" in fields and fields["kind"] not in TASK_KINDS:
+        raise Refused(f"{tid}: kind must be feature, fix, refactor or verification")
     if "merge_ref" in fields:
         ref = fields["merge_ref"]
         if (not isinstance(ref, str) or not ref.startswith(("refs/heads/", "refs/remotes/"))
@@ -660,15 +662,19 @@ def task_text(tid, data, template):
         order.insert(order.index("test") + 1, "test_paths")
     if 'code_paths' in extended:
         order.insert(order.index('contract'), 'code_paths')
+    if 'kind' in extended:
+        order.insert(order.index('contract'), 'kind')
     return ("---\n" + "".join(f"{k}: {packed(extended[k])}\n" for k in order)
             + f"---\n\n# {tid}\n" + EXTENDED_BODY)
 
 
 def new(root, title, owner, ships="none", prefix="TASK", template="extended", test="", local_only=False,
-        test_paths=None, code_paths=None):
+        test_paths=None, code_paths=None, kind=None):
     repository(root)
     if template not in {"simple", "extended"}:
         raise Refused("template must be simple or extended")
+    if kind is not None and kind not in TASK_KINDS:
+        raise Refused("kind must be feature, fix, refactor or verification")
     if not re.fullmatch(r"[A-Z][A-Z0-9]*", prefix) or not title.strip() or not owner.strip():
         raise Refused("use an uppercase prefix, nonempty title and owner")
     if test.strip():
@@ -696,7 +702,8 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
         data = dict(id=tid, title=title, owner=owner, status="IN_PROGRESS", ships=ships,
                     waits_on=[], contract="none", **({"test": test} if test else {}),
                     **({"test_paths": list(test_paths)} if test_paths else {}),
-                    **({'code_paths': list(code_paths)} if code_paths is not None else {}))
+                    **({'code_paths': list(code_paths)} if code_paths is not None else {}),
+                    **({'kind': kind} if kind is not None else {}))
         if local or reserve(root, NAMESPACE + f"ids/{tid}", {**data, "at": now(), "who": who(root)}):
             path = directory / f"{tid}.md"
             with path.open("x", encoding="utf-8", newline="\n") as stream:
@@ -773,6 +780,23 @@ def holds(held, token):
     """True when this clone's private token matches the hash stored in the claim tag."""
     expected = held.get("token_sha256")
     return isinstance(expected, str) and hmac.compare_digest(expected, token_hash(token))
+
+
+def foreign_claim(root, tid):
+    """Another clone's active claim on tid, by the claim command's rule (this clone's private token).
+
+    None when the task is free, released or held here, or without an origin remote. Raises Refused
+    when origin cannot be read. Claims never expire; only a release ends one.
+    """
+    if not has_origin(root):
+        return None
+    held = active_claims(root).get(tid)
+    if not held or held["released"]:
+        return None
+    path = claim_token_path(root, tid)
+    if path.exists() and holds(held, path.read_text(encoding="utf-8")):
+        return None
+    return held
 
 
 def cache_reservation(root, ref, oid):

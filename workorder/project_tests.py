@@ -58,6 +58,56 @@ def configure(root, value, *, check=False):
     return True
 
 
+def remove(root, *, check=False):
+    """Turn the project test off, preserving other settings; a check reports whether it is off."""
+    settings = _settings(root)
+    if check or 'project_test' not in settings:
+        return 'project_test' not in settings
+    del settings['project_test']
+    s.local_path(root, CONFIG).write_text(json.dumps(settings, indent=2) + '\n', encoding='utf-8')
+    s.invalidate_reads()
+    return True
+
+
+def detect(root):
+    """The file or folder showing that the project's tests run with pytest, or None."""
+    sections = {'pyproject.toml': r'(?m)^\s*\[\s*tool\s*\.\s*pytest\b', 'setup.cfg': r'(?m)^\s*\[\s*tool:pytest\s*\]',
+                'tox.ini': r'(?m)^\s*\[\s*pytest\s*\]', 'pytest.ini': None, '.pytest.ini': None,
+                'pytest.toml': None, '.pytest.toml': None}
+    for name, section in sections.items():
+        path = s.local_path(root, name)
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        if section is None or re.search(section, text):
+            return name
+    for folder in ('tests', 'test'):
+        path = s.local_path(root, folder)
+        if path.is_dir() and any(item.is_file() for pattern in ('test_*.py', '*_test.py')
+                                 for item in path.rglob(pattern)):
+            return folder + '/'
+    return None
+
+
+def default_command():
+    """pytest reads testpaths and its other settings from the project's configuration itself."""
+    import shutil
+    python = 'python' if shutil.which('python') or not shutil.which('python3') else 'python3'
+    return f'{python} -m pytest -q'
+
+
+def runnable(value):
+    """Whether the default command's interpreter can import pytest here; never turn on a failing command."""
+    try:
+        return subprocess.run([value.split()[0], '-c', 'import pytest'], capture_output=True, timeout=60,
+                              env=s.copy_environment()).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _pytest(words):
     """Only direct pytest entry points have a known failure-selection protocol."""
     executable = Path(words[0].replace('\\', '/')).name

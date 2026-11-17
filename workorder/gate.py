@@ -2835,6 +2835,27 @@ def local_test_problems(root, base, record, *, pending_review=False, command_not
     return [comparison_message(line, base, ref, label) for line in labeled]
 
 
+def finished_by_other_holder(root, all_records, base, staged=False):
+    """Claims are advisory: name tasks finished in this change by someone other than the claim holder."""
+    finished = [tid for tid, record in sorted(all_records.items()) if record['status'] in FINISHED
+                and (fields_at(root, tid, base) or {}).get('status') not in FINISHED]
+    if not finished or not s.has_origin(root):
+        return []
+    try:
+        claims = s.active_claims(root)
+    except s.Refused:
+        return []
+    notes = []
+    for tid in finished:
+        held = claims.get(tid)
+        if not held or held['released']:
+            continue
+        finisher = latest_test_run(root, all_records[tid], staged).get('who')
+        if finisher and finisher != held.get('who'):
+            notes.append(f"{tid} was finished by {finisher} while {held['who']} held its claim (since {held['at']})")
+    return notes
+
+
 def latest_test_run(root, record, staged=False):
     """Only the latest counting run can carry completion flags."""
     history = s.entries(root, record['id'], staged)
@@ -4343,6 +4364,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 notes.append(f'{tid} is a declared refactor')
             if pending_review(root, record, base, staged):
                 notes.append(f'{tid} DONE pending review')
+        notes += finished_by_other_holder(root, all_records, base, staged)
     if not staged:
         from . import project_tests
         if run_tests:
@@ -4664,6 +4686,8 @@ def record_lines(root, tid):
     if s.dependencies(record):
         lines.append("waits_on: " + ", ".join(s.dependencies(record)))
     lines += ["", f"title:    {record['title']}", f"owner:    {record['owner']}"]
+    if record.get('kind'):
+        lines.append(f"kind:     {record['kind']}")
     for key in ("mission", "summary", "next"):
         if record.get(key, "").strip():
             lines.append(f"{key + ':':<9} {' '.join(record[key].split())}")

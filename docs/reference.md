@@ -10,9 +10,9 @@ Install: `pipx install workorder`.
 
 | Command | What it does |
 |---|---|
-| `workorder init [--check] [--force] [--claude] [--update-workflow] [--light] [--test-first] [--project-test CMD]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs the hook, and writes the workflow if absent. --project-test stores an optional repository test command in .workorder/config.json. --update-workflow rewrites the workflow with a diff; combined with --check it only previews changes. With --force a different hook is saved as pre-commit.workorder-previous and called first; --check reports missing setup without writes and exits 1 if incomplete. --claude merges project hooks into .claude/settings.json |
-| `workorder done --task ID [--note TEXT] [--timeout SECONDS] [--jobs N] [--needs-review] [--no-code-change] [--refactor] [--require-test-first]` | Refuses uncommitted code or empty Scope/Acceptance; runs the declared test and prints Acceptance for human confirmation. Writes DONE, receipts and the note together when supported; a refusal preserves the record. Never commits or pushes |
-| `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple] [--test COMMAND] [--test-paths PATH ...] [--code-paths PATH ...] [--local] [--test-first]` | Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote or with `--local` (no tag is pushed); writes `tasks/<id>.md` (extended by default; `simple` starts with the seven required fields). `ships` defaults to `none`; supplied paths are optional members in either template |
+| `workorder init [--check] [--force] [--claude] [--update-workflow] [--light] [--test-first] [--project-test CMD \| --no-project-test]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs the hook, and writes the workflow if absent. --project-test stores an optional repository test command in .workorder/config.json; a first init that finds pytest sets `python -m pytest -q` (see [project test](#current-runs-cache-and-summaries)); --no-project-test turns it off. --update-workflow rewrites the workflow with a diff; combined with --check it only previews changes. With --force a different hook is saved as pre-commit.workorder-previous and called first; --check reports missing setup without writes and exits 1 if incomplete. --claude merges project hooks into .claude/settings.json |
+| `workorder done --task ID [--note TEXT] [--timeout SECONDS] [--jobs N] [--needs-review] [--no-code-change] [--refactor] [--require-test-first] [--take-over]` | Refuses uncommitted code or empty Scope/Acceptance, and a task another clone has claimed unless `--take-over` is given (the takeover is added to Progress); runs the declared test and prints Acceptance for human confirmation. Writes DONE, receipts and the note together when supported; a refusal preserves the record. Never commits or pushes |
+| `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple] [--test COMMAND] [--test-paths PATH ...] [--code-paths PATH ...] [--kind feature\|fix\|refactor\|verification] [--local] [--test-first]` | `--kind` writes the task's `kind` field (none by default). Reserves the next id on `origin`, or numbers it locally when there is no `origin` remote or with `--local` (no tag is pushed); writes `tasks/<id>.md` (extended by default; `simple` starts with the seven required fields). `ships` defaults to `none`; supplied paths are optional members in either template |
 | `workorder receipt implemented --task ID` | Records the current commit as the implementation; refuses uncommitted or untracked code |
 | `workorder receipt test --task ID [--timeout SECONDS] [-- CMD...]` | Runs `CMD` freshly (no shell), records its exit code against the current commit |
 | `workorder receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to (needs `origin`) |
@@ -22,10 +22,10 @@ Install: `pipx install workorder`.
 | `workorder check --staged` | For the pre-commit hook: checks the staged versions of the tasks this commit touches (task file, receipts, contract or its evidence) and the tasks that depend on them; refuses a commit that newly claims DONE or CLOSED on code other than the implemented code, and command changes on unfinished tasks; notes finished-task test edits if the new command passes on staged code, with renewal after committing; the pull-request check requires the task label |
 | `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--review warn\|refuse] [--all-tests] [--require-task] [--require-task-ignore GLOB] [--require-test-first] [--approving-review] [--timeout SECONDS] [--jobs N]` | Checks changed task records and receipts, all repository test roots, every task whose tests changed, and dependents. Refuses stale claims, changed receipts, unsupported definitions and removed tasks; test changes are refused unless a reviewer adds the label or approves the current head; --review warn is optional. `--allow` accepts reviewed definition/test changes, REF failures and outcome changes, and complete removal of finished or cancelled tasks. `--run-tests` reruns the declared tests of supported claims; see [base checks](#checks-against-a-base) |
 | `workorder show --task ID` | The task as a record: Claimed and Evidence status, what is still owed, dependencies, title, owner and test; mission, summary and next when filled in; body sections, a dated receipt timeline, any computed merge and Progress notes. Prints a next step for outstanding evidence or unclaimed Acceptance work |
-| `workorder note --task ID [--next TEXT] [NOTE]` | Sets next when supplied; adds `- YYYY-MM-DD: NOTE` at the end of Progress when a note is supplied. Give either or both |
+| `workorder note --task ID [--next TEXT] [NOTE]` | Sets next when supplied; adds `- YYYY-MM-DD: NOTE` at the end of Progress when a note is supplied. Give either or both. Warns, without refusing, when another clone holds the task's claim (as does `receipt`) |
 | `workorder renew --task ID [--refactor \| --no-refactor] [--timeout SECONDS] [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded by `renew` |
 | `workorder repair --task ID` | Verifies a conflicted legacy append, keeps the common prefix, and converts each side's extra lines to receipt files |
-| `workorder claim --task ID` / `release --task ID [--force]` | Takes or gives up a task with a pushed tag; `--force` releases a claim whose clone or worktree is gone, and records that it was forced |
+| `workorder claim --task ID` / `release --task ID [--force]` | Takes or gives up a task with a pushed tag; `--force` releases a claim whose clone or worktree is gone, and records that it was forced. A claim is held by the clone that took it until released; `note` and `receipt` warn other clones, `done` refuses them without `--take-over`, and the pull-request check notes a task finished by someone other than its holder |
 | `workorder claims` | Active claims |
 | `workorder ready` | Open tasks: free, held, blocked, or waiting for delivery |
 | `workorder hook session-start` / `hook stop` | Local Claude Code session context and stop check; see [agent hooks](#agent-hooks) |
@@ -351,7 +351,8 @@ may be used; any other field (except `x-` fields) is refused, so typos are caugh
   paths of tasks adding implementation/test receipts. An empty list covers no
   code; unrelated or unscoped receipts cannot disable declared scopes.
   See [code changes](#code-changes-need-task-evidence).
-- `kind`: optional `refactor` or `verification`. It predeclares the completion
+- `kind`: optional `feature`, `fix`, `refactor` or `verification` (`workorder new --kind`).
+  `feature` and `fix` are descriptive. `refactor` and `verification` predeclare the completion
   exemption only when already present in the task definition on the comparison
   base. Adding it with the work does not preapprove that work.
 - `merge_ref`: a full branch ref, such as `refs/heads/release` or
@@ -881,8 +882,15 @@ workorder init --project-test "python -m pytest"
 ```
 
 This writes `project_test` in `.workorder/config.json`, preserving other settings.
-`init --check --project-test CMD` checks the setting without writing; plain
-`init` leaves it unchanged. Commit this configuration. The command runs freshly
+`init --check --project-test CMD` checks the setting without writing. A first
+`init` (no workflow or agent block yet, no `project_test` set) that finds pytest
+configuration (pyproject.toml `[tool.pytest...]`, setup.cfg `[tool:pytest]`,
+pytest.ini, tox.ini `[pytest]`) or a `tests/` or `test/` folder with
+`test_*.py`/`*_test.py` files sets `python -m pytest -q` (`python3` when only
+that is on PATH) and prints one line saying so; when that interpreter cannot
+import pytest it leaves the project test off and says so; pytest applies the project's
+`testpaths`. `init --no-project-test` keeps it off or removes it. A later plain
+`init` leaves the setting unchanged. Commit this configuration. The command runs freshly
 on current code during `done` and `check --run-tests`, including
 `--run-tests --all-tests`; pre-commit does not run it. This is additional to the
 declared task commands and writes no separate task receipt.
