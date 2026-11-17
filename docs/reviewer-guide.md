@@ -93,6 +93,7 @@ With a local target, `done --refactor`, `done --no-code-change` and pre-commit p
 **Clear:** Install dependencies and make the tests import this checkout's project, using a suitable pytest `pythonpath` or non-editable install; fetch missing refs and fix the named command/setup error. Recheck isolated Python commands too. An unavailable comparison can instead be accepted with an approving review or `workorder-allow:ID` (`workorder-allow:tests` for an unowned file); warning mode does not suffice. This accepts the missing comparison, never a failing current task test. Pytest exit codes include plain meanings, such as `5 (no tests were collected)`.
 A predeclared task kind does not accept an unavailable comparison. `done --needs-review` can record it; pre-commit prints a Note and permits committing the pending claim, while the pull-request check keeps refusing until an approving review or the task label is supplied.
 Fresh pytest comparisons verify imports in the test interpreter before loading conftests or tests, using pytest's selected configuration and plugins. This startup has a 60-second limit; an earlier declared test timeout still stops the run with exit 124, and the test's deadline is not reset after verification. Cached test results still require a fresh standalone import probe with its own 10-second limit. Missing or timed-out verification cannot establish a passing comparison. A missing-pytest warning requires a separate import probe to confirm absence; duplicate availability markers are refused.
+Standard editable installs of a flat or src layout (a `.pth` naming the work tree or its `src/`, setuptools' editable finder, the editables redirector) serve the comparison copy: in the copy's test interpreter those locations point at the same place in the copy. Everything else still counts as outside the copy and refuses: a package-dir remap, a folder Git ignores (setuptools' strict link tree; advice: install non-editable or from tracked sources), another checkout's install, `PYTHONPATH`, and any interpreter run with `-I`/`-E` (advice for a namespace folder: drop the flag or install non-editable).
 Temporary comparison copies are removed after their Git processes exit, including failed or timed-out runs.
 
 <!-- refusal-family workflow -->
@@ -134,12 +135,12 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
 <!-- refusal-inventory workorder/project_tests.py fc157b3a0b1a14f0dc1c71dd6f027c0192ab771707662535acef5dfa5384a715 project-test,records -->
 <!-- refusal-inventory workorder/pytest_selection.py bcff8a23918c0320f921d46b229359bc41237be3055be093a6e746860395d35b weak-tests,imports -->
-<!-- refusal-inventory workorder/python_imports.py 6c7412fae56fed15a3a03a97cce2e13a2c817e8ad8d3edacc2d5f84de537d420 imports -->
+<!-- refusal-inventory workorder/python_imports.py f5509e0980385e3528ad9c4392c976f74485a7ef1a1111a43afb1e25164d7f8b imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py eb4f44bed0237af818fbf4bbe9a940c491ec4d700d4cdcd8213289f44ea93b95 definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py 5e64343a0a8d165f8d52dda15f68fac33cffc73cbf77dfc5e3d12cbdebfcab17 records,evidence,current-tests,removal,pending -->
+<!-- refusal-inventory workorder/store.py 3eff0394e2a956cf8b2102a43d4faef983d65dfefce4174d179c28b830ef775a records,evidence,current-tests,removal,pending -->
 <!-- refusal-inventory workorder/git_reads.py 9ee3d14e67661f1bfbb3586b996fadde5f007a1c5db9f17bc53155c9a3339d70 records,evidence -->
 <!-- refusal-inventory workorder/timing.py 37bdb892641d496f8a9cae72b0d4c678ad6792a11710367957ad4be560842cfa current-tests -->
 <!-- refusal-inventory workorder/console.py 3ae31468d7e4e08ccd65efbd12914e8ca978af0c4b60c4d5d39e83e444d6bee2 records,current-tests -->
