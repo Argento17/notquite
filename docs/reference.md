@@ -1026,7 +1026,7 @@ jobs:
           gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/events" > "$RUNNER_TEMP/workorder-label-events.json"
           gh api --paginate --slurp "repos/$GH_REPO/pulls/$PR_NUMBER/reviews" > "$RUNNER_TEMP/workorder-reviews.json"
           allowances=$(python -m workorder.review_labels "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/workorder-label-events.json" "$RUNNER_TEMP/workorder-reviews.json" "$BASE")
-          # Test changes are refused unless a reviewer other than the author adds the label or approves this head; --review warn is optional.
+          # Changes to existing tests are refused unless a reviewer other than the author adds the label (approval is not enough); approving this head clears other findings; --review warn is optional.
           workorder check --base "$BASE" --run-tests --all-tests --require-task $allowances
 ```
 
@@ -1050,8 +1050,8 @@ written and finished in one change, assertion and stub findings, test-first exce
 tasks whose tests fail, unavailable comparisons and refactor/verification completions not predeclared
 on the base. Each refusal says which applies (`an approving review clears this`, or
 `a reviewer accepts it with the label ... (an approving review is not enough: ...)`). Accepted
-findings print as `accepted by an approving review: TASK-3 (new task)` (with a label as well, the
-label's items are listed there too); label-only findings left print as `approval did not cover:`. Failed current tests and unsupported
+findings print as `accepted by an approving review: TASK-3 (new task)`; items a given label cleared print as
+`accepted by the label workorder-allow:TASK-3: ...`; label-only findings left print as `approval did not cover:`. Failed current tests and unsupported
 claims always refuse.
 
 The workflow rule covers `.github/workflows/workorder.yml` and a renamed generated workflow, found by

@@ -93,6 +93,11 @@ SOLO_LIMIT = ('Solo mode: your own workorder-allow labels count as owner accepta
               ' credentials could add them, so give agents a token without permission to label pull requests.')
 
 
+OLD_REVIEW_COMMENT = ('# Test changes are refused unless a reviewer other than the author adds the label or approves'
+                      ' this head; --review warn is optional.')
+NEW_REVIEW_COMMENT = ('# Changes to existing tests are refused unless a reviewer other than the author adds the label'
+                      ' (approval is not enough); approving this head clears other findings; --review warn is optional.')
+
 def default_branch(root):
     """Choose the push trigger from local refs without fetching during setup."""
     remote_head = s.git(root, 'symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD',
@@ -455,7 +460,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             + (' --require-acceptance' if require_acceptance else '')).replace(
             '@REVIEW_COMMENT@', '# Trial setup: restore defaults with workorder init --update-workflow.' if light
             else "# Solo mode: the owner's own labels count as owner acceptance, never as review; an approval by someone else still counts." if solo
-            else '# Test changes are refused unless a reviewer other than the author adds the label or approves this head; --review warn is optional.').replace(
+            else NEW_REVIEW_COMMENT).replace(
             '@AUTHOR_ENV@', SOLO_AUTHOR_ENV if solo else '').replace(
             '@SOLO_LOOKUP@', SOLO_LOOKUP if solo else '').replace('@SOLO_OPTION@', SOLO_OPTION if solo else '')
         original = path.read_text(encoding='utf-8') if path.exists() else ''
@@ -464,9 +469,13 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
                                               workflow.splitlines(keepends=True),
                                               fromfile=str(path.relative_to(root)),
                                               tofile=str(path.relative_to(root)))), end='')
+        # 1.0's review comment said approval clears test edits; the corrected comment changes no step.
+        comment_only = original != workflow and original.replace(OLD_REVIEW_COMMENT, NEW_REVIEW_COMMENT) == workflow
         if check:
-            missing |= original != workflow
-            print('.github/workflows/workorder.yml: ' + ('needs update' if original != workflow else 'up to date'))
+            missing |= original != workflow and not comment_only
+            print('.github/workflows/workorder.yml: ' + (
+                'up to date (only its review comment is older; --update-workflow corrects it)' if comment_only
+                else 'needs update' if original != workflow else 'up to date'))
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(workflow, encoding='utf-8', newline='\n')
