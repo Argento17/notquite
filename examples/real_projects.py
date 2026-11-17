@@ -182,9 +182,12 @@ def cases(seed, commit_id, project, package_path, output, env, prepared_python=N
         location = run([python, '-c', f'import {package}; print({package}.__file__)'], folder, log, probe_env).strip()
         if not prepared_python and not Path(location).resolve().is_relative_to(repo.resolve()):
             raise RuntimeError(f'{project} editable install resolves outside its clone: {location}')
-        run(wo + ['init'], repo, log, env)
+        # As in an activated virtual environment: the detected project test's plain
+        # `python -m pytest -q` runs with this project's interpreter.
+        case_env = {**env, 'PATH': str(Path(python).parent) + os.pathsep + env.get('PATH', '')}
+        run(wo + ['init'], repo, log, case_env)
         if case in CLICK_CASES:
-            results.append(click_shared_case(repo, log, env, python, case, commit_id))
+            results.append(click_shared_case(repo, log, case_env, python, case, commit_id))
             continue
         source = repo / package_path / '_workorder_example.py'
         tests = repo / 'tests/test_workorder_example.py'
@@ -212,17 +215,17 @@ def cases(seed, commit_id, project, package_path, output, env, prepared_python=N
         test_command = [python, '-m', 'pytest', '-q', 'tests/test_workorder_example.py']
         run(wo + ['new', '--local', '--title', f'{project}: {case}', '--owner', 'example',
                   '--ships', 'none', '--test', shlex.join(test_command), '--code-paths', str(source.relative_to(repo))],
-            repo, log, env)
+            repo, log, case_env)
         definition = repo / 'tasks/TASK-1.md'
         replace(definition, '## Scope\n', '\n## Scope\n\nProvide clean_label using the project API.\n')
         replace(definition, '## Acceptance\n', '\n## Acceptance\n\n- clean_label removes surrounding whitespace and preserves plain labels.\n')
         if case == 'refactor':
             # A refactor is planned as one: its kind lands with the definition.
             replace(definition, '\ncontract:', '\nkind: refactor\ncontract:')
-        commit(repo, log, env, 'Define the task before its implementation')
-        base = git(repo, log, env, 'rev-parse', 'HEAD').strip()
-        git(repo, log, env, 'update-ref', 'refs/remotes/origin/main', base)
-        git(repo, log, env, 'checkout', '-qb', 'workorder-example')
+        commit(repo, log, case_env, 'Define the task before its implementation')
+        base = git(repo, log, case_env, 'rev-parse', 'HEAD').strip()
+        git(repo, log, case_env, 'update-ref', 'refs/remotes/origin/main', base)
+        git(repo, log, case_env, 'checkout', '-qb', 'workorder-example')
         if case in {'feature', 'bugfix'}:
             source.write_text(code)
             tests.write_text(test_text)
@@ -237,18 +240,18 @@ def cases(seed, commit_id, project, package_path, output, env, prepared_python=N
             else:
                 tests.write_text('import pytest\n' + test_text.replace('def test_clean_label():',
                     '@pytest.mark.skip(reason="example shortcut")\ndef test_clean_label():'))
-        commit(repo, log, env, case)
+        commit(repo, log, case_env, case)
         honest = case in {'feature', 'bugfix', 'refactor'}
         done = run(wo + ['done', '--task', 'TASK-1', *(['--refactor'] if case == 'refactor' else [])],
-                   repo, log, env, expected=0 if honest else 1)
+                   repo, log, case_env, expected=0 if honest else 1)
         if honest and 'TASK-1 DONE:' not in done:
             raise RuntimeError(f'{project}/{case} did not reach DONE: {log}')
         if not honest:
             # Exercise a false DONE claim as well as the user-facing refusal.
-            run(wo + ['renew', '--task', 'TASK-1'], repo, log, env)
+            run(wo + ['renew', '--task', 'TASK-1'], repo, log, case_env)
             replace(definition, 'status: "IN_PROGRESS"', 'status: "DONE"')
         checked = run(wo + ['check', '--base', 'origin/main', '--run-tests', '--all-tests', '--require-task'],
-                      repo, log, env, expected=0 if honest else 1)
+                      repo, log, case_env, expected=0 if honest else 1)
         reason = {'assert-true': 'asserts nothing that can fail', 'expected-value': 'its tests from origin/main fail',
                   'skip': 'new skip or xfail behavior'}.get(case)
         if reason and reason not in checked:

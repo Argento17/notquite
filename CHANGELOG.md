@@ -22,6 +22,17 @@
   everything. A test name such as `test_x[SHOUT-1]` is no longer reported as
   another task's finding. A refused `done` with 1173 failing click tests went
   from 58,176 lines to 37.
+- A first `workorder init` that finds pytest (pytest configuration in
+  pyproject.toml, setup.cfg, pytest.ini or tox.ini, or a `tests/` or `test/`
+  folder of pytest files) turns on the project test `python -m pytest -q` and
+  prints one line saying so; `init --no-project-test` keeps it off or turns it
+  off. Existing setups and configurations are not changed.
+- Add `workorder new --kind feature|fix|refactor|verification`, written to the
+  task's `kind` field; `show` prints it. `feature` and `fix` are now valid kinds.
+- Claims are advisory: `note` and `receipt` warn when another clone holds the
+  task's claim, and `done` refuses such a task unless `--take-over` is given,
+  which adds the takeover to the task's Progress notes. The pull-request check
+  prints a Note when a task is finished by someone other than its claim holder.
 
 ## 0.17.0 (17 Nov 2026)
 

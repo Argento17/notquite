@@ -192,10 +192,10 @@ def test_only_base_kind_preapproves_exemption(local_repo, completion, kind, earl
         assert 'completion needs review' in result.stdout
 
 
-@pytest.mark.parametrize('kind', ['feature', '', ['refactor']])
+@pytest.mark.parametrize('kind', ['bugfix', '', ['refactor']])
 def test_invalid_task_kind_refuses(local_repo, kind):
     define(local_repo, kind=kind)
-    with pytest.raises(store.Refused, match='kind must be refactor or verification'):
+    with pytest.raises(store.Refused, match='kind must be feature, fix, refactor or verification'):
         store.record(local_repo, 'TASK-1')
 
 

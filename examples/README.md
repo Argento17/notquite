@@ -28,7 +28,9 @@ It needs Python 3.12 and network access, creates fresh temporary clones and
 virtual environments, installs each project editable, and checks six cases each
 in Click and attrs, plus three Click cases using its existing
 `tests/test_basic.py`. Eight honest changes must reach DONE without a label;
-seven shortcuts must be refused by both done and the pull-request check. Logs
+seven shortcuts must be refused by both done and the pull-request check. `workorder init` turns on
+the project test (`python -m pytest -q`), so each case runs with its virtual
+environment first on PATH, as when it is activated. Logs
 and resolved commit IDs remain in the printed temporary folder.
 
 The shared-file cases append a callable-only test that must be refused and a

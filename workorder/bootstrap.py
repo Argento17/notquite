@@ -208,10 +208,24 @@ def claude_settings(root):
 
 @s.changing_repository()
 def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False,
-               project_test=None):
+               project_test=None, no_project_test=False):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
     from .python_imports import installed_src
     from . import project_tests
+    detected = None
+    if project_test is None and not no_project_test and 'project_test' not in project_tests._settings(root):
+        # Only a first setup turns it on: re-running init after an upgrade keeps existing choices.
+        configured = s.local_path(root, '.github/workflows/workorder.yml').exists() or any(
+            AGENT_BLOCK.strip() in (s.local_path(root, name).read_text(encoding='utf-8')
+                                    if s.local_path(root, name).is_file() else '')
+            for name in ('AGENTS.md', 'CLAUDE.md'))
+        detected = None if configured else project_tests.detect(root)
+        if detected:
+            project_test = project_tests.default_command()
+            if not project_tests.runnable(project_test):
+                print(f'.workorder/config.json: pytest found in {detected}, but {project_test.split()[0]} cannot'
+                      ' import pytest here; project test left off (set one with workorder init --project-test CMD)')
+                detected, project_test = None, None
     project_matches = project_tests.configure(root, project_test, check=True) if project_test is not None else True
     installed = installed_src(root)
     if installed:
@@ -313,7 +327,16 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             path.write_text(json.dumps(updated, indent=2) + '\n', encoding='utf-8', newline='\n')
             written.append('.claude/settings.json')
             print('.claude/settings.json: installed SessionStart and Stop hooks')
-    if project_test is not None and not project_matches:
+    if detected:
+        if check:
+            print(f'.workorder/config.json: init would turn the project test on: {project_test}'
+                  f' (pytest found in {detected}); --no-project-test keeps it off')
+        else:
+            project_tests.configure(root, project_test)
+            written.append(project_tests.CONFIG)
+            print(f'.workorder/config.json: project test on: {project_test} (pytest found in {detected});'
+                  ' turn it off with workorder init --no-project-test')
+    elif project_test is not None and not project_matches:
         if check:
             missing = True
             print('.workorder/config.json: project test needs update')
@@ -321,6 +344,16 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             project_tests.configure(root, project_test)
             written.append(project_tests.CONFIG)
             print('.workorder/config.json: project test set')
+    if no_project_test:
+        if project_tests.remove(root, check=True):
+            print('.workorder/config.json: project test off')
+        elif check:
+            missing = True
+            print('.workorder/config.json: project test is on; init --no-project-test turns it off')
+        else:
+            project_tests.remove(root)
+            written.append(project_tests.CONFIG)
+            print('.workorder/config.json: project test turned off')
     if not check:
         print('Files written:' if written else 'No files written.')
         for name in written:

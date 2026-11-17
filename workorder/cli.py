@@ -46,7 +46,11 @@ def parser():
     init.add_argument("--update-workflow", action="store_true", help="rewrite the workflow and show its diff; --check previews only")
     init.add_argument("--light", action="store_true", help="write a trial workflow with review warnings and no task requirement")
     init.add_argument('--test-first', action='store_true', help='require tests to land before implementation in the workflow')
-    init.add_argument('--project-test', metavar='CMD', help="set the project's test command in .workorder/config.json")
+    project = init.add_mutually_exclusive_group()
+    project.add_argument('--project-test', metavar='CMD', help="set the project's test command in .workorder/config.json"
+                         " (a first init turns on python -m pytest -q when it finds pytest tests)")
+    project.add_argument('--no-project-test', action='store_true',
+                         help="turn the project test off, or keep a first init from turning it on")
     hook = commands.add_parser("hook", help="run a local agent session or stop check")
     hook.add_argument("event", choices=["session-start", "stop"])
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
@@ -57,6 +61,8 @@ def parser():
     done.add_argument("--no-code-change", action="store_true", help="allow verification tasks with no code change")
     done.add_argument('--require-test-first', action='store_true', help='refuse tests added or changed with the implementation')
     done.add_argument('--verbose', action='store_true', help='print every finding and all test output instead of a summary')
+    done.add_argument('--take-over', action='store_true',
+                      help="finish a task another clone has claimed; the takeover is added to its Progress notes")
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
     new.add_argument("--owner", required=True)
@@ -76,6 +82,9 @@ def parser():
     new.add_argument("--acceptance", action="append", default=[], metavar="TEXT",
                      help="an Acceptance item (repeatable); end it with (test: path::name) to tie it to a"
                           " pytest test that done checks")
+    new.add_argument("--kind", choices=list(s.TASK_KINDS),
+                     help="the task's kind; refactor and verification predeclare those completions"
+                          " once the task lands (default: no kind)")
     new.add_argument("--template", choices=["extended", "simple"], default="extended",
                      help="extended: planning fields and Context/Scope/Lanes/Acceptance/Progress sections;"
                           " simple: the seven required fields only, as in 0.1.0 (default: extended)")
@@ -190,6 +199,18 @@ def other_findings(other):
               'workorder check --base <target> --run-tests shows them')
 
 
+def claim_warning(root, tid, action):
+    """Claims are advisory for note and receipt: name another holder and carry on."""
+    try:
+        held = s.foreign_claim(root, tid)
+    except s.Refused:
+        return None
+    if held:
+        print(f"Warning: {tid} is held by {held['who']} since {held['at']}; {action} anyway: "
+              f"coordinate with {held['who']}")
+    return held
+
+
 def done_refusal(tid, status, lines, other=(), *, needs_review=False):
     """Show this task's findings once and one next action; summarize other tasks."""
     reasons = list(dict.fromkeys(part.strip() for line in lines if line.startswith('  Missing:')
@@ -232,7 +253,7 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
 @s.test_output_session()
 @s.completion_transaction
 def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_change=False, refactor=False,
-                require_test_first=False, jobs=None):
+                require_test_first=False, jobs=None, take_over=False):
     """Use the same evidence and claim checks as the individual commands, restoring status on refusal."""
     status = None
     try:
@@ -243,6 +264,19 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                             f'IN_PROGRESS in tasks/{tid}.md, then run workorder done again')
         if note is not None and not note.strip():
             raise s.Refused('a note needs some text')
+        try:
+            held = s.foreign_claim(root, tid)
+        except s.Refused:
+            held = None
+            print('Note: claims were not checked: origin could not be reached')
+        if held:
+            print(f"Warning: {tid} is held by {held['who']} since {held['at']}; this clone does not hold its claim")
+            if not take_over:
+                done_refusal(tid, status, [
+                    f"  Missing:  {tid} is claimed by {held['who']} (since {held['at']})",
+                    f"  Next:     ask {held['who']} to release it, or run workorder done --task {tid} --take-over "
+                    'to finish it and record the takeover in its Progress notes'])
+                return 1
         if refactor and (needs_review or no_code_change):
             raise s.Refused('--refactor cannot be combined with --needs-review or --no-code-change')
         dirty = s.dirty_paths(root)
@@ -425,6 +459,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if refused:
             done_refusal(tid, status, lines, needs_review=needs_review)
             return 1
+        if held:
+            print(f"{tid}: " + s.add_note(root, tid, f"taken over from {held['who']} (claim held since "
+                                               f"{held['at']}) by {s.who(root)}"))
         if note is not None:
             print(f"{tid}: {s.add_note(root, tid, note)}")
         if base and (refactor or no_code_change):
@@ -494,13 +531,14 @@ def run_command(options, command, run):
             from .bootstrap import initialize
             return initialize(root, options.check, options.force, claude=options.claude,
                               update_workflow=options.update_workflow, light=options.light, test_first=options.test_first,
-                              project_test=options.project_test)
+                              project_test=options.project_test, no_project_test=options.no_project_test)
         elif options.action == "hook":
             from .hooks import run
             return run(root, options.event)
         elif options.action == "done":
             return finish_task(root, s.task_id(options.task), options.note, options.timeout,
-                               options.needs_review, options.no_code_change, options.refactor, options.require_test_first, options.jobs)
+                               options.needs_review, options.no_code_change, options.refactor, options.require_test_first, options.jobs,
+                               take_over=options.take_over)
         elif options.action == "new":
             shared = s.has_origin(root) and not options.local
             if options.test_paths is None and gate.wrapper_paths({'test': options.test}) is not None:
@@ -542,12 +580,14 @@ def run_command(options, command, run):
                 s.print_test_output(output, label='The declared test fails as required.')
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
                         options.template, options.test, options.local, test_paths=named, code_paths=options.code_paths,
-                        acceptance=options.acceptance)
+                        acceptance=options.acceptance, kind=options.kind)
             where = ("reserved on origin" if shared
                      else "local id: local numbering requested, not reserved on origin" if options.local
                      else "local id: no origin remote, so other clones could pick the same id")
             print(f"{tid} opened: tasks/{tid}.md ({where})")
         elif options.action == "receipt":
+            s.record(root, options.task)
+            claim_warning(root, options.task, 'recording evidence')
             if options.kind == "test" and not command:
                 command = gate.declared_test(s.record(root, options.task)) or []  # the task's own test
             item = s.receipt(root, options.task, options.kind, command, options.target, options.ref,
@@ -577,6 +617,8 @@ def run_command(options, command, run):
                 raise s.Refused("give a note or --next TEXT")
             if options.text is not None and not options.text.strip():
                 raise s.Refused("a note needs some text")
+            s.record(root, options.task)
+            claim_warning(root, options.task, 'adding the note')
             if options.next_text is not None:
                 s.set_task_field(root, options.task, 'next', options.next_text)
                 print(f"{options.task}: next: {options.next_text}")
