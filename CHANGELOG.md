@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.18.0 (unreleased)
+## 0.18.0 (17 Nov 2026)
 
 - The project-import check waits up to 60 s for a cold interpreter (was 10 s), so a slow machine no
   longer turns an honest comparison into "could not compare".
