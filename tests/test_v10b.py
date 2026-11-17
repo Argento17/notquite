@@ -374,6 +374,9 @@ def test_copy_git_and_tests_do_not_inherit_repository_environment(local_repo, tm
 
 @pytest.mark.parametrize('action', ['done', 'pre-commit', 'stop'])
 def test_local_checks_ignore_tests_and_requirements_added_only_on_target(local_repo, monkeypatch, capsys, action):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     if action == 'pre-commit' and os.name == 'nt':
         pytest.skip('executes a POSIX pre-commit hook')
     root = local_repo

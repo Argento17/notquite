@@ -113,6 +113,9 @@ def test_new_wrapper_requests_explicit_test_paths_before_writing(local_repo):
 
 @pytest.mark.parametrize('action', ['done', 'staged', 'stop'])
 def test_changed_command_refuses_done_but_finished_hooks_note(local_repo, monkeypatch, capsys, action):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     reviewed_task(root)
     store.receipt(root, "TASK-1", "implemented")

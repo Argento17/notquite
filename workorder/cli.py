@@ -241,9 +241,8 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
                                   for reason in own):
         if any('its test must land on' in reason for reason in own):
             steps = [f'  Next:     land the failing test before the work; to request an exception, '
-                     f'run workorder receipt implemented --task {tid} and workorder receipt test --task {tid}, '
-                     f'then set status: DONE in tasks/{tid}.md; the pull request needs workorder-allow:{tid} '
-                     'or an approving review']
+                     f'run workorder done --task {tid} without --require-test-first; '
+                     f'the pull request needs workorder-allow:{tid} or an approving review']
         elif not needs_review:
             steps = [f'  Next:     fix the test, or run workorder done --task {tid} --needs-review; '
                      f'the pull request needs workorder-allow:{tid} or an approving review']
@@ -339,7 +338,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if implemented is None or implemented["code"] != s.code_digest(root, s.head(root)):
             item = s.receipt(root, tid, "implemented")
         item = s.receipt(root, tid, "test", command, timeout=timeout, no_code_change=no_code_change,
-                         refactor=refactor, pending_review=needs_review)
+                         refactor=refactor, pending_review=needs_review, completion=True)
         if item['exit_code'] == 0 and not item['valid']:
             print('test does not count: ' + invalid_reason(root, item))
             if s.dirty_paths(root):
@@ -387,11 +386,13 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                     findings = gate.covered_pending_findings(root, definition, revision)
                     if findings is not None:
                         declared[other] = findings
-            for problem in gate.repository_review_problems(root, revision, records):
+            for problem in gate.repository_review_problems(root, revision, records, run_tests=True,
+                                                           timeout=timeout):
                 problem = gate.comparison_message(problem, revision, base, label)
                 owner = problem.split(':', 1)[0]
                 owner = owner.split(', ', 1)[0]
-                line = gate.reviewer_label(problem, owner)
+                # A test file no task owns is accepted with workorder-allow:tests, as in the pull request.
+                line = gate.reviewer_label(problem, owner) if s.ID.fullmatch(owner) else problem
                 if needs_review:
                     notes.append(line)
                 else:
@@ -714,6 +715,8 @@ def run_command(options, command, run):
                 return 0
             if problems:
                 console.print_lines(problems)
+                if options.staged and not options.base and any(gate._accepts_allow_label(p) for p in problems):
+                    print(gate.LOCAL_REVIEW_HINT)
             for warning in counts.get('warnings', []):
                 print(f'Warning: {warning}')
                 if os.environ.get('GITHUB_ACTIONS'):

@@ -141,7 +141,10 @@ def test_init_installs_pep735_group(local_repo, group):
     assert 'no project test dependencies detected' not in result.stdout.lower()
 
 
-def test_merge_target_test_changes_are_not_refactor_edits(local_repo):
+def test_merge_target_test_changes_are_not_refactor_edits(local_repo, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     branch(root, test_text=TEST)
     (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))

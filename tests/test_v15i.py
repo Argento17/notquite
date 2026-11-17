@@ -52,7 +52,10 @@ def assert_review(root, tid='TASK-1', *, label_only=False):
 
 
 @pytest.mark.parametrize('repair', ['renew', 'done'])
-def test_refactor_test_edit_commits_and_advised_repair_works(local_repo, repair):
+def test_refactor_test_edit_commits_and_advised_repair_works(local_repo, repair, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     prepare(root)
     land(root)
@@ -125,7 +128,10 @@ def test_label_only_findings_have_done_route(local_repo, test_text, finding):
     assert finding in output, output
 
 
-def test_shared_file_stub_finding_reaches_pending_review(local_repo):
+def test_shared_file_stub_finding_reaches_pending_review(local_repo, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     prepare(root, code=CODE + '\ndef mul(a, b):\n    return a * b\n', kind='refactor')
     path = task(root, 'TASK-2', ships='none', test='python -m pytest -q tests/test_mul.py')
@@ -231,7 +237,10 @@ def test_named_check_reports_task_file_freshness(local_repo, own_change):
         assert 'the code has changed since' not in output
 
 
-def test_renewed_receipts_commit_has_no_repair_note(local_repo):
+def test_renewed_receipts_commit_has_no_repair_note(local_repo, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_on_branch(root)
     rename_branch_test(root)
@@ -271,7 +280,10 @@ def test_merge_only_test_change_reports_no_task_changed(local_repo):
 
 
 @pytest.mark.parametrize('path_map', [False, True])
-def test_existing_receipt_with_generated_paths_survives_removal(local_repo, path_map):
+def test_existing_receipt_with_generated_paths_survives_removal(local_repo, path_map, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     prepare(root)
     definition = root / 'tasks/TASK-1.md'

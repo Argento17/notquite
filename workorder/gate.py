@@ -2878,9 +2878,11 @@ def local_test_problems(root, base, record, *, pending_review=False, command_not
         notes.append(test_update_note(record['id'], 'test files', refactor=True))
     repaired = command_notes and test_update_noted(notes, record['id'])
     for problem in shared + compared:
-        if repaired and problem == refactor_edit:
+        # In warning mode or with a review request, a passing repair commits with its note;
+        # otherwise the edit refuses as in the pull request, naming its label.
+        if repaired and pending_review and problem == refactor_edit:
             continue  # a passing local edit can commit before dropping the refactor declaration
-        if repaired and str(problem).startswith(f"{record['id']}: its test files lost or changed"):
+        if repaired and pending_review and str(problem).startswith(f"{record['id']}: its test files lost or changed"):
             continue  # the passing repair note already explains renewal and review
         if problem == wrapper_note(record) and not kwargs.get('completed') and record['status'] not in FINISHED:
             if problem not in notes:
@@ -3006,6 +3008,82 @@ def covered_pending_findings(root, record, base):
             findings = set()
         findings.update(item['message'] for item in entry.get('pending_findings', []))
     return findings
+
+
+LOCAL_REVIEW_HINT = ('If intended: the pull request needs the label named above; commit with WORKORDER_REVIEW=warn '
+                     'and record the request with workorder done --task ID --needs-review')
+
+
+def local_review_warn():
+    """WORKORDER_REVIEW=warn is the local equivalent of check --review warn."""
+    return os.environ.get('WORKORDER_REVIEW', '').strip().lower() == 'warn'
+
+
+def claim_from_target(root, record, target, staged=False):
+    """A finished claim whose latest counting run is already on the target or on a commit being
+    merged (imported, not new), with its test files as they are there."""
+    tid = record['id']
+    if record['status'] not in FINISHED:
+        return False
+    run = latest_test_run(root, record, staged)
+    if not run:
+        return False
+    sources = [target] if target else []
+    merge_head = root / s.git(root, 'rev-parse', '--git-path', 'MERGE_HEAD').stdout.strip()
+    if merge_head.is_file():
+        sources += merge_head.read_text(encoding='ascii').split()
+    for source in sources:
+        if committed_status(root, tid, source) not in FINISHED:
+            continue
+        if run.get('hash') not in {entry['hash'] for entry in s.entries(root, tid, rev=source)}:
+            continue
+        # A test edit after the claim is judged as usual.
+        if not strict_test_files(root, record, source, staged) & raw_changed_paths(root, source, staged):
+            return True
+    return False
+
+
+def local_review_pending(root, record, staged=False, target=None):
+    """Locally, a reviewer finding is a note only in warning mode, for a declared review request,
+    or for a claim already on the target (grandfathered)."""
+    return (local_review_warn() or waiting_for_review(root, record, staged)
+            or claim_from_target(root, record, target, staged))
+
+
+def local_unowned_problems(root, target, all_records, *, staged=False, timeout=None, counts=None, notes=None):
+    """The pull-request check's findings for changed test files no task owns, against TARGET's merge base.
+
+    New skips or xfails and old versions failing on this code need workorder-allow:tests in the
+    pull request; locally they refuse, except in warning mode (WORKORDER_REVIEW=warn).
+    """
+    revision, label = comparison_base(root, target)
+    lines = repository_review_problems(root, revision, all_records, staged, run_tests=True, timeout=timeout,
+                                       counts=counts, notes=None)
+    lines = [comparison_message(line, revision, target, label) for line in lines
+             if not re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', str(line).split(':', 1)[0])]
+    if local_review_warn():
+        if notes is not None:
+            notes.extend(line for line in lines if line not in notes)
+        return []
+    return lines
+
+
+def missing_completion_problem(root, revision, record, staged=False, target=None):
+    """A DONE/CLOSED claim new since REVISION, on a task this change worked on, owes a done record.
+
+    Claims already on the target are grandfathered. done runs the comparisons the pull-request
+    check runs (base tests on this code, new skips, edited tests); a status set by hand skips them.
+    """
+    tid = record['id']
+    if record['status'] not in FINISHED or committed_status(root, tid, revision) in FINISHED:
+        return None
+    if claim_from_target(root, record, target, staged):
+        return None  # imported from the target, for example while merging it
+    if latest_test_run(root, record, staged).get('completion') or not task_change_touched(root, revision, record, staged):
+        return None
+    return (f'{tid}: says {record["status"]} without a workorder done completion record for this change; '
+            f'set status back to IN_PROGRESS and run workorder done --task {tid} '
+            f'(or --needs-review to ask a reviewer for workorder-allow:{tid} in the pull request)')
 
 
 def waiting_for_review(root, record, staged=False):
@@ -3356,7 +3434,8 @@ def local_regression_problems(root, base, *, exclude=(), staged=False, timeout=N
             if strict_test_files(root, record, revision, staged) & changed:
                 problems += local_test_problems(root, base, record, staged=staged, timeout=timeout,
                     notes=notes if notes is not None else [], results=results, counts=counts,
-                    pending_review=staged or pending_review, command_notes=staged)
+                    pending_review=pending_review or (staged and local_review_pending(root, record, staged, base)),
+                    command_notes=staged)
             failed = run_declared_test(root, record, counts, notes, results=results,
                                        regression=True, timeout=timeout)
             if failed:
@@ -4568,9 +4647,20 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 except (OSError, s.Refused, ValueError, TypeError, KeyError, AttributeError,
                         subprocess.SubprocessError):
                     owns_change = False
+            if local_base:
+                missing = missing_completion_problem(root, revision, record, staged=True, target=local_base)
+                if missing and local_review_warn():
+                    notes.append(missing)
+                elif missing:
+                    problems.append(missing)
             if local_base and (tid in worked or owns_change):
+                # The pull-request check refuses these findings until a reviewer accepts them;
+                # a label cannot exist locally, so only a declared review request (done
+                # --needs-review) or local warning mode lets the commit through with a note.
                 problems += local_test_problems(root, local_base, record, timeout=timeout, staged=True,
-                                                counts=counts, notes=notes, results=results, pending_review=True,
+                                                counts=counts, notes=notes, results=results,
+                                                pending_review=local_review_pending(root, record, staged=True,
+                                                                                   target=local_base),
                                                 command_notes=True)
         if run_tests and tid in worked and not all_tests and not found and record["status"] in FINISHED:
             if staged and declared_test(record) and _test_key(record, timeout) not in results:
@@ -4601,6 +4691,8 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         for target in sorted(targets - {None}):
             problems += local_regression_problems(root, target, staged=True, timeout=timeout,
                                                   notes=notes, results=results, counts=counts, jobs=jobs)
+            problems += local_unowned_problems(root, target, all_records, staged=True, timeout=timeout,
+                                               counts=counts, notes=notes)
     if base:
         for tid, record in sorted(all_records.items()):
             if record['status'] not in FINISHED:

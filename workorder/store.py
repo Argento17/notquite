@@ -1261,6 +1261,8 @@ def verify_receipt(root, tid, value):
                 or not isinstance(item.get("command"), list) or not item["command"]
                 or any(not isinstance(a, str) for a in item["command"])):
             raise Refused(f"{tid}: command receipt needs its arguments, exit code and validity")
+    if 'completion' in item and (item['kind'] != 'test' or item['completion'] is not True):
+        raise Refused(f'{tid}: invalid completion record')
     if 'no_code_change_base' in item:
         if (item['kind'] != 'test' or item.get('no_code_change') is not True
                 or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', str(item['no_code_change_base']))):
@@ -2042,7 +2044,7 @@ def missing_test_dependency(command, code, output, root=None):
 
 
 def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None,
-            no_code_change=False, refactor=False, pending_review=False):
+            no_code_change=False, refactor=False, pending_review=False, completion=False):
     repository(root)
     definition = record(root, tid)
     commit = head(root)
@@ -2064,6 +2066,9 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         data['refactor'] = True
     if kind == 'test' and pending_review:
         data['pending_review'] = True
+    if kind == 'test' and completion:
+        # Written only by done, whose proposed receipts are kept only with a supported DONE.
+        data['completion'] = True
     if kind == 'implemented':
         from . import gate
         base, _ = gate.implementation_base(root, definition)

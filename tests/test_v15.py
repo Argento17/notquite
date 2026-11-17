@@ -207,6 +207,9 @@ def finished_command(root, target):
 @pytest.mark.parametrize('target', [False, True])
 @pytest.mark.parametrize('action', ['staged', 'stop'])
 def test_finished_test_command_repair_is_a_local_note(local_repo, monkeypatch, capsys, target, action):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     base = finished_command(root, target)
     if action == 'staged':
@@ -230,7 +233,10 @@ def test_finished_test_command_repair_is_a_local_note(local_repo, monkeypatch, c
 
 
 @pytest.mark.parametrize('staged_passes', [False, True])
-def test_command_repair_uses_staged_test_not_working_copy(local_repo, staged_passes):
+def test_command_repair_uses_staged_test_not_working_copy(local_repo, staged_passes, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_command(root, True)
     path = root / 'test_math.py'

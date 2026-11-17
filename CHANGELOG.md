@@ -48,6 +48,15 @@
   this change", not "written"; new tests in a shared test file are attributed to
   the tasks this change works on ("shared by ..." when several); a reused test
   result says "(result reused from the run at HH:MM UTC; nothing it covers changed since)".
+- Local checks give the pull-request check's answer: `done`, the pre-commit hook and
+  the Stop hook refuse, against the target's merge base, edited or removed tests,
+  new skips/xfails and earlier test versions failing on the new code (including test
+  files no task owns), and name the label the pull request needs. `WORKORDER_REVIEW=warn`
+  turns those reviewer findings into notes locally, as `--review warn` does in CI;
+  a task with `done --needs-review` keeps its pending findings as notes.
+- `done` records `completion: true` in its test receipt. Pre-commit and Stop refuse a
+  DONE/CLOSED claim new since the target on a task this change worked on without that
+  record (a hand-set status); claims already on the target are not re-judged.
 
 ## 0.17.0 (17 Nov 2026)
 
