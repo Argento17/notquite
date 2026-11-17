@@ -6,7 +6,7 @@ import json
 import re
 import sys
 
-from . import gate
+from . import console, gate
 from . import store as s
 
 
@@ -190,10 +190,9 @@ def run(root, event):
             revision = gate.comparison_base(root, base)[0] if base else 'HEAD'
             problems += gate.local_command_problems(root, revision, record, allow_finished=True,
                                                     notes=notes, results=results, staged=staged)
-    for note in gate.summarize_notes(notes):
-        print(f'Note: {note}')
+    console.print_lines(gate.summarize_notes(notes, console.verbose()), prefix='Note: ')
     if problems:
-        print('\n'.join(line if line.startswith('NOT DONE') else 'NOT DONE  ' + line
-                        for line in problems), file=sys.stderr)
+        console.print_lines((line if line.startswith('NOT DONE') else 'NOT DONE  ' + line
+                             for line in problems), file=sys.stderr)
         return 2
     return 0

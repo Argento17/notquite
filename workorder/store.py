@@ -70,8 +70,8 @@ def print_test_output(output, errors='', failed=False, label=None):
         print(label)
     elif failed:
         print('Failure:')
-    print(output, end='')
-    print(errors, end='', file=sys.stderr)
+    from .console import test_output
+    test_output(output, errors)
 
 
 _REUSE_TESTS = ContextVar("workorder_reuse_tests", default=False)

@@ -77,7 +77,7 @@ Temporary comparison copies are removed after their Git processes exit, includin
 <!-- refusal-family project-test -->
 ## The optional project test finds a regression
 **Meaning:** The project test failed. Workorder reruns identifiable failing pytest tests on the base: an old failure is a note, a newly failing test refuses, and an unavailable result stays explicit. Other test tools cannot supply this per-test distinction.
-Passing pytest project tests print one note with pytest's counts. Failures show the failed-test summary, up to 60 lines per failing test (with a truncation notice), and counts; base reruns show only counts. Passing-test output is omitted. Startup and interrupted-run diagnostics remain visible; unreadable or missing reports cannot establish a base comparison.
+Passing pytest project tests print one note with pytest's counts. Failures show the first 5 FAILED lines, the first 20 lines of the first failure (once per command run), and counts; newly failing tests are one finding line with a count and the first 5 names. `--verbose` prints every line; the full text is also saved in `.git/workorder/last-output.txt`. Base reruns show only counts. Passing-test output is omitted. Startup and interrupted-run diagnostics remain visible; unreadable or missing reports cannot establish a base comparison.
 **Clear:** Fix the regression or test environment. A reviewer may accept a project finding with `workorder-allow:tests` or an approving review; task-current failures still refuse. Old project failures need no label. Set the command with `workorder init --project-test "python -m pytest"`; without one, the note says only declared task tests ran. Pre-commit does not run this optional command.
 
 <!-- refusal-family renewal -->
@@ -102,17 +102,17 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/__init__.py 51c6a4d75952a2c005eb33acda81f0834b2f1e0dffae215a7d9cd26f48759af2 records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
 <!-- refusal-inventory workorder/bootstrap.py afbf495c278cce882cf2ada62aa0733d152031899bc34b014662db31bf13b82e records,workflow,project-test -->
-<!-- refusal-inventory workorder/cli.py 80e0b2ffe288e3cbb46c898776b31fa0c8ca317547390b86c8c92928246576dc records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
+<!-- refusal-inventory workorder/cli.py 09a483362f52a4eb4ed070df6647e5b4c11c5edca3055944a4fa3935319f14ab records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
 <!-- refusal-inventory workorder/gate.py 61f972f495d0ffb5033be3b3308d34a5af41afe3509c38894b561f6fa552c67b code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
-<!-- refusal-inventory workorder/hooks.py 4c890e78327bd094ac6f84882d7e42640cb88130f5232d92f7f23bbea6502a79 evidence,current-tests,test-edits,pending,renewal -->
+<!-- refusal-inventory workorder/hooks.py eea945bdbe5f51c5d04133b3f6f37d728dd4ed7acfe3d1ac5b48e47ca5b1822f evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
-<!-- refusal-inventory workorder/project_tests.py 1730660955101d7371e31e3502dc368de1af06e7bd6c400acc84f4309c54c0a9 project-test,records -->
+<!-- refusal-inventory workorder/project_tests.py 59fbfd2e9dec4b413b2cf8d1ff6d443c261f26cef4005eb38ed5f028cefd9d9f project-test,records -->
 <!-- refusal-inventory workorder/pytest_selection.py bcff8a23918c0320f921d46b229359bc41237be3055be093a6e746860395d35b weak-tests,imports -->
 <!-- refusal-inventory workorder/python_imports.py 6c7412fae56fed15a3a03a97cce2e13a2c817e8ad8d3edacc2d5f84de537d420 imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
 <!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py 01600835b4480ed2a4fbbcee622ff196731da965b99b052e00891c8eaabc18b1 records,evidence,current-tests,removal -->
+<!-- refusal-inventory workorder/store.py df739ba32b8d24dd65011ede221af3703af09c7ca4f0f7ae861b86f03f3ce421 records,evidence,current-tests,removal -->
 <!-- refusal-inventory workorder/git_reads.py c406e897d3776a2eefb175775f1cf8144f2d6991a666432e1337bb739c5c0371 records,evidence -->
-<!-- refusal-inventory workorder/console.py 6634087244aa3cbf3741281f4b740117043f662e24e309c6c5af10d7c543b681 records,current-tests -->
+<!-- refusal-inventory workorder/console.py 879b543a24336b284aa45985ea9a749478e981841a153f4d3ee61d9d26490939 records,current-tests -->

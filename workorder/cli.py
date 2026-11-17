@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 
-from . import __version__, gate
+from . import __version__, console, gate
 from . import store as s
 
 
@@ -56,6 +56,7 @@ def parser():
     done.add_argument("--refactor", action="store_true", help="declare unchanged tests passing on both base and current code")
     done.add_argument("--no-code-change", action="store_true", help="allow verification tasks with no code change")
     done.add_argument('--require-test-first', action='store_true', help='refuse tests added or changed with the implementation')
+    done.add_argument('--verbose', action='store_true', help='print every finding and all test output instead of a summary')
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
     new.add_argument("--owner", required=True)
@@ -86,6 +87,8 @@ def parser():
     for name, text in helps.items():
         sub = commands.add_parser(name, help=text)
         sub.add_argument("--task", required=True)
+        if name == "show":
+            sub.add_argument('--verbose', action='store_true', help='print every pending finding instead of a summary')
         if name == "release":
             sub.add_argument("--force", action="store_true",
                              help="release a claim whose clone or worktree is gone")
@@ -111,7 +114,8 @@ def parser():
                        help="explain one task, by id (TASK-1) or path (tasks/TASK-1.md)")
     check.add_argument("--task", dest="named_task", help="explain one task (also accepts a positional id)")
     check.add_argument("--staged", action="store_true", help="check the staged files (pre-commit)")
-    check.add_argument("--verbose", action="store_true", help="print every task note instead of grouping similar notes")
+    check.add_argument("--verbose", action="store_true",
+                       help="print every task note, finding and test output line instead of grouping them")
     check.add_argument("--allow", metavar="TASKS", default="",
                        help="with --base: accept definition/test edits, REF-test failures, reduced pytest outcomes or complete removal"
                             " (comma-separated ids; tests for test-file edits, no-task for changes without task work)")
@@ -185,7 +189,9 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
                                  for part in line.removeprefix('  Missing:').splitlines() if part.strip()))
     own, other = [], set(other)
     for reason in reasons:
-        owners = finding_tasks(reason)
+        # A test's own name (test_flag[SHOUT-1]) is not a task id.
+        name = console.finding_name(reason)
+        owners = finding_tasks(reason.replace(name, '', 1) if name else reason)
         if owners and tid not in owners:
             other |= owners
             if reason.startswith('regression:'):
@@ -196,8 +202,7 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
         print(f'{tid} stays {status}; this change was refused:')
     elif status is not None:
         print(f'{tid}: DONE was not written; the status stays {status}')
-    for reason in own:
-        print(f'  Missing:  {reason}')
+    console.print_lines(own, prefix='  Missing:  ')
     other_findings(other)
     steps = [line for line in lines if line.startswith('  Next:')]
     if any('test changed:' in reason for reason in own):
@@ -305,8 +310,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         project_notes = []
         project_problems = project_tests.run(root, base=revision if base else None, label=base,
                                              notes=project_notes, timeout=timeout)
-        for project_note in project_notes:
-            print(f'Note: {project_note}')
+        console.print_lines(project_notes, prefix='Note: ')
         if project_problems:
             done_refusal(tid, status, [f'  Missing:  {problem}' for problem in project_problems])
             return 1
@@ -437,9 +441,17 @@ def main(argv=None):
         position = args.index("--")
         args, command = args[:position], args[position + 1:]
     options = parser().parse_args(args)
+    hint = ('set WORKORDER_VERBOSE=1 to print it all' if options.action == 'hook'
+            else 'rerun with --verbose to print it all')
+    with console.session(verbose=getattr(options, 'verbose', False), hint=hint) as run:
+        return run_command(options, command, run)
+
+
+def run_command(options, command, run):
     root = Path.cwd()
     try:
         root = s.repository(root)
+        run.root = root
         if options.action == "check":
             if options.task and options.named_task:
                 raise s.Refused("give the task once, positionally or with --task")
@@ -541,7 +553,7 @@ def main(argv=None):
                 print("Note: origin could not be reached; showing local task.")
             elif s.newer_work(root, s.task_id(options.task), snapshot):
                 print(f"{snapshot['ref']} has newer work on this task: pull before you start")
-            print("\n".join(gate.record_lines(root, s.task_id(options.task))))
+            console.print_lines(gate.record_lines(root, s.task_id(options.task)))
         elif options.action == "note":
             if options.text is None and options.next_text is None:
                 raise s.Refused("give a note or --next TEXT")
@@ -629,7 +641,7 @@ def main(argv=None):
                     and not counts.get("warnings") and not options.run_tests):
                 return 0
             if problems:
-                print("\n".join(problems))
+                console.print_lines(problems)
             for warning in counts.get('warnings', []):
                 print(f'Warning: {warning}')
                 if os.environ.get('GITHUB_ACTIONS'):
@@ -642,7 +654,7 @@ def main(argv=None):
             if not problems:
                 print("check: OK")
             if notes:
-                print("\n".join(f"Note: {note}" for note in gate.summarize_notes(notes, options.verbose)))
+                console.print_lines(gate.summarize_notes(notes, options.verbose), prefix='Note: ')
             if options.run_tests and counts["tests"] == 0 and not (options.base and not counts['tasks']):
                 print("no declared test ran in this check")
             print(gate.check_summary(counts, options.run_tests or bool(counts.get('tests')),

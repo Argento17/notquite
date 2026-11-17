@@ -64,12 +64,13 @@ def test_project_failure_output_is_bounded_and_base_prints_only_counts(local_rep
     assert 'assert app.value == number' in output
     assert '1 failed, 60 passed, 1 skipped, 1 xfailed in ' in output
     assert 'failure detail 099' not in output
-    assert 'failure section truncated after 60 lines' in output
+    # 0.18: the first failure is cut at 20 lines (was 60); the rest is in .git/workorder/last-output.txt.
+    assert '[first failure: 20 of ' in output
     section = next(i for i, line in enumerate(output.splitlines())
                    if line.startswith('_') and 'test_project[a - b]' in line)
     cut = next(i for i, line in enumerate(output.splitlines())
-               if 'failure section truncated after 60 lines' in line)
-    assert cut - section == 60, output
+               if '[first failure: 20 of ' in line)
+    assert cut - section == 20, output
     assert len(output.splitlines()) < 120, output
     assert len(re.findall(r'^FAILED tests/test_project.py::test_project', output, re.M)) == 1
     expected_base = '1 failed' if broken_base else '1 passed'

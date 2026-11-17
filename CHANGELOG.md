@@ -2,6 +2,16 @@
 
 ## 0.18.0 (unreleased)
 
+- Keep output readable for agents in `done`, `check`, the hooks and `show`:
+  per-test findings of one kind are one line with a count and the first 5 names;
+  failing test output shows at most 5 FAILED lines and the first 20 lines of the
+  first failure, once per command run; each distinct Note prints once. The full
+  text is saved in `.git/workorder/last-output.txt` and its path printed;
+  `--verbose` (new for `done` and `show`; `WORKORDER_VERBOSE=1` for hooks) prints
+  everything. A test name such as `test_x[SHOUT-1]` is no longer reported as
+  another task's finding. A refused `done` with 1173 failing click tests went
+  from 58,176 lines to 37.
+
 ## 0.17.0 (17 Nov 2026)
 
 - Let pending-review "could not compare" claims commit with a Note while the
