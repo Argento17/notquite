@@ -7,9 +7,16 @@ from test_workorder import PACKAGE, cli, local_repo
 from test_v16b_project import FAILURE, project
 
 
+MERMAID = re.compile(r'^```mermaid\n.*?^```\n', re.M | re.S)
+
+
+def prose(text):
+    # Image alt text (the demo GIF) and Mermaid flow charts are pictures; the limits are for prose.
+    return [line for line in MERMAID.sub('', text).splitlines() if not line.startswith('![')]
+
+
 def words(text):
-    # Image alt text (the demo GIF) describes a picture; the limits are for prose.
-    return len(' '.join(line for line in text.splitlines() if not line.startswith('![')).split())
+    return len(' '.join(prose(text)).split())
 
 
 def section(text, heading):
@@ -31,8 +38,10 @@ def test_project_regression_needs_the_tests_label_not_approval(local_repo):
 
 def test_readme_is_short_and_in_order():
     readme = (PACKAGE / 'README.md').read_text(encoding='utf-8')
-    assert words(readme) <= 1200  # 1,100 plus the Speed section
-    order = ['Every task is a Markdown file', 'refuses', '## Quick start', '## The review rule',
+    # 1,300 (was 1,200): the README now also carries the continuity story, the language support table
+    # and the line that DONE is not acceptance; the review table and agent block are fixed text.
+    assert words(readme) <= 1300
+    order = ['Every task is a Markdown file', '`workorder done` refuses', '## Quick start', '## The review rule',
              '## What it does not do']
     positions = [readme.find(phrase) for phrase in order]
     positions.append(readme.rfind('docs/reference.md'))
@@ -82,8 +91,38 @@ def test_reference_has_contents_and_is_shorter():
 def test_public_docs_avoid_banned_wording():
     banned = ('trust layer', 'revolutionary', 'tamper-proof', 'production-grade', 'ai-powered',
               'ci gate', 'branch protection', 'macos')
-    for name in ('README.md', 'docs/reference.md', 'docs/reviewer-guide.md'):
+    for name in ('README.md', 'docs/reference.md', 'docs/reviewer-guide.md', 'docs/how-it-works.md'):
         text = (PACKAGE / name).read_text(encoding='utf-8').lower()
         for word in banned:
             assert word not in text, (name, word)
         assert not re.search(r'\bsigned\b', text), name
+
+
+def test_readme_opens_with_an_overview_then_one_flow_chart():
+    readme = (PACKAGE / 'README.md').read_text(encoding='utf-8')
+    charts = MERMAID.findall(readme)
+    assert len(charts) == 1
+    chart, gif = readme.index('```mermaid'), readme.index('![')
+    # What and why come first; file details come after the chart and the GIF.
+    overview = readme[:chart]
+    for detail in ('Markdown', 'tasks/', 'receipt'):
+        assert detail not in overview, detail
+    assert 'same structure' in overview and 'workorder show' in overview
+    assert chart < gif < readme.index('Every task is a Markdown file')
+    boxes = re.findall(r'^\s+[A-Z]+[\[{(]', charts[0], re.M) + re.findall(r'--> [A-Z]+[\[{(]', charts[0])
+    assert 8 <= len(boxes) <= 12, boxes
+    for command in ('workorder show', 'workorder done', 'workorder check', 'tasks/TASK-1.md'):
+        assert command in charts[0], command
+    assert '[How it works](docs/how-it-works.md)' in readme.split('## ', 1)[0]
+
+
+def test_how_it_works_has_three_short_charts():
+    text = (PACKAGE / 'docs/how-it-works.md').read_text(encoding='utf-8')
+    assert len(MERMAID.findall(text)) == 3
+    first = text.split('```mermaid', 1)[0]
+    assert first.index('same structure') < first.index('tasks/')
+    assert words(text) <= 450
+    # Each box quotes the code's own wording.
+    for phrase in ('commit the code first', 'does not exercise the change', 'does not show the change works',
+                   'workorder done --needs-review', 'workorder retire', 'no review or label clears it'):
+        assert phrase in text, phrase

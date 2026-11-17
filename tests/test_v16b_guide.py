@@ -118,7 +118,8 @@ def test_reviewer_guide_inventory_matches_executable_diagnostics():
 
 def test_readme_links_short_reviewer_guide():
     readme = (ROOT / 'README.md').read_text(encoding='utf-8')
-    assert len(readme.splitlines()) <= 130
+    # The Mermaid flow chart is a picture, not lines to read.
+    assert len(re.sub(r'^```mermaid\n.*?^```\n', '', readme, flags=re.M | re.S).splitlines()) <= 130
     assert '[Reviewer guide](docs/reviewer-guide.md)' in readme
 
 
