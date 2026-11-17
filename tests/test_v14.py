@@ -219,7 +219,7 @@ def test_new_task_without_red_still_needs_definition_review(local_repo):
     claim(root, 'TASK-40')
     result = check(root)
     assert result.returncode == 1
-    assert 'TASK-40 was written and finished in this pull request; a reviewer reads its definition' in result.stdout
+    assert 'TASK-40 was written and finished in this pull request; an approving review clears this (the reviewer reads its definition' in result.stdout
 
 
 @pytest.mark.parametrize('template', ['extended', 'simple'])

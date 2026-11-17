@@ -116,10 +116,13 @@ def test_unusual_assertion_needs_its_task_label(local_repo):
     (root / 'tests/test_div.py').write_text('from calc import div, equal\ndef test_div():\n    equal(div(6, 3), 2)\n')
     commit_all(root)
     claim(root)
-    for options in [[], ['--approving-review'], ['--review', 'warn'], ['--allow', 'tests']]:
+    for options in [[], ['--review', 'warn'], ['--allow', 'tests']]:
         refused = check(root, *options)
         assert refused.returncode == 1, refused.stdout
         assert 'workorder-allow:TASK-2' in refused.stdout
+    # 0.18 one review rule: an approving review clears an assertion finding.
+    approved = check(root, '--approving-review')
+    assert approved.returncode == 0, approved.stdout + approved.stderr
     accepted = check(root, '--allow', 'TASK-2')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
 
@@ -204,6 +207,9 @@ def finished_command(root, target):
 @pytest.mark.parametrize('target', [False, True])
 @pytest.mark.parametrize('action', ['staged', 'stop'])
 def test_finished_test_command_repair_is_a_local_note(local_repo, monkeypatch, capsys, target, action):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     base = finished_command(root, target)
     if action == 'staged':
@@ -227,7 +233,10 @@ def test_finished_test_command_repair_is_a_local_note(local_repo, monkeypatch, c
 
 
 @pytest.mark.parametrize('staged_passes', [False, True])
-def test_command_repair_uses_staged_test_not_working_copy(local_repo, staged_passes):
+def test_command_repair_uses_staged_test_not_working_copy(local_repo, staged_passes, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_command(root, True)
     path = root / 'test_math.py'

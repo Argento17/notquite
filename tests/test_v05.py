@@ -231,8 +231,8 @@ def test_new_finished_definition_needs_allow(local_repo, status):
     finished(root, status=status)
     refused = cli(root, 'check', '--base', base)
     assert refused.returncode == 1
-    assert ('TASK-1 was written and finished in this pull request; a reviewer reads its definition '
-            'and accepts it with an approving review or workorder-allow:TASK-1') in refused.stdout
+    assert ('TASK-1 was written and finished in this pull request; an approving review clears this '
+            '(the reviewer reads its definition; a second pull request is not needed), or the label workorder-allow:TASK-1') in refused.stdout
     ok(root, 'check', '--base', base, '--allow', 'TASK-1')
 
 

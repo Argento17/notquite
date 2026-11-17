@@ -52,7 +52,10 @@ def assert_review(root, tid='TASK-1', *, label_only=False):
 
 
 @pytest.mark.parametrize('repair', ['renew', 'done'])
-def test_refactor_test_edit_commits_and_advised_repair_works(local_repo, repair):
+def test_refactor_test_edit_commits_and_advised_repair_works(local_repo, repair, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     prepare(root)
     land(root)
@@ -112,18 +115,23 @@ def test_label_only_findings_have_done_route(local_repo, test_text, finding):
     assert store.record(root, 'TASK-1')['status'] == 'DONE'
     run = store.entries(root, 'TASK-1')[-1]
     assert run['pending_review'] is True
-    assert any(finding in item['message'] and item['label_only'] for item in run['pending_findings'])
+    # 0.18 one review rule: an approving review clears assertion and stub findings.
+    assert any(finding in item['message'] and not item['label_only'] for item in run['pending_findings'])
     for result in (stop(root),):
         assert result.returncode == 0, result.stdout + result.stderr
         review_lines = [line for line in result.stdout.splitlines() if 'pending review:' in line]
-        assert review_lines and all('or an approving review' not in line for line in review_lines), result.stdout
+        assert review_lines and all('or an approving review' in line for line in review_lines), result.stdout
     commit_with_hook(root)
-    assert_review(root, label_only=True)
+    assert_review(root)
+    assert pr(root, '--approving-review').returncode == 0
     output = ok(root, 'check', 'TASK-1')
     assert finding in output, output
 
 
-def test_shared_file_stub_finding_reaches_pending_review(local_repo):
+def test_shared_file_stub_finding_reaches_pending_review(local_repo, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     prepare(root, code=CODE + '\ndef mul(a, b):\n    return a * b\n', kind='refactor')
     path = task(root, 'TASK-2', ships='none', test='python -m pytest -q tests/test_mul.py')
@@ -229,7 +237,10 @@ def test_named_check_reports_task_file_freshness(local_repo, own_change):
         assert 'the code has changed since' not in output
 
 
-def test_renewed_receipts_commit_has_no_repair_note(local_repo):
+def test_renewed_receipts_commit_has_no_repair_note(local_repo, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_on_branch(root)
     rename_branch_test(root)
@@ -269,7 +280,10 @@ def test_merge_only_test_change_reports_no_task_changed(local_repo):
 
 
 @pytest.mark.parametrize('path_map', [False, True])
-def test_existing_receipt_with_generated_paths_survives_removal(local_repo, path_map):
+def test_existing_receipt_with_generated_paths_survives_removal(local_repo, path_map, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     prepare(root)
     definition = root / 'tasks/TASK-1.md'
@@ -310,14 +324,15 @@ def test_pending_comparison_finding_is_recorded_and_displayed(local_repo, tmp_pa
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-1', '--needs-review')
     run = store.entries(root, 'TASK-1')[-1]
-    assert any('could not compare' in item['message'] and item['label_only'] for item in run['pending_findings'])
+    assert any('could not compare' in item['message'] and not item['label_only'] for item in run['pending_findings'])
     output = ok(root, 'show', '--task', 'TASK-1')
     assert 'Pending:' in output and 'could not compare' in output, output
     commit_all(root)
-    for flags in ([], ['--approving-review'], ['--review', 'warn']):
+    for flags in ([], ['--review', 'warn']):
         result = cli(root, 'check', '--base', 'origin/main', '--run-tests', *flags)
         assert result.returncode == 1 and 'Pending:' in result.stdout, result.stdout + result.stderr
     ok(root, 'check', '--base', 'origin/main', '--run-tests', '--allow', 'TASK-1')
+    ok(root, 'check', '--base', 'origin/main', '--run-tests', '--approving-review')  # 0.18 one review rule
 
 
 @pytest.mark.parametrize('blocker', ['failure', 'command', 'dependency', 'evidence'])

@@ -50,7 +50,10 @@ def stop(root):
         env=dict(os.environ, PYTHONPATH=str(PACKAGE)), input='{}', capture_output=True, text=True)
 
 
-def test_renamed_finished_test_commits_renews_and_needs_label(local_repo):
+def test_renamed_finished_test_commits_renews_and_needs_label(local_repo, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     base = finished_pytest(root)
     rename_test(root)
@@ -80,7 +83,10 @@ def test_renamed_finished_test_commits_renews_and_needs_label(local_repo):
 
 @pytest.mark.parametrize('hook', ['precommit', 'stop'])
 @pytest.mark.parametrize('change', ['rename', 'edit'])
-def test_finished_test_change_is_a_local_note(local_repo, hook, change):
+def test_finished_test_change_is_a_local_note(local_repo, hook, change, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_pytest(root)
     if change == 'rename':
@@ -97,7 +103,10 @@ def test_finished_test_change_is_a_local_note(local_repo, hook, change):
 
 @pytest.mark.parametrize('hook', ['precommit', 'stop'])
 @pytest.mark.parametrize('staged_passes', [False, True])
-def test_changed_finished_test_uses_staged_code_and_refuses_failure(local_repo, hook, staged_passes):
+def test_changed_finished_test_uses_staged_code_and_refuses_failure(local_repo, hook, staged_passes, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_pytest(root)
     rename_test(root)
@@ -169,7 +178,10 @@ def test_new_local_reason_is_in_words(local_repo):
 
 
 @pytest.mark.parametrize('mode', ['base', 'staged'])
-def test_config_edit_has_no_per_task_duplicate_notes(local_repo, mode):
+def test_config_edit_has_no_per_task_duplicate_notes(local_repo, mode, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     base = finished_pytest(root, count=2)
     (root / 'pyproject.toml').write_text('[tool.pytest.ini_options]\npythonpath = [".", "tests"]\n')

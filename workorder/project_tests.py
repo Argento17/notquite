@@ -58,6 +58,56 @@ def configure(root, value, *, check=False):
     return True
 
 
+def remove(root, *, check=False):
+    """Turn the project test off, preserving other settings; a check reports whether it is off."""
+    settings = _settings(root)
+    if check or 'project_test' not in settings:
+        return 'project_test' not in settings
+    del settings['project_test']
+    s.local_path(root, CONFIG).write_text(json.dumps(settings, indent=2) + '\n', encoding='utf-8')
+    s.invalidate_reads()
+    return True
+
+
+def detect(root):
+    """The file or folder showing that the project's tests run with pytest, or None."""
+    sections = {'pyproject.toml': r'(?m)^\s*\[\s*tool\s*\.\s*pytest\b', 'setup.cfg': r'(?m)^\s*\[\s*tool:pytest\s*\]',
+                'tox.ini': r'(?m)^\s*\[\s*pytest\s*\]', 'pytest.ini': None, '.pytest.ini': None,
+                'pytest.toml': None, '.pytest.toml': None}
+    for name, section in sections.items():
+        path = s.local_path(root, name)
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        if section is None or re.search(section, text):
+            return name
+    for folder in ('tests', 'test'):
+        path = s.local_path(root, folder)
+        if path.is_dir() and any(item.is_file() for pattern in ('test_*.py', '*_test.py')
+                                 for item in path.rglob(pattern)):
+            return folder + '/'
+    return None
+
+
+def default_command():
+    """pytest reads testpaths and its other settings from the project's configuration itself."""
+    import shutil
+    python = 'python' if shutil.which('python') or not shutil.which('python3') else 'python3'
+    return f'{python} -m pytest -q'
+
+
+def runnable(value):
+    """Whether the default command's interpreter can import pytest here; never turn on a failing command."""
+    try:
+        return subprocess.run([value.split()[0], '-c', 'import pytest'], capture_output=True, timeout=60,
+                              env=s.copy_environment()).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _pytest(words):
     """Only direct pytest entry points have a known failure-selection protocol."""
     executable = Path(words[0].replace('\\', '/')).name
@@ -98,6 +148,14 @@ def _report(path):
 
 
 def _failure_output(report, output):
+    from . import console
+    sections = report.get('failures') or []
+    if sections and not console.verbose():
+        # The FAILED lines and the start of the first failure, once per run.
+        full = [report.get('short_summary'), *sections, report.get('summary')]
+        print(console.short_failures(report.get('short_summary') or '', sections, report.get('summary') or ''),
+              end='', full='\n'.join(filter(None, full)) + '\n', dedupe=False)
+        return
     if report.get('short_summary'):
         print(report['short_summary'])
     sections = report.get('failures') or []
@@ -157,7 +215,7 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
     """Run current code once, then only failed pytest nodes on the available base.
 
     Returned failures are ordinary strings: warning mode cannot turn an observed
-    current failure into a pass. A PR review or its explicit tests label can.
+    current failure into a pass. Only its explicit tests label can.
     """
     notes = [] if notes is None else notes
     try:
@@ -172,7 +230,7 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
         if 'tests' in allow:
             notes.append(message + ' (accepted by review)')
             return []
-        return [gate.reviewer_label(message, 'tests')]
+        return [gate.reviewer_label(message, 'tests', True, gate.TEST_EXPECTATION)]
 
     pytest = _pytest(words)
     with s.temporary_checkout(prefix='workorder-project-') as temporary, s.test_reuse(False):

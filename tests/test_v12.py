@@ -72,10 +72,11 @@ def test_new_task_receipts_get_one_precise_definition_request(local_repo, status
     store.set_task_field(root, 'TASK-4', 'status', status)
     result = cli(root, 'check', '--base', base, '--require-task')
     assert result.returncode == 1, result.stdout
-    expected = (('TASK-4 was written and finished in this pull request; a reviewer reads its definition '
-                 'and accepts it with an approving review or workorder-allow:TASK-4') if status == 'DONE' else
-                ('TASK-4 is new in this pull request: a reviewer accepts its definition with the label '
-                 'workorder-allow:TASK-4 (or an approving review)'))
+    expected = (('TASK-4 was written and finished in this pull request; an approving review clears this '
+                 '(the reviewer reads its definition; a second pull request is not needed), '
+                 'or the label workorder-allow:TASK-4') if status == 'DONE' else
+                ('TASK-4 is new in this pull request; an approving review clears this (the reviewer '
+                 'reads its definition), or the label workorder-allow:TASK-4'))
     assert result.stdout.count(expected) == 1, result.stdout
     assert 'no task records it' not in result.stdout
     ok(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-4')
@@ -112,6 +113,9 @@ def test_new_wrapper_requests_explicit_test_paths_before_writing(local_repo):
 
 @pytest.mark.parametrize('action', ['done', 'staged', 'stop'])
 def test_changed_command_refuses_done_but_finished_hooks_note(local_repo, monkeypatch, capsys, action):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     reviewed_task(root)
     store.receipt(root, "TASK-1", "implemented")
@@ -221,7 +225,7 @@ def test_staged_crlf_reuses_working_result_after_import_probe(local_repo, monkey
         pytest.fail('cache hit reran the test')
     monkeypatch.setattr(store, 'run_test', no_run)
     assert gate.check(root, staged=True) == []
-    assert re.search(r'\(reused from \d{2}:\d{2} UTC\)', capsys.readouterr().out)
+    assert re.search(r'\(result reused from the run at \d{2}:\d{2} UTC; nothing it covers changed since\)', capsys.readouterr().out)
 
 
 def test_all_tests_does_not_rerun_identical_current_and_ref_commands(local_repo):

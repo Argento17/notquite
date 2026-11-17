@@ -20,8 +20,8 @@ def test_new_task_finished_in_same_pull_request_needs_acceptance(local_repo, ins
     commit_all(root)
     refused = check(root)
     assert refused.returncode == 1, refused.stdout + refused.stderr
-    assert ('TASK-1 was written and finished in this pull request; a reviewer reads its definition '
-            'and accepts it with an approving review or workorder-allow:TASK-1') in refused.stdout
+    assert ('TASK-1 was written and finished in this pull request; an approving review clears this '
+            '(the reviewer reads its definition; a second pull request is not needed), or the label workorder-allow:TASK-1') in refused.stdout
     for flags in [('--allow', 'TASK-1'), ('--approving-review',)]:
         accepted = check(root, *flags)
         assert accepted.returncode == 0, accepted.stdout + accepted.stderr

@@ -137,10 +137,13 @@ def test_unowned_comparison_failure_has_meaning_and_explicit_label(local_repo, u
     branch(root)
     (root / 'testing.py').write_text(CODE.replace('return 1', 'return 2'))
     commit_all(root)
-    result = check(root, '--approving-review', '--review', 'warn')
+    result = check(root, '--review', 'warn')
     assert result.returncode == 1, result.stdout + result.stderr
     assert ('usage error' if usage_error else 'no tests were collected') in result.stdout
     assert 'workorder-allow:tests' in result.stdout
+    # 0.18 one review rule: an approving review clears the unavailable comparison.
+    result = check(root, '--approving-review', '--review', 'warn')
+    assert result.returncode == 0, result.stdout + result.stderr
     result = check(root, '--allow', 'tests')
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -160,9 +163,11 @@ def test_late_exemptions_need_task_label(local_repo, completion, approval):
         ok(root, 'done', '--task', 'TASK-1', '--' + completion)
     commit_all(root)
     result = check(root, '--review', 'warn', *(['--approving-review'] if approval else []))
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert 'completion needs review' in result.stdout
-    assert 'workorder-allow:TASK-1' in result.stdout
+    # 0.18 one review rule: an approving review clears a late exemption.
+    assert result.returncode == int(not approval), result.stdout + result.stderr
+    if not approval:
+        assert 'completion needs review' in result.stdout
+        assert 'workorder-allow:TASK-1' in result.stdout
     result = check(root, '--allow', 'TASK-1')
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -186,16 +191,18 @@ def test_only_base_kind_preapproves_exemption(local_repo, completion, kind, earl
     else:
         ok(root, 'done', '--task', 'TASK-1', '--' + completion)
     commit_all(root)
-    result = check(root, '--approving-review')
+    result = check(root)
     assert result.returncode == (0 if early else 1), result.stdout + result.stderr
     if not early:
         assert 'completion needs review' in result.stdout
+    result = check(root, '--approving-review')  # 0.18: approval clears it either way
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize('kind', ['feature', '', ['refactor']])
+@pytest.mark.parametrize('kind', ['bugfix', '', ['refactor']])
 def test_invalid_task_kind_refuses(local_repo, kind):
     define(local_repo, kind=kind)
-    with pytest.raises(store.Refused, match='kind must be refactor or verification'):
+    with pytest.raises(store.Refused, match='kind must be feature, fix, refactor or verification'):
         store.record(local_repo, 'TASK-1')
 
 
@@ -216,10 +223,13 @@ def test_outside_scope_needs_scope_label(local_repo, require_task, other_receipt
                                         code=store.code_digest(root, 'HEAD'), ref='refs/heads/main'))
     commit_all(root)
     flags = ['--require-task'] if require_task else []
-    result = check(root, *flags, '--approving-review', '--review', 'warn')
+    result = check(root, *flags, '--review', 'warn')
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'outside.py is outside the code paths of TASK-4' in result.stdout
     assert 'workorder-allow:scope:TASK-4' in result.stdout
+    # 0.18 one review rule: an approving review clears a scope finding.
+    result = check(root, *flags, '--approving-review', '--review', 'warn')
+    assert result.returncode == 0, result.stdout + result.stderr
     assert check(root, *flags, '--allow', 'TASK-4').returncode == 1
     result = check(root, *flags, '--allow', 'scope:TASK-4')
     assert result.returncode == 0, result.stdout + result.stderr
@@ -258,8 +268,10 @@ def test_task_comparison_failure_is_clearable_only_by_task_label(local_repo, mon
         return {'usage': 4, 'empty': 5, 'timeout': 124}[failure], ''
 
     monkeypatch.setattr(gate, 'run_ref_test', unavailable)
-    refused = gate.check(root, base='origin/main', run_tests=True, approving_review=True, review='warn')
+    refused = gate.check(root, base='origin/main', run_tests=True, review='warn')
     assert any('could not compare' in item and 'workorder-allow:TASK-1' in item for item in refused)
+    # 0.18 one review rule: an approving review clears an unavailable comparison.
+    assert gate.check(root, base='origin/main', run_tests=True, approving_review=True, review='warn') == []
     notes = []
     assert gate.check(root, base='origin/main', run_tests=True, allow=['TASK-1'], notes=notes) == []
     assert any('could not compare' in note and 'allowed' in note for note in notes)

@@ -111,7 +111,9 @@ def test_preexisting_parameter_id_with_separator_is_rerun_exactly(local_repo, fl
     assert git(root, 'status', '--porcelain', '--untracked-files=all') == ''
 
 
-@pytest.mark.parametrize('allowance', [('--allow', 'tests'), ('--approving-review',)])
+# 0.18 one review rule: existing tests that now fail need the tests label; approval alone is refused
+# (tests/test_v18d_docs.py).
+@pytest.mark.parametrize('allowance', [('--allow', 'tests'), ('--allow', 'tests', '--approving-review')])
 def test_project_failure_can_be_accepted_by_pr_review(local_repo, allowance):
     root = local_repo
     project(root)

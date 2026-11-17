@@ -43,8 +43,11 @@ def local_change(root, kind):
 @pytest.mark.parametrize('kind,reason', [('ref', 'fail on this code'), ('fewer', 'fewer tests pass'),
                                        ('skip', 'new skip or xfail'), ('config', 'configuration changed'),
                                        ('lines', 'lost or changed')])
-def test_local_commands_review_test_changes(local_repo, monkeypatch, capsys, action, kind, reason):
+@pytest.mark.parametrize('mode', ['refuse', 'warn'])
+def test_local_commands_review_test_changes(local_repo, monkeypatch, capsys, action, kind, reason, mode):
     root = local_repo
+    if mode == 'warn':
+        monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     if action == 'pre-commit':
         bootstrap.initialize(root)
     path, _ = local_change(root, kind)
@@ -71,14 +74,26 @@ def test_local_commands_review_test_changes(local_repo, monkeypatch, capsys, act
             captured = capsys.readouterr()
             output = captured.out + captured.err
         assert store.record(root, 'TASK-1')['status'] == 'DONE'
-    assert code == (1 if action == 'done' else 0), output
-    if action != 'done':
+    # 0.18: the hooks refuse what the pull-request check refuses (exit 1, Stop exit 2);
+    # warning mode keeps the earlier notes. done refuses in both modes.
+    if action == 'done':
+        assert code == 1, output
+    elif mode == 'refuse':
+        assert code == (1 if action == 'pre-commit' else 2), output
+        if kind != 'config':  # a configuration-only change does not touch the task's tests
+            assert 'workorder done --task TASK-1' in output  # the hand-set DONE owes done's record
+    else:
+        assert code == 0, output
         assert 'Note:' in output and 'NOT DONE' not in output
     assert reason in output
-    assert 'a reviewer accepts it with the label workorder-allow:TASK-1 (or an approving review)' in output
+    # 0.18: edits and weakening of existing tests need the label; approval is not enough.
+    assert 'a reviewer accepts it with the label workorder-allow:TASK-1 (an approving review is not enough: it' in output
 
 
-def test_precommit_compares_index_not_working_tests(local_repo):
+def test_precommit_compares_index_not_working_tests(local_repo, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     probe, base = setup_tests(root, 'def test_one():\n    assert True\n')
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
@@ -190,7 +205,7 @@ def test_cancellation_needs_review_but_reopening_is_honest_work(local_repo, befo
     assert result.returncode == 1 and 'workorder-allow:TASK-1' in result.stdout
     assert f'status changed: {before} -> {after}' in result.stdout
     if after == 'CANCELLED':
-        assert 'a reviewer accepts it with the label workorder-allow:TASK-1 (or an approving review)' in result.stdout
+        assert 'an approving review clears this, or a reviewer accepts it with the label workorder-allow:TASK-1' in result.stdout
     assert cli(root, 'check', '--base', base, '--allow', 'TASK-1').returncode == 0
 
 

@@ -14,14 +14,14 @@ from . import store as s
 
 
 AGENT_BLOCK = r"""## Tasks
-- Start from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed. Use the default branch's name. Run `workorder show --task <id>`; follow its mission, Scope, Acceptance, test, history and progress.
-- Set `WORKORDER_AGENT` when sharing a Git identity. Run `workorder claim --task <id>` before work (needs a writable origin), and `workorder release --task <id>` when stopping, finished or not.
-- Create tasks with `workorder new --code-paths <files or folders>`. Land the task first, then implement on a branch and open a pull request. A task written and finished in one pull request needs an approving review or `workorder-allow:<id>`.
-- Confirm every Acceptance item, commit code, fetch origin if present, then run `workorder done --task <id> --note "<what was done>"`. Workorder checks test evidence, not Acceptance. Report refusals and warnings; do not claim completion after them.
-- Use `done --task <id> --refactor` for unchanged tests passing before and after, or `--no-code-change` when the task's code and tests are unchanged. These completions need `workorder-allow:<id>` unless the base task declares the matching `kind: refactor` or `kind: verification`; an approving review does not clear them.
-- Use `done --task <id> --needs-review` for intended test edits or eligible comparison findings; report pending review. Ordinary test edits need the task's label or an approving review. A "could not compare", assertion or stub finding needs `workorder-allow:<id>` even with a predeclared kind; scope findings need `workorder-allow:scope:<id>`. Approval does not clear these explicit-label findings. Current test failures still refuse. Refused done writes no notes or receipts; use `workorder note` for handover.
-- Keep unfinished progress with `workorder note --task <id> --next "<next step>" "<progress>"`; done clears next. Before stopping, commit tasks/ and .workorder/ with the work and push.
-- Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`. Commit its receipts. After merge, run `workorder check <id>` on main; renew and test again if needed.
+- Start from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed. Run `workorder show --task <id>` and follow its Scope, Acceptance, test and progress.
+- Set `WORKORDER_AGENT` when sharing a Git identity. Run `workorder claim --task <id>` before work.
+- Do the work with a test that fails without it. Commit, then run `workorder done --task <id> --note "<what was done>"`. Report refusals; do not claim completion after one.
+- Keep unfinished progress with `workorder note --task <id> --next "<next step>" "<progress>"`; done clears next.
+- Never edit a task's status or receipts by hand. Commit tasks/ and .workorder/ with the work.
+- Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`.
+- Before saying done, run `workorder check --base origin/main --run-tests --all-tests --require-task`.
+- Output is shortened; the full text is in `.git/workorder/last-output.txt`.
 """
 
 HOOK = r"""#!/bin/sh
@@ -206,12 +206,35 @@ def claude_settings(root):
     return path, updated, changed
 
 
+def earlier_agent_block(text):
+    """An agent block written by an earlier version: its "## Tasks" section naming the workorder commands."""
+    for match in re.finditer(r'(?m)^## Tasks[ \t]*\n(?:(?!## ).*(?:\n|$))*', text):
+        section = match.group(0)
+        if 'workorder show' in section and 'workorder done' in section:
+            return match
+    return None
+
+
 @s.changing_repository()
 def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False,
-               project_test=None):
+               project_test=None, no_project_test=False):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
     from .python_imports import installed_src
     from . import project_tests
+    detected = None
+    if project_test is None and not no_project_test and 'project_test' not in project_tests._settings(root):
+        # Only a first setup turns it on: re-running init after an upgrade keeps existing choices.
+        configured = s.local_path(root, '.github/workflows/workorder.yml').exists() or any(
+            AGENT_BLOCK.strip() in text or earlier_agent_block(text)
+            for text in (s.local_path(root, name).read_text(encoding='utf-8')
+                         if s.local_path(root, name).is_file() else '' for name in ('AGENTS.md', 'CLAUDE.md')))
+        detected = None if configured else project_tests.detect(root)
+        if detected:
+            project_test = project_tests.default_command()
+            if not project_tests.runnable(project_test):
+                print(f'.workorder/config.json: pytest found in {detected}, but {project_test.split()[0]} cannot'
+                      ' import pytest here; project test left off (set one with workorder init --project-test CMD)')
+                detected, project_test = None, None
     project_matches = project_tests.configure(root, project_test, check=True) if project_test is not None else True
     installed = installed_src(root)
     if installed:
@@ -238,8 +261,18 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
     for name in ('AGENTS.md', 'CLAUDE.md'):
         path = s.local_path(root, name)
         original = path.read_text(encoding='utf-8') if path.exists() else ''
+        earlier = earlier_agent_block(original)
         if AGENT_BLOCK.strip() in original:
             print(f'{name}: agent block already present')
+        elif earlier and check:
+            missing = True
+            print(f'{name}: agent block from an earlier version (run workorder init to replace it)')
+        elif earlier:
+            path.write_text(original[:earlier.start()] + AGENT_BLOCK.rstrip('\n') + '\n'
+                            + ('\n' + original[earlier.end():].lstrip('\n') if original[earlier.end():].strip() else ''),
+                            encoding='utf-8', newline='\n')
+            written.append(name)
+            print(f'{name}: replaced the agent block from an earlier version')
         elif check:
             missing = True
             print(f'{name}: missing agent block')
@@ -313,7 +346,17 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             path.write_text(json.dumps(updated, indent=2) + '\n', encoding='utf-8', newline='\n')
             written.append('.claude/settings.json')
             print('.claude/settings.json: installed SessionStart and Stop hooks')
-    if project_test is not None and not project_matches:
+    if detected:
+        if check:
+            print(f'.workorder/config.json: init would turn the project test on: {project_test}'
+                  f' (pytest found in {detected}); --no-project-test keeps it off')
+        else:
+            project_tests.configure(root, project_test)
+            written.append(project_tests.CONFIG)
+            print(f'.workorder/config.json: project test on: {project_test} (pytest found in {detected});'
+                  ' done and the pull-request check run your full suite once; if it takes minutes,'
+                  ' turn it off with workorder init --no-project-test')
+    elif project_test is not None and not project_matches:
         if check:
             missing = True
             print('.workorder/config.json: project test needs update')
@@ -321,6 +364,16 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             project_tests.configure(root, project_test)
             written.append(project_tests.CONFIG)
             print('.workorder/config.json: project test set')
+    if no_project_test:
+        if project_tests.remove(root, check=True):
+            print('.workorder/config.json: project test off')
+        elif check:
+            missing = True
+            print('.workorder/config.json: project test is on; init --no-project-test turns it off')
+        else:
+            project_tests.remove(root)
+            written.append(project_tests.CONFIG)
+            print('.workorder/config.json: project test turned off')
     if not check:
         print('Files written:' if written else 'No files written.')
         for name in written:

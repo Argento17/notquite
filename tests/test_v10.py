@@ -39,6 +39,9 @@ def _power_repo(root, weaken):
 @pytest.mark.parametrize('weaken', ['return', 'shadow'])
 @pytest.mark.parametrize('action', ['done', 'pre-commit', 'stop', 'check'])
 def test_task_first_added_lines_cannot_hide_a_failing_ref_test(local_repo, monkeypatch, capsys, weaken, action):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     if action == 'pre-commit' and os.name == 'nt':
         pytest.skip('executes a POSIX pre-commit hook')
     root = local_repo

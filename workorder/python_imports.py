@@ -364,7 +364,9 @@ def import_locations(names, projects):
 '''
 
 
-PROBE_TIMEOUT = 10
+# A cold interpreter on a loaded machine (seen on a Windows CI runner: over 10 s) must not
+# turn an honest comparison into "could not compare"; a real hang still ends.
+PROBE_TIMEOUT = 60
 # The integrated guard also waits for interpreter startup, pytest/plugins and
 # fresh project bytecode. The runner still enforces any earlier test deadline.
 GUARD_STARTUP_TIMEOUT = 60

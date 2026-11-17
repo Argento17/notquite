@@ -70,8 +70,8 @@ def print_test_output(output, errors='', failed=False, label=None):
         print(label)
     elif failed:
         print('Failure:')
-    print(output, end='')
-    print(errors, end='', file=sys.stderr)
+    from .console import test_output
+    test_output(output, errors)
 
 
 _REUSE_TESTS = ContextVar("workorder_reuse_tests", default=False)
@@ -372,7 +372,9 @@ def files(root, directory, staged=False):
 
 
 # CANCELLED ends a task that will not be done: it needs no evidence and never counts as finished.
-STATUSES = ("IN_PROGRESS", "BLOCKED", "DONE", "CLOSED", "CANCELLED")
+# RETIRED ends a finished task's protection (workorder retire): its record, notes and receipts
+# stay, but it owns no test files and its test no longer reruns.
+STATUSES = ("IN_PROGRESS", "BLOCKED", "DONE", "CLOSED", "CANCELLED", "RETIRED")
 CORE_FIELDS = ("id", "title", "owner", "status", "ships", "waits_on", "contract")
 # Optional fields. Dependencies and the test add requirements; merge_ref selects delivery's target,
 # and test_paths selects files guarded by a base check. Planning fields never stand in for evidence.
@@ -382,6 +384,8 @@ EXTENDED_ORDER = ("id", "title", "owner", "business_owner", "priority", "created
                   "depends_on", "blocks", "next", "summary", "status", "ships", "waits_on", "test",
                   "contract")
 TASK_REF = r"[A-Z][A-Z0-9]*-[1-9][0-9]*"
+# feature and fix are descriptive; refactor and verification predeclare completion exemptions.
+TASK_KINDS = ("feature", "fix", "refactor", "verification")
 FRONT_MATTER_HELP = ("front matter takes `key: value` lines: plain single-line text, a JSON string, or a"
                      ' list such as ["TASK-1"]; mission, next and summary may use > or | blocks, and'
                      " depends_on, blocks, waits_on, test_paths and code_paths may use indented - item lines")
@@ -545,8 +549,8 @@ def record(root, tid, staged=False):
         raise Refused(f"{tid}: unknown status {fields['status']!r}; use {', '.join(STATUSES)}")
     if fields["ships"] not in {"none", "repo", "live"}:
         raise Refused(f"{tid}: ships must be none, repo or live")
-    if "kind" in fields and fields["kind"] not in ("refactor", "verification"):
-        raise Refused(f"{tid}: kind must be refactor or verification")
+    if "kind" in fields and fields["kind"] not in TASK_KINDS:
+        raise Refused(f"{tid}: kind must be feature, fix, refactor or verification")
     if "merge_ref" in fields:
         ref = fields["merge_ref"]
         if (not isinstance(ref, str) or not ref.startswith(("refs/heads/", "refs/remotes/"))
@@ -648,10 +652,56 @@ EXTENDED_BODY = """
 """
 
 
-def task_text(tid, data, template):
+# An Acceptance item may end with "(test: path::name)", a pytest node id that done checks.
+ACCEPTANCE_TEST = re.compile(r'\(test:\s*([^()\s]*)\s*\)\s*$')
+
+
+def acceptance_node_problem(node):
+    """A tied test must be a pytest node id inside the repository: tests/test_x.py::test_name."""
+    path, separator, name = node.partition('::')
+    parts = path.replace('\\', '/').split('/')
+    if (not separator or not name or not path.endswith('.py') or path.startswith('/')
+            or re.match(r'^[A-Za-z]:', path) or '..' in parts or not all(part for part in name.split('::'))):
+        return (f'(test: {node}) is not a pytest node id in this repository, '
+                'such as tests/test_utils.py::test_trailing_slash')
+    return None
+
+
+def acceptance_items(text):
+    """The Acceptance section's items, each with its tied pytest node id or None."""
+    items = []
+    for heading, body in task_body_sections(text):
+        if heading != 'Acceptance':
+            continue
+        body = re.sub(r'<!--.*?-->', '', '\n'.join(body), flags=re.S)
+        for line in body.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            match = ACCEPTANCE_TEST.search(line)
+            items.append((line, match[1] if match else None))
+    return items
+
+
+def acceptance_lines(items):
+    """Turn --acceptance texts into list items, checking any tied node ids."""
+    lines = []
+    for item in items:
+        item = ' '.join(item.split())
+        if not item:
+            raise Refused('an acceptance item needs some text')
+        match = ACCEPTANCE_TEST.search(item)
+        if match and acceptance_node_problem(match[1]):
+            raise Refused(acceptance_node_problem(match[1]))
+        lines.append(item if item.startswith(('- ', '* ')) else '- ' + item)
+    return lines
+
+
+def task_text(tid, data, template, acceptance=()):
     if template == "simple":
         return ("---\n" + "".join(f"{k}: {packed(v)}\n" for k, v in data.items())
-                + f"---\n\n# {tid}\n\nWrite the original ask here.\n")
+                + f"---\n\n# {tid}\n\nWrite the original ask here.\n"
+                + ("\n## Acceptance\n\n" + "".join(line + "\n" for line in acceptance) if acceptance else ""))
     today = dt.datetime.now(dt.timezone.utc).date().isoformat()
     extended = {**dict(business_owner="", priority="", created_at=today, mission="", depends_on=[],
                        blocks=[], next="", summary="", test=""), **data}
@@ -660,15 +710,24 @@ def task_text(tid, data, template):
         order.insert(order.index("test") + 1, "test_paths")
     if 'code_paths' in extended:
         order.insert(order.index('contract'), 'code_paths')
+    body = EXTENDED_BODY
+    if acceptance:
+        marker = "Evidence Workorder should check belongs in a contract. -->\n"
+        body = body.replace(marker, marker + "\n" + "".join(line + "\n" for line in acceptance), 1)
+    if 'kind' in extended:
+        order.insert(order.index('contract'), 'kind')
     return ("---\n" + "".join(f"{k}: {packed(extended[k])}\n" for k in order)
-            + f"---\n\n# {tid}\n" + EXTENDED_BODY)
+            + f"---\n\n# {tid}\n" + body)
 
 
 def new(root, title, owner, ships="none", prefix="TASK", template="extended", test="", local_only=False,
-        test_paths=None, code_paths=None):
+        test_paths=None, code_paths=None, acceptance=(), kind=None):
     repository(root)
+    acceptance = acceptance_lines(acceptance or ())
     if template not in {"simple", "extended"}:
         raise Refused("template must be simple or extended")
+    if kind is not None and kind not in TASK_KINDS:
+        raise Refused("kind must be feature, fix, refactor or verification")
     if not re.fullmatch(r"[A-Z][A-Z0-9]*", prefix) or not title.strip() or not owner.strip():
         raise Refused("use an uppercase prefix, nonempty title and owner")
     if test.strip():
@@ -696,11 +755,12 @@ def new(root, title, owner, ships="none", prefix="TASK", template="extended", te
         data = dict(id=tid, title=title, owner=owner, status="IN_PROGRESS", ships=ships,
                     waits_on=[], contract="none", **({"test": test} if test else {}),
                     **({"test_paths": list(test_paths)} if test_paths else {}),
-                    **({'code_paths': list(code_paths)} if code_paths is not None else {}))
+                    **({'code_paths': list(code_paths)} if code_paths is not None else {}),
+                    **({'kind': kind} if kind is not None else {}))
         if local or reserve(root, NAMESPACE + f"ids/{tid}", {**data, "at": now(), "who": who(root)}):
             path = directory / f"{tid}.md"
             with path.open("x", encoding="utf-8", newline="\n") as stream:
-                stream.write(task_text(tid, data, template))
+                stream.write(task_text(tid, data, template, acceptance))
             return tid
     raise Refused("too much allocation contention; retry")
 
@@ -745,7 +805,7 @@ def active_claims(root, upstream=None, snapshot=None):
                 fields = front_matter(tid, lines[1:lines.index("---", 1)])
             except (Refused, ValueError):
                 continue
-            if fields.get("status") in {"DONE", "CLOSED", "CANCELLED"}:
+            if fields.get("status") in {"DONE", "CLOSED", "CANCELLED", "RETIRED"}:
                 upstream[tid] = {"status": fields["status"], "ref": "origin/" + branch[11:],
                                  "commit": commit}
     for tid, (generation, ref, oid) in latest.items():
@@ -773,6 +833,23 @@ def holds(held, token):
     """True when this clone's private token matches the hash stored in the claim tag."""
     expected = held.get("token_sha256")
     return isinstance(expected, str) and hmac.compare_digest(expected, token_hash(token))
+
+
+def foreign_claim(root, tid):
+    """Another clone's active claim on tid, by the claim command's rule (this clone's private token).
+
+    None when the task is free, released or held here, or without an origin remote. Raises Refused
+    when origin cannot be read. Claims never expire; only a release ends one.
+    """
+    if not has_origin(root):
+        return None
+    held = active_claims(root).get(tid)
+    if not held or held["released"]:
+        return None
+    path = claim_token_path(root, tid)
+    if path.exists() and holds(held, path.read_text(encoding="utf-8")):
+        return None
+    return held
 
 
 def cache_reservation(root, ref, oid):
@@ -929,6 +1006,26 @@ def set_task_field(root, tid, key, value):
     lines[start:end] = [prefix + encoded + newline]
     path.write_bytes(b''.join(lines))
     invalidate_reads()
+
+
+def retire(root, tid, reason):
+    """Mark a DONE or CLOSED task RETIRED, keeping its record, notes and receipts."""
+    current = record(root, tid)
+    reason = " ".join((reason or "").split())
+    if not reason:
+        raise Refused("retiring a task needs a reason: --reason TEXT")
+    if current["status"] not in {"DONE", "CLOSED"}:
+        raise Refused(f"{tid} is {current['status']}; only a DONE or CLOSED task can be retired")
+    path = local_path(root, f"tasks/{tid}.md")
+    before = path.read_bytes()
+    try:
+        set_task_field(root, tid, "status", "RETIRED")
+        line = add_note(root, tid, f"Retired (was {current['status']}): {reason}")
+    except BaseException:
+        path.write_bytes(before)
+        invalidate_reads()
+        raise
+    return current["status"], line
 
 
 def add_note(root, tid, text):
@@ -1164,6 +1261,8 @@ def verify_receipt(root, tid, value):
                 or not isinstance(item.get("command"), list) or not item["command"]
                 or any(not isinstance(a, str) for a in item["command"])):
             raise Refused(f"{tid}: command receipt needs its arguments, exit code and validity")
+    if 'completion' in item and (item['kind'] != 'test' or item['completion'] is not True):
+        raise Refused(f'{tid}: invalid completion record')
     if 'no_code_change_base' in item:
         if (item['kind'] != 'test' or item.get('no_code_change') is not True
                 or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', str(item['no_code_change_base']))):
@@ -1340,7 +1439,7 @@ def annotate_pending_review(root, tid, findings):
         raise Refused('pending findings need a proposed test receipt')
     item = pending[-1]
     item['pending_findings'] = [
-        {'message': str(line), 'label_only': '(or an approving review)' not in line}
+        {'message': str(line), 'label_only': 'an approving review clears this' not in line}
         for line in dict.fromkeys(findings)]
     item.pop('hash')
     item['hash'] = digest(packed(item).encode())
@@ -1945,7 +2044,7 @@ def missing_test_dependency(command, code, output, root=None):
 
 
 def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None,
-            no_code_change=False, refactor=False, pending_review=False):
+            no_code_change=False, refactor=False, pending_review=False, completion=False):
     repository(root)
     definition = record(root, tid)
     commit = head(root)
@@ -1967,6 +2066,9 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         data['refactor'] = True
     if kind == 'test' and pending_review:
         data['pending_review'] = True
+    if kind == 'test' and completion:
+        # Written only by done, whose proposed receipts are kept only with a supported DONE.
+        data['completion'] = True
     if kind == 'implemented':
         from . import gate
         base, _ = gate.implementation_base(root, definition)

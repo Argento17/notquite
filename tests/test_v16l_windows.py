@@ -84,11 +84,11 @@ def test_lf_editor_and_crlf_checkout_reuse_only_identical_bytes(local_repo, byte
 
     first = cli(root, 'check', '--staged')
     assert first.returncode == (1 if byte_sensitive else 0), first.stdout + first.stderr
-    assert '(reused from ' not in first.stdout
+    assert '(result reused from the run at ' not in first.stdout
     assert counter.read_text().splitlines() == ['run', 'run', 'run']
     second = cli(root, 'check', '--staged')
     assert second.returncode == first.returncode, second.stdout + second.stderr
-    assert '(reused from ' in second.stdout
+    assert '(result reused from the run at ' in second.stdout
     assert counter.read_text().splitlines() == ['run', 'run', 'run']
     assert (root / 'app.py').read_bytes() == b'items = []\n'
     if byte_sensitive:

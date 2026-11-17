@@ -6,7 +6,7 @@ import json
 import re
 import sys
 
-from . import gate
+from . import console, gate
 from . import store as s
 
 
@@ -184,16 +184,34 @@ def run(root, event):
                     f'{tid}: status changed: {previous or "new task"} -> CANCELLED; '
                     f'a reviewer accepts closing a task without finishing it with --allow {tid}', tid))
         if tid in claimed and base:
+            missing = gate.missing_completion_problem(root, gate.comparison_base(root, base)[0], record, staged,
+                                                     target=base)
+            if missing and gate.local_review_warn():
+                notes.append(missing)
+            elif missing:
+                problems.append(missing)
             problems += gate.local_test_problems(root, base, record, notes=notes, results=results,
-                                                 pending_review=True, command_notes=True, staged=staged)
+                                                 pending_review=gate.local_review_pending(root, record, staged, base),
+                                                 command_notes=True, staged=staged)
         else:
             revision = gate.comparison_base(root, base)[0] if base else 'HEAD'
             problems += gate.local_command_problems(root, revision, record, allow_finished=True,
                                                     notes=notes, results=results, staged=staged)
-    for note in gate.summarize_notes(notes):
-        print(f'Note: {note}')
+    targets = set()
+    for tid in sorted(relevant):
+        try:
+            targets.add(gate.local_test_base(root, s.record(root, tid)))
+        except s.Refused:
+            continue
+    if targets - {None}:
+        all_records = gate.records(root, errors={})
+        for target in sorted(targets - {None}):
+            problems += gate.local_unowned_problems(root, target, all_records, notes=notes)
+    console.print_lines(gate.summarize_notes(notes, console.verbose()), prefix='Note: ')
     if problems:
-        print('\n'.join(line if line.startswith('NOT DONE') else 'NOT DONE  ' + line
-                        for line in problems), file=sys.stderr)
+        console.print_lines((line if line.startswith('NOT DONE') else 'NOT DONE  ' + line
+                             for line in problems), file=sys.stderr)
+        if any(gate._accepts_allow_label(line) for line in problems):
+            print(gate.LOCAL_REVIEW_HINT, file=sys.stderr)
         return 2
     return 0

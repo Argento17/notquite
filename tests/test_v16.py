@@ -291,7 +291,10 @@ def finished_folder(root, parametrized=False):
 
 
 @pytest.mark.parametrize('edit', [False, True], ids=['addition', 'existing-test-edit'])
-def test_finished_folder_two_clone_merge(local_repo, edit):
+def test_finished_folder_two_clone_merge(local_repo, edit, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     original = finished_folder(root)
     other = root.parent / 'second'
@@ -325,15 +328,19 @@ def test_finished_folder_two_clone_merge(local_repo, edit):
     assert result.returncode == int(edit), result.stdout + result.stderr
     if edit:
         assert 'workorder-allow:TASK-1' in result.stdout
-        for flag in [('--allow', 'TASK-1,TASK-2'), ('--allow', 'TASK-2', '--approving-review')]:
-            accepted = check(other, *flag)
-            assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+        accepted = check(other, '--allow', 'TASK-1,TASK-2')
+        assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+        # 0.18 one review rule: an edit of TASK-1's existing test needs its label, not only approval.
+        assert check(other, '--allow', 'TASK-2', '--approving-review').returncode == 1
     else:
         assert 'workorder-allow:TASK-1' not in result.stdout
 
 
 @pytest.mark.parametrize('change', ['append', 'change', 'remove'])
-def test_finished_parametrize_cases(local_repo, change):
+def test_finished_parametrize_cases(local_repo, change, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     original = finished_folder(root, parametrized=True)
     git(root, 'switch', '-c', 'cases')

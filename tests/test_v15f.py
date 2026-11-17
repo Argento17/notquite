@@ -57,7 +57,10 @@ def rename_branch_test(root, passes=True, staged=True):
 
 
 @pytest.mark.parametrize('status', ['DONE', 'CLOSED'])
-def test_branch_finished_rename_commits_renews_and_needs_label(local_repo, status):
+def test_branch_finished_rename_commits_renews_and_needs_label(local_repo, status, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_on_branch(root, status)
     rename_branch_test(root)
@@ -79,7 +82,10 @@ def test_branch_finished_rename_commits_renews_and_needs_label(local_repo, statu
 @pytest.mark.parametrize('status', ['DONE', 'CLOSED'])
 @pytest.mark.parametrize('staged', [False, True])
 @pytest.mark.parametrize('passes', [False, True])
-def test_branch_finished_rename_stop(local_repo, status, staged, passes):
+def test_branch_finished_rename_stop(local_repo, status, staged, passes, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_on_branch(root, status)
     rename_branch_test(root, passes, staged)
@@ -95,7 +101,10 @@ def test_branch_finished_rename_stop(local_repo, status, staged, passes):
 
 
 @pytest.mark.parametrize('staged_passes', [False, True])
-def test_branch_finished_rename_hook_uses_staged_code(local_repo, staged_passes):
+def test_branch_finished_rename_hook_uses_staged_code(local_repo, staged_passes, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_on_branch(root)
     rename_branch_test(root, staged_passes)
@@ -128,7 +137,10 @@ def test_finished_command_without_test_receipts_still_refuses(local_repo, hook):
 
 @pytest.mark.parametrize('branch_edit', [False, True])
 @pytest.mark.parametrize('hook', ['precommit', 'stop'])
-def test_pending_merge_notes_only_branch_test_edits(local_repo, branch_edit, hook):
+def test_pending_merge_notes_only_branch_test_edits(local_repo, branch_edit, hook, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_on_branch(root, refactor=True)
     git(root, 'switch', 'main')
@@ -159,7 +171,10 @@ def test_pending_merge_notes_only_branch_test_edits(local_repo, branch_edit, hoo
 
 
 @pytest.mark.parametrize('count', [1, 2])
-def test_other_findings_grammar(local_repo, count):
+def test_other_findings_grammar(local_repo, count, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_pytest(root, count=count)
     fill_sections(task(root, 'TASK-3', ships='none', test=store.join_command([PYTHON, 'test_new.py'])))
@@ -232,7 +247,10 @@ def test_init_instructions_distinguish_unfinished_work_and_agents(local_repo, fi
     assert 'Set `WORKORDER_AGENT` when sharing a Git identity' in text
 
 
-def test_branch_finished_test_edit_keeps_commit_renew_flow(local_repo):
+def test_branch_finished_test_edit_keeps_commit_renew_flow(local_repo, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_on_branch(root)
     path = root / 'tests/test_fn.py'
@@ -245,7 +263,10 @@ def test_branch_finished_test_edit_keeps_commit_renew_flow(local_repo):
 
 
 @pytest.mark.parametrize('hook', ['precommit', 'stop'])
-def test_edit_after_renewed_rename_has_one_repair_note(local_repo, hook):
+def test_edit_after_renewed_rename_has_one_repair_note(local_repo, hook, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     finished_on_branch(root)
     rename_branch_test(root)

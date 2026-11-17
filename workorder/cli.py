@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 
-from . import __version__, gate
+from . import __version__, console, gate
 from . import store as s
 
 
@@ -46,7 +46,11 @@ def parser():
     init.add_argument("--update-workflow", action="store_true", help="rewrite the workflow and show its diff; --check previews only")
     init.add_argument("--light", action="store_true", help="write a trial workflow with review warnings and no task requirement")
     init.add_argument('--test-first', action='store_true', help='require tests to land before implementation in the workflow')
-    init.add_argument('--project-test', metavar='CMD', help="set the project's test command in .workorder/config.json")
+    project = init.add_mutually_exclusive_group()
+    project.add_argument('--project-test', metavar='CMD', help="set the project's test command in .workorder/config.json"
+                         " (a first init turns on python -m pytest -q when it finds pytest tests)")
+    project.add_argument('--no-project-test', action='store_true',
+                         help="turn the project test off, or keep a first init from turning it on")
     hook = commands.add_parser("hook", help="run a local agent session or stop check")
     hook.add_argument("event", choices=["session-start", "stop"])
     done = commands.add_parser("done", help="record implementation and tests, then claim DONE if supported")
@@ -56,6 +60,9 @@ def parser():
     done.add_argument("--refactor", action="store_true", help="declare unchanged tests passing on both base and current code")
     done.add_argument("--no-code-change", action="store_true", help="allow verification tasks with no code change")
     done.add_argument('--require-test-first', action='store_true', help='refuse tests added or changed with the implementation')
+    done.add_argument('--verbose', action='store_true', help='print every finding and all test output instead of a summary')
+    done.add_argument('--take-over', action='store_true',
+                      help="finish a task another clone has claimed; the takeover is added to its Progress notes")
     new = commands.add_parser("new", help="reserve a task id on origin and write tasks/<id>.md")
     new.add_argument("--title", required=True)
     new.add_argument("--owner", required=True)
@@ -72,6 +79,12 @@ def parser():
                      help="test files or folders; required for wrapper commands, even before the files exist")
     new.add_argument("--code-paths", nargs="+", metavar="PATH",
                      help="code files or folders in scope; changes outside them are flagged by --require-task")
+    new.add_argument("--acceptance", action="append", default=[], metavar="TEXT",
+                     help="an Acceptance item (repeatable); end it with (test: path::name) to tie it to a"
+                          " pytest test that done checks")
+    new.add_argument("--kind", choices=list(s.TASK_KINDS),
+                     help="the task's kind; refactor and verification predeclare those completions"
+                          " once the task lands (default: no kind)")
     new.add_argument("--template", choices=["extended", "simple"], default="extended",
                      help="extended: planning fields and Context/Scope/Lanes/Acceptance/Progress sections;"
                           " simple: the seven required fields only, as in 0.1.0 (default: extended)")
@@ -86,6 +99,8 @@ def parser():
     for name, text in helps.items():
         sub = commands.add_parser(name, help=text)
         sub.add_argument("--task", required=True)
+        if name == "show":
+            sub.add_argument('--verbose', action='store_true', help='print every pending finding instead of a summary')
         if name == "release":
             sub.add_argument("--force", action="store_true",
                              help="release a claim whose clone or worktree is gone")
@@ -102,6 +117,10 @@ def parser():
     note.add_argument("--task", required=True)
     note.add_argument("--next", dest="next_text", help="set the task's next field")
     note.add_argument("text", nargs="?", help="what was done, or what is next")
+    retire = commands.add_parser("retire", help="mark a DONE or CLOSED task RETIRED: its record and receipts stay,"
+                                 " it no longer owns its test files and its test no longer reruns")
+    retire.add_argument("task")
+    retire.add_argument("--reason", required=True, help="why the task's protection ends (added to Progress)")
     repair = commands.add_parser("repair", help="convert a verified legacy append conflict to receipt files")
     repair.add_argument("--task", required=True)
     commands.add_parser("ready", help="list open work: free, held, blocked or awaiting delivery")
@@ -111,7 +130,8 @@ def parser():
                        help="explain one task, by id (TASK-1) or path (tasks/TASK-1.md)")
     check.add_argument("--task", dest="named_task", help="explain one task (also accepts a positional id)")
     check.add_argument("--staged", action="store_true", help="check the staged files (pre-commit)")
-    check.add_argument("--verbose", action="store_true", help="print every task note instead of grouping similar notes")
+    check.add_argument("--verbose", action="store_true",
+                       help="print every task note, finding and test output line instead of grouping them")
     check.add_argument("--allow", metavar="TASKS", default="",
                        help="with --base: accept definition/test edits, REF-test failures, reduced pytest outcomes or complete removal"
                             " (comma-separated ids; tests for test-file edits, no-task for changes without task work)")
@@ -179,13 +199,27 @@ def other_findings(other):
               'workorder check --base <target> --run-tests shows them')
 
 
+def claim_warning(root, tid, action):
+    """Claims are advisory for note and receipt: name another holder and carry on."""
+    try:
+        held = s.foreign_claim(root, tid)
+    except s.Refused:
+        return None
+    if held:
+        print(f"Warning: {tid} is held by {held['who']} since {held['at']}; {action} anyway: "
+              f"coordinate with {held['who']}")
+    return held
+
+
 def done_refusal(tid, status, lines, other=(), *, needs_review=False):
     """Show this task's findings once and one next action; summarize other tasks."""
     reasons = list(dict.fromkeys(part.strip() for line in lines if line.startswith('  Missing:')
                                  for part in line.removeprefix('  Missing:').splitlines() if part.strip()))
     own, other = [], set(other)
     for reason in reasons:
-        owners = finding_tasks(reason)
+        # A test's own name (test_flag[SHOUT-1]) is not a task id.
+        name = console.finding_name(reason)
+        owners = finding_tasks(reason.replace(name, '', 1) if name else reason)
         if owners and tid not in owners:
             other |= owners
             if reason.startswith('regression:'):
@@ -196,23 +230,22 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
         print(f'{tid} stays {status}; this change was refused:')
     elif status is not None:
         print(f'{tid}: DONE was not written; the status stays {status}')
-    for reason in own:
-        print(f'  Missing:  {reason}')
+    console.print_lines(own, prefix='  Missing:  ')
     other_findings(other)
     steps = [line for line in lines if line.startswith('  Next:')]
     if any('test changed:' in reason for reason in own):
         steps = [f'  Next:     commit the test change, then run workorder renew --task {tid}; '
-                 f'the pull request needs workorder-allow:{tid}']
+                 f'the pull request needs workorder-allow:{tid} (an approving review is not enough: {gate.TEST_EDIT})']
     elif own and not other and all('asserts nothing that can fail' in reason or
-                                  reason.endswith(f'; a reviewer accepts it with the label workorder-allow:{tid}')
+                                  reason.endswith('; ' + gate.label_advice(tid))
                                   for reason in own):
         if any('its test must land on' in reason for reason in own):
             steps = [f'  Next:     land the failing test before the work; to request an exception, '
-                     f'run workorder receipt implemented --task {tid} and workorder receipt test --task {tid}, '
-                     f'then set status: DONE in tasks/{tid}.md; the pull request needs workorder-allow:{tid}']
+                     f'run workorder done --task {tid} without --require-test-first; '
+                     f'the pull request needs workorder-allow:{tid} or an approving review']
         elif not needs_review:
             steps = [f'  Next:     fix the test, or run workorder done --task {tid} --needs-review; '
-                     f'the pull request needs workorder-allow:{tid}']
+                     f'the pull request needs workorder-allow:{tid} or an approving review']
     print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
 
 
@@ -220,14 +253,30 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
 @s.test_output_session()
 @s.completion_transaction
 def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_change=False, refactor=False,
-                require_test_first=False, jobs=None):
+                require_test_first=False, jobs=None, take_over=False):
     """Use the same evidence and claim checks as the individual commands, restoring status on refusal."""
     status = None
     try:
         record = s.record(root, tid)
         status = record['status']
+        if status == 'RETIRED':
+            raise s.Refused(f'{tid} is RETIRED; it no longer claims completion. To reopen it, set status: '
+                            f'IN_PROGRESS in tasks/{tid}.md, then run workorder done again')
         if note is not None and not note.strip():
             raise s.Refused('a note needs some text')
+        try:
+            held = s.foreign_claim(root, tid)
+        except s.Refused:
+            held = None
+            print('Note: claims were not checked: origin could not be reached')
+        if held:
+            print(f"Warning: {tid} is held by {held['who']} since {held['at']}; this clone does not hold its claim")
+            if not take_over:
+                done_refusal(tid, status, [
+                    f"  Missing:  {tid} is claimed by {held['who']} (since {held['at']})",
+                    f"  Next:     ask {held['who']} to release it, or run workorder done --task {tid} --take-over "
+                    'to finish it and record the takeover in its Progress notes'])
+                return 1
         if refactor and (needs_review or no_code_change):
             raise s.Refused('--refactor cannot be combined with --needs-review or --no-code-change')
         dirty = s.dirty_paths(root)
@@ -289,7 +338,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if implemented is None or implemented["code"] != s.code_digest(root, s.head(root)):
             item = s.receipt(root, tid, "implemented")
         item = s.receipt(root, tid, "test", command, timeout=timeout, no_code_change=no_code_change,
-                         refactor=refactor, pending_review=needs_review)
+                         refactor=refactor, pending_review=needs_review, completion=True)
         if item['exit_code'] == 0 and not item['valid']:
             print('test does not count: ' + invalid_reason(root, item))
             if s.dirty_paths(root):
@@ -305,14 +354,20 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         project_notes = []
         project_problems = project_tests.run(root, base=revision if base else None, label=base,
                                              notes=project_notes, timeout=timeout)
-        for project_note in project_notes:
-            print(f'Note: {project_note}')
+        console.print_lines(project_notes, prefix='Note: ')
         if project_problems:
             done_refusal(tid, status, [f'  Missing:  {problem}' for problem in project_problems])
             return 1
         print("Acceptance:")
         print(filled["Acceptance"])
-        print("Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
+        exempt = refactor or no_code_change or record.get('kind') in ('refactor', 'verification')
+        tied_problems, tied = gate.acceptance_check(root, record, base, exempt=exempt, timeout=timeout)
+        if tied_problems:
+            done_refusal(tid, status, [f'  Missing:  {problem}' for problem in tied_problems]
+                         + ['  Next:     fix the test or the code, or correct the item\'s (test: path::name), '
+                            f'then run workorder done --task {tid} again'])
+            return 1
+        print(tied or "Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         results = {}
         notes = []
         stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results, notes=notes)
@@ -331,11 +386,13 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                     findings = gate.covered_pending_findings(root, definition, revision)
                     if findings is not None:
                         declared[other] = findings
-            for problem in gate.repository_review_problems(root, revision, records):
+            for problem in gate.repository_review_problems(root, revision, records, run_tests=True,
+                                                           timeout=timeout):
                 problem = gate.comparison_message(problem, revision, base, label)
                 owner = problem.split(':', 1)[0]
                 owner = owner.split(', ', 1)[0]
-                line = gate.reviewer_label(problem, owner)
+                # A test file no task owns is accepted with workorder-allow:tests, as in the pull request.
+                line = gate.reviewer_label(problem, owner) if s.ID.fullmatch(owner) else problem
                 if needs_review:
                     notes.append(line)
                 else:
@@ -404,6 +461,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if refused:
             done_refusal(tid, status, lines, needs_review=needs_review)
             return 1
+        if held:
+            print(f"{tid}: " + s.add_note(root, tid, f"taken over from {held['who']} (claim held since "
+                                               f"{held['at']}) by {s.who(root)}"))
         if note is not None:
             print(f"{tid}: {s.add_note(root, tid, note)}")
         if base and (refactor or no_code_change):
@@ -411,8 +471,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             if exemption:
                 print(f'Note: {exemption}')
         if base and gate.fields_at(root, tid, revision) is None:
-            lines.append(f'  Next:     the pull request needs an approving review or workorder-allow:{tid}; '
-                         'a reviewer reads and accepts the task definition')
+            lines.append('  Next:     the pull-request check will ask for an approving review: this task is new '
+                         f'in this change (the reviewer reads its definition; or the label workorder-allow:{tid}); '
+                         'a second pull request is not needed')
         print("\n".join(lines))
         _, owed, delivery = gate.verdict(root, s.record(root, tid))
         debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""
@@ -437,9 +498,17 @@ def main(argv=None):
         position = args.index("--")
         args, command = args[:position], args[position + 1:]
     options = parser().parse_args(args)
+    hint = ('set WORKORDER_VERBOSE=1 to print it all' if options.action == 'hook'
+            else 'rerun with --verbose to print it all')
+    with console.session(verbose=getattr(options, 'verbose', False), hint=hint) as run:
+        return run_command(options, command, run)
+
+
+def run_command(options, command, run):
     root = Path.cwd()
     try:
         root = s.repository(root)
+        run.root = root
         if options.action == "check":
             if options.task and options.named_task:
                 raise s.Refused("give the task once, positionally or with --task")
@@ -465,13 +534,14 @@ def main(argv=None):
             from .bootstrap import initialize
             return initialize(root, options.check, options.force, claude=options.claude,
                               update_workflow=options.update_workflow, light=options.light, test_first=options.test_first,
-                              project_test=options.project_test)
+                              project_test=options.project_test, no_project_test=options.no_project_test)
         elif options.action == "hook":
             from .hooks import run
             return run(root, options.event)
         elif options.action == "done":
             return finish_task(root, s.task_id(options.task), options.note, options.timeout,
-                               options.needs_review, options.no_code_change, options.refactor, options.require_test_first, options.jobs)
+                               options.needs_review, options.no_code_change, options.refactor, options.require_test_first, options.jobs,
+                               take_over=options.take_over)
         elif options.action == "new":
             shared = s.has_origin(root) and not options.local
             if options.test_paths is None and gate.wrapper_paths({'test': options.test}) is not None:
@@ -512,12 +582,15 @@ def main(argv=None):
                     raise s.Refused('could not run the declared test: ' + str(missing or code))
                 s.print_test_output(output, label='The declared test fails as required.')
             tid = s.new(root, options.title, options.owner, options.ships, options.prefix,
-                        options.template, options.test, options.local, test_paths=named, code_paths=options.code_paths)
+                        options.template, options.test, options.local, test_paths=named, code_paths=options.code_paths,
+                        acceptance=options.acceptance, kind=options.kind)
             where = ("reserved on origin" if shared
                      else "local id: local numbering requested, not reserved on origin" if options.local
                      else "local id: no origin remote, so other clones could pick the same id")
             print(f"{tid} opened: tasks/{tid}.md ({where})")
         elif options.action == "receipt":
+            s.record(root, options.task)
+            claim_warning(root, options.task, 'recording evidence')
             if options.kind == "test" and not command:
                 command = gate.declared_test(s.record(root, options.task)) or []  # the task's own test
             item = s.receipt(root, options.task, options.kind, command, options.target, options.ref,
@@ -541,17 +614,29 @@ def main(argv=None):
                 print("Note: origin could not be reached; showing local task.")
             elif s.newer_work(root, s.task_id(options.task), snapshot):
                 print(f"{snapshot['ref']} has newer work on this task: pull before you start")
-            print("\n".join(gate.record_lines(root, s.task_id(options.task))))
+            console.print_lines(gate.record_lines(root, s.task_id(options.task)))
         elif options.action == "note":
             if options.text is None and options.next_text is None:
                 raise s.Refused("give a note or --next TEXT")
             if options.text is not None and not options.text.strip():
                 raise s.Refused("a note needs some text")
+            s.record(root, options.task)
+            claim_warning(root, options.task, 'adding the note')
             if options.next_text is not None:
                 s.set_task_field(root, options.task, 'next', options.next_text)
                 print(f"{options.task}: next: {options.next_text}")
             if options.text is not None:
                 print(f"{options.task}: {s.add_note(root, options.task, options.text)}")
+        elif options.action == "retire":
+            tid = s.task_id(options.task)
+            previous, line = s.retire(root, tid, options.reason)
+            print(f"{tid} RETIRED (was {previous}): {line.removeprefix('- ')}")
+            print(f"{tid}'s record, notes and receipts stay; it no longer owns its test files, "
+                  "and its test no longer reruns in later checks")
+            print(f"the pull request needs an approving review or workorder-allow:{tid}; "
+                  "retiring removes a protection")
+            push = " and push" if s.has_origin(root) else ""
+            print(f"commit tasks/{tid}.md{push}")
         elif options.action == "repair":
             print(s.repair(root, options.task))
         elif options.action == "renew":
@@ -629,7 +714,9 @@ def main(argv=None):
                     and not counts.get("warnings") and not options.run_tests):
                 return 0
             if problems:
-                print("\n".join(problems))
+                console.print_lines(problems)
+                if options.staged and not options.base and any(gate._accepts_allow_label(p) for p in problems):
+                    print(gate.LOCAL_REVIEW_HINT)
             for warning in counts.get('warnings', []):
                 print(f'Warning: {warning}')
                 if os.environ.get('GITHUB_ACTIONS'):
@@ -642,7 +729,7 @@ def main(argv=None):
             if not problems:
                 print("check: OK")
             if notes:
-                print("\n".join(f"Note: {note}" for note in gate.summarize_notes(notes, options.verbose)))
+                console.print_lines(gate.summarize_notes(notes, options.verbose), prefix='Note: ')
             if options.run_tests and counts["tests"] == 0 and not (options.base and not counts['tasks']):
                 print("no declared test ran in this check")
             print(gate.check_summary(counts, options.run_tests or bool(counts.get('tests')),
