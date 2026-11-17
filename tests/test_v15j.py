@@ -14,14 +14,15 @@ TEST_A = 'from a import a\n\ndef test_a():\n    assert a() == 1\n'
 TEST_B = 'from b import b\n\ndef test_b():\n    assert b() == 2\n'
 
 
-def setup(root, declared=True):
+def setup(root, declared=True, kind1=None, kind2=None):
     ok(root, 'init')
     (root / '.gitignore').write_text('__pycache__/\n.pytest_cache/\n')
     (root / 'tests').mkdir()
     for tid, name, code, test_text in [('TASK-1', 'a', A, TEST_A), ('TASK-2', 'b', B, TEST_B)]:
         (root / f'{name}.py').write_text(code)
         (root / f'tests/test_{name}.py').write_text(test_text)
-        path = task(root, tid, ships='none', test=f'python -m pytest -q tests/test_{name}.py')
+        path = task(root, tid, ships='none', test=f'python -m pytest -q tests/test_{name}.py',
+                    kind=kind1 if tid == 'TASK-1' else kind2)
         fill_sections(path)
         if declared or tid == 'TASK-2':
             path.write_text(path.read_text().replace('contract: "none"',
@@ -45,7 +46,7 @@ def check(root, *flags):
 @pytest.mark.parametrize('verification_first', [False, True])
 def test_verification_ignores_other_tasks_recorded_change(local_repo, declared, verification_first):
     root = local_repo
-    setup(root, declared)
+    setup(root, declared, kind1='verification')
     if verification_first:
         ok(root, 'done', '--task', 'TASK-1', '--no-code-change')
         commit_all(root)
@@ -68,7 +69,7 @@ def test_verification_ignores_other_tasks_recorded_change(local_repo, declared, 
 @pytest.mark.parametrize('receipt_kind', ['implemented', 'test', 'legacy'])
 def test_undeclared_verification_uses_other_tasks_new_receipts(local_repo, receipt_kind):
     root = local_repo
-    setup(root, declared=False)
+    setup(root, declared=False, kind1='verification')
     change_b(root)
     if receipt_kind == 'legacy':
         # Existing releases can have implementation receipts without a path map.
@@ -138,7 +139,7 @@ def test_verification_own_changes_refuse_but_task_label_accepts_legacy_claim(loc
         refused = check(root, *flags)
         assert refused.returncode == 1, refused.stdout + refused.stderr
         assert f'TASK-1: code changed ({path})' in refused.stdout
-    accepted = check(root, '--allow', 'TASK-1')
+    accepted = check(root, '--allow', 'TASK-1,scope:TASK-2')
     assert accepted.returncode == 0, accepted.stdout + accepted.stderr
     assert 'workorder-allow:TASK-1' in refused.stdout
 
@@ -146,7 +147,7 @@ def test_verification_own_changes_refuse_but_task_label_accepts_legacy_claim(loc
 @pytest.mark.parametrize('label_only', [False, True])
 def test_done_refactor_leaves_other_tasks_review_pending(local_repo, label_only):
     root = local_repo
-    setup(root)
+    setup(root, kind1='refactor', kind2='verification')
     test_text = (TEST_B + '\ndef test_extra():\n    assert True\n' if label_only else
                  TEST_B.replace('b() == 2', 'b() == int("2")'))
     (root / 'tests/test_b.py').write_text(test_text)

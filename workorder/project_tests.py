@@ -190,7 +190,7 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
         failed = sorted(node for node, outcome in report.get('outcomes', {}).items()
                         if outcome == 'FAILED') if pytest and code == 1 else []
         if not failed:
-            return finding(f'the project test fails on this code (exit {code}); '
+            return finding(f'the project test fails on this code (exit {gate.test_exit_meaning(code, words)}); '
                            'could not identify failing tests to compare with the base')
         base = base or gate.local_test_base(root)
         if not base:
@@ -219,5 +219,5 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
             problems += finding(f'the project test fails on this code: {node} (passes on {display})')
         else:
             problems += finding(f'the project test fails on this code: {node}; '
-                                f'could not compare this failing test with {display} (exit {before})')
+                                f'could not compare this failing test with {display} (exit {gate.test_exit_meaning(before, words)})')
     return problems

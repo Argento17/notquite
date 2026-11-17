@@ -437,7 +437,7 @@ def test_test_review_refuses_by_default_and_warns_on_request(local_repo, change,
             '\ndef test_other():\n    assert int(1) == 1\n')
     probe = root / 'tests/test_app.py'
     probe.write_text(body.replace('value == 1', 'value == 2') if change == 'base_failing' else body)
-    definition = fill_sections(task(root, ships='none', test=f'{PYTHON} -m pytest -q tests'))
+    definition = fill_sections(task(root, ships='none', test=f'{PYTHON} -m pytest -q tests', kind='verification'))
     base = commit_all(root)
     if change == 'edit':
         probe.write_text(body.replace('value == 1', 'value > 0'))

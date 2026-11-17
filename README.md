@@ -74,10 +74,10 @@ if its test still fails, the pull request needs the reviewer's explicit `workord
 Ordinary tasks need a code change since the target merge base (or task creation).
 Use `--no-code-change` only when the task's own code and test files are unchanged. For intentional test edits,
 `--needs-review` writes DONE pending a reviewer label or approval. Use `--refactor`
-for unchanged tests passing before and after. Plain `renew` keeps that declaration; `renew --no-refactor` drops it. `new --code-paths src/calc.py` sets code scope. [Task format](docs/reference.md#task-files).
+for unchanged tests passing before and after. These exemptions need `workorder-allow:ID` on the pull request unless the base task already declares `kind: refactor` or `kind: verification`; approval alone is insufficient. Hand-written DONE with receipts but no code change follows the verification rule. Plain `renew` keeps a refactor declaration; `renew --no-refactor` drops it. `new --code-paths src/calc.py` sets code scope; files outside claiming tasks' scopes need `workorder-allow:scope:ID`. [Task format](docs/reference.md#task-files).
 
 For installed `src/` projects (including `pip install -e .`), test copies verify project imports using pytest's actual configuration and `pythonpath`, including isolated Python commands.
-Only the project's own packages must resolve inside the copy; editable dependencies may live elsewhere. Documentation and Python docstring-only edits need no code receipts or renewal.
+Only the project's own packages must resolve inside the copy; editable dependencies may live elsewhere. Declared code paths and package source (including `src/click/testing.py`) are code unless explicitly in `test_paths`. Configure test name/folder globs in `.workorder/config.json`. Unavailable comparisons need the task label (`tests` for unowned files); pytest exits include their meaning. Documentation and Python docstring-only edits need no code receipts or renewal.
 
 ## Working with coding agents
 

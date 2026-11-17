@@ -72,9 +72,11 @@ def ok(root, *args):
     return result.stdout
 
 
-def task(root, tid="TASK-1", status="IN_PROGRESS", ships="repo", waits=(), contract="none", test="any"):
+def task(root, tid="TASK-1", status="IN_PROGRESS", ships="repo", waits=(), contract="none", test="any", kind=None):
     fields = dict(id=tid, title="Add a list filter", owner="alex", status=status,
                   ships=ships, waits_on=list(waits), contract=contract)
+    if kind is not None:
+        fields['kind'] = kind
     if test is not None:
         fields["test"] = test
     path = root / "tasks" / f"{tid}.md"
@@ -1907,7 +1909,7 @@ def test_a_squash_onto_a_moved_main_matches_without_renewal(clones, tmp_path):
 def test_check_base_can_run_the_declared_tests_itself(local_repo, monkeypatch):
     git(local_repo, "commit", "-q", "--allow-empty", "-m", "Base")
     probe = f"{PYTHON} -c \"import os, sys; sys.exit(0 if os.environ.get('WO_AGENT_ONLY') else 3)\""
-    task(local_repo, "TASK-1", ships="none", test=probe)
+    task(local_repo, "TASK-1", ships="none", test=probe, kind='verification')
     git(local_repo, "add", "tasks")
     git(local_repo, "commit", "-qm", "Define the task")
     base = store.head(local_repo)

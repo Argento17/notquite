@@ -15,8 +15,8 @@ BETA_TEST = 'from beta import beta\n\ndef test_beta():\n    assert beta(2) == 3\
 GAMMA_TEST = 'from gamma import gamma\n\ndef test_gamma():\n    assert gamma() == 3\n'
 
 
-def define(root, tid, name, scope=None):
-    path = task(root, tid, ships='none', test=f'python -m pytest -q tests/test_{name}.py')
+def define(root, tid, name, scope=None, kind=None):
+    path = task(root, tid, ships='none', test=f'python -m pytest -q tests/test_{name}.py', kind=kind)
     fill_sections(path)
     if scope is not None:
         path.write_text(path.read_text().replace('contract: "none"',
@@ -47,7 +47,7 @@ def two_functions(root):
 def test_second_task_test_edit_ignores_first_tasks_refactor(local_repo, unscoped):
     root = local_repo
     setup(root)
-    define(root, 'TASK-1', 'beta', 'beta.py')
+    define(root, 'TASK-1', 'beta', 'beta.py', kind='refactor')
     define(root, 'TASK-2', 'gamma', None if unscoped else 'gamma.py')
     start_branch(root)
     two_functions(root)
@@ -97,7 +97,7 @@ def test_two_new_tasks_complete_with_their_own_functions(local_repo, unscoped):
     assert result.returncode == 1, result.stdout + result.stderr
     for tid in ('TASK-1', 'TASK-2'):
         assert f'{tid} was written and finished in this pull request;' in result.stdout
-    result = check(root, '--allow', 'TASK-1,TASK-2')
+    result = check(root, '--allow', 'TASK-1,TASK-2' + (',scope:TASK-2' if unscoped else ''))
     assert result.returncode == 0, result.stdout + result.stderr
 
 

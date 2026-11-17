@@ -27,7 +27,7 @@ def finished_on_branch(root, status='DONE', refactor=False):
     (root / '.gitignore').write_text('__pycache__/\n.pytest_cache/\n')
     (root / 'tests').mkdir()
     command = 'python -m pytest -q tests/test_fn.py'
-    fill_sections(task(root, ships='none', test=command))
+    fill_sections(task(root, ships='none', test=command, kind='refactor' if refactor else None))
     if refactor:
         (root / 'fn.py').write_text(CODE)
         (root / 'tests/test_fn.py').write_text(TEST.replace('from calc', 'from fn'))

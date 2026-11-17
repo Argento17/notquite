@@ -232,7 +232,7 @@ def test_all_tests_does_not_rerun_identical_current_and_ref_commands(local_repo)
         'p.write_text(p.read_text()+"run\\n" if p.exists() else "run\\n")')
     command = [PYTHON, 'test_count.py']
     for n in (1, 2):
-        fill_sections(task(root, f'TASK-{n}', ships='none', test=store.join_command(command)))
+        fill_sections(task(root, f'TASK-{n}', ships='none', test=store.join_command(command), kind='verification'))
     base = commit_all(root)
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
     for n in (1, 2):

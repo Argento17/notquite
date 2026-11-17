@@ -865,7 +865,10 @@ def default_pytest_files(root, record, base, staged=False):
     candidates = {path for path in candidates if not s.generated_path(path)
                   and not path.startswith(('tasks/', '.workorder/', '.notquite/'))}
     patterns = pytest_patterns(root, base, staged, configs)
-    found = {path for path in candidates if _repository_test_file(path) or _matches_test_name(path, patterns)}
+    names, directories = test_classification_patterns(root, staged)
+    found = {path for path in candidates if _language_test_name(path, names)
+             or any(test_directory(part, directories) for part in path.split('/')[:-1])
+             or _matches_test_name(path, patterns)} - code_material(root, base, staged)
     if paths:
         found = {path for path in found if any(parent == '.' or any(
             fnmatch.fnmatchcase('/'.join(path.split('/')[:end]), parent)
@@ -906,19 +909,72 @@ def test_files(root, record, base, staged=False):
                 continue
             found |= {p for p in candidates if (path == "." or p == path or p.startswith(path + "/"))
                       and ('test_paths' in definition or not p.startswith(('tasks/', '.workorder/', '.notquite/')))}
-    return found
+    return found - code_material(root, base, staged)
 
 
 LANGUAGE_TEST_PATTERNS = ('test_*.py', '*_test.py', '*_test.go', '*.test.*', '*.spec.*', '*_spec.*', '*_tests.*',
                           'testing.py', '*_testing.py', 'expected*', 'golden*', 'snapshot*')
 TEST_DIR_NAMES = {'test', 'tests', '__tests__', 'spec'}
+TEST_DIRECTORY_PATTERNS = ('test', 'tests', 'testing', '__tests__', 'spec', 'specs', 'fixtures',
+                           'testdata', 'test_data', 'testsupport', 'test_support', 'golden',
+                           '__snapshots__', 'test_*', '*_test', '*_tests')
 
 
-def test_directory(name):
-    name = name.lower()
-    return (name in {'test', 'tests', 'testing', '__tests__', 'spec', 'specs', 'fixtures',
-                    'testdata', 'test_data', 'testsupport', 'test_support', 'golden', '__snapshots__'}
-            or name.startswith('test_') or name.endswith(('_test', '_tests')))
+def test_directory(name, patterns=TEST_DIRECTORY_PATTERNS):
+    return any(fnmatch.fnmatchcase(name.lower(), pattern) for pattern in patterns)
+
+
+@s.cached_read
+def test_classification_patterns(root, staged=False):
+    from .project_tests import CONFIG, _settings
+    settings = _settings(root, staged)
+    result = []
+    for key, default in (('test_file_patterns', LANGUAGE_TEST_PATTERNS),
+                         ('test_directory_patterns', TEST_DIRECTORY_PATTERNS)):
+        value = settings.get(key, list(default))
+        if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+            raise s.Refused(f'{CONFIG}: {key} must be a list of nonempty glob patterns')
+        result.append(tuple(value))
+    return tuple(result)
+
+
+@s.cached_read
+def code_material(root, base, staged=False):
+    """Explicit test paths win; declared code and package source beat name guesses."""
+    candidates = repository_files(root, base) | repository_files(root) | raw_changed_paths(root, base, staged)
+    candidates = {path for path in candidates if not s.generated_path(path)}
+    # src-layout packages may be namespaces. Flat packages need __init__.py;
+    # packaging metadata distinguishes project source from test helper packages.
+    packaged = 'setup.py' in candidates
+    for path in ('pyproject.toml', 'setup.cfg'):
+        if path in candidates:
+            for content in (_test_bytes(root, path, base), _test_bytes(root, path, staged=staged)):
+                packaged |= bool(re.search(rb'(?m)^\s*\[(?:project|build-system|tool\.poetry|metadata)\]',
+                                            content or b''))
+    roots = set()
+    for path in candidates:
+        parts = path.split('/')
+        if len(parts) >= 3 and parts[0] == 'src' and path.endswith('.py'):
+            roots.add('/'.join(parts[:2]))
+        elif (packaged and len(parts) == 2 and parts[-1] == '__init__.py'
+              and not test_directory(parts[0])
+              and parts[0] not in {'docs', 'doc', 'examples', 'example', 'scripts', 'tools'}):
+            roots.add(parts[0])
+    code = {path for path in candidates if _under_test_root(path, roots)}
+    explicit = set()
+    before = s.metadata_texts(root, base)
+    for record in records(root, staged, errors={}).values():
+        lines = before.get(f"tasks/{record['id']}.md", '').splitlines()
+        try:
+            previous = s.front_matter(record['id'], lines[1:lines.index('---', 1)])
+        except (s.Refused, ValueError):
+            previous = {}
+        for definition in (record, previous):
+            if 'code_paths' in definition:
+                code |= declared_code_paths(definition, candidates)
+            if 'test_paths' in definition:
+                explicit |= declared_code_paths({'code_paths': definition['test_paths']}, candidates)
+    return code - explicit
 
 
 def looks_like_test(path):
@@ -930,9 +986,9 @@ def looks_like_test(path):
             or any(fnmatch.fnmatchcase(name, pattern) for pattern in LANGUAGE_TEST_PATTERNS))
 
 
-def _language_test_name(path):
+def _language_test_name(path, patterns=LANGUAGE_TEST_PATTERNS):
     name = posixpath.basename(path)
-    return any(fnmatch.fnmatchcase(name, pattern) for pattern in LANGUAGE_TEST_PATTERNS)
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
 
 
 def _repository_test_file(path):
@@ -1121,13 +1177,13 @@ def _named_test_folder(path, candidates):
     return bool(path and path != '.' and any(candidate.startswith(path + '/') for candidate in candidates))
 
 
-def _natural_test_roots(candidates):
+def _natural_test_roots(candidates, patterns=TEST_DIRECTORY_PATTERNS):
     """Recognised test folders, including their data and helpers."""
     roots = set()
     for path in candidates:
         parts = path.split('/')
         for index, part in enumerate(parts[:-1]):
-            if test_directory(part):
+            if test_directory(part, patterns):
                 roots.add('/'.join(parts[:index + 1]))
     return roots
 
@@ -1138,8 +1194,8 @@ def _matches_test_name(path, patterns):
             or any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns))
 
 
-def _inferred_roots(candidates, named_paths):
-    roots = _natural_test_roots(candidates)
+def _inferred_roots(candidates, named_paths, patterns=TEST_DIRECTORY_PATTERNS):
+    roots = _natural_test_roots(candidates, patterns)
     for path in named_paths:
         if _named_test_folder(path, candidates):
             roots.add(path)
@@ -1237,7 +1293,7 @@ def strict_test_files(root, record, base, staged=False):
                 continue
     paths |= {path for path in on_path if not path.endswith('.toml')}
     if not any(uses_pytest(definition) for definition in definitions):
-        return paths & candidates
+        return (paths & candidates) - code_material(root, base, staged)
     paths |= configs
     # Even when passed with -c, only pytest sections of TOML belong to this policy.
     if all('test_paths' not in definition for definition in definitions):
@@ -1257,7 +1313,7 @@ def strict_test_files(root, record, base, staged=False):
             current = ""
         if pytest_sections(old, native=name != 'pyproject.toml') != pytest_sections(current, native=name != 'pyproject.toml'):
             paths.add(path)
-    return paths
+    return paths - code_material(root, base, staged)
 
 
 class _TestSyntax(ast.NodeTransformer):
@@ -1782,12 +1838,13 @@ def repository_test_files(root, base, all_records, staged=False):
                 named.extend(pytest_collection_paths(definition))
     patterns = pytest_patterns(root, base, staged, tuple(sorted(configs)))
     testpaths = pytest_patterns(root, base, staged, tuple(sorted(configs)), 'testpaths')
-    roots = _inferred_roots(candidates, _normalize_named_paths(root, list(named) + list(testpaths)))
+    names, directories = test_classification_patterns(root, staged)
+    roots = _inferred_roots(candidates, _normalize_named_paths(root, list(named) + list(testpaths)), directories)
     found = set()
     for path in candidates:
         parts = path.split('/')
         if (_under_test_root(path, roots) or _matches_test_name(path, patterns)
-                or _language_test_name(path)):
+                or _language_test_name(path, names)):
             found.add(path)
         if parts[-1] in PYTEST_CONFIG_NAMES or path in configs:
             if parts[-1] in {'pyproject.toml', 'tox.ini', 'setup.cfg'} or path.endswith('.toml'):
@@ -1802,7 +1859,7 @@ def repository_test_files(root, base, all_records, staged=False):
                     found.add(path)
             else:
                 found.add(path)
-    return found | {p for p in candidates if _under_test_root(p, roots)}
+    return (found | {p for p in candidates if _under_test_root(p, roots)}) - code_material(root, base, staged)
 
 
 def _pytest_ini_sections(text):
@@ -2064,7 +2121,7 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
         return None
     if regression:
         return f"regression: {tid}'s test fails on this code"
-    return f"NOT DONE  {tid} says {record['status']}, but its test failed when this check ran it (exit {code})"
+    return f"NOT DONE  {tid} says {record['status']}, but its test failed when this check ran it (exit {test_exit_meaning(code, declared)})"
 
 
 def _test_bytes(root, path, base=None, staged=False):
@@ -2542,7 +2599,23 @@ class ReviewProblem(str):
 
 
 class ComparisonProblem(ReviewProblem):
-    """An import comparison could not run; only the task label accepts it."""
+    """A comparison could not run; only the owning reviewer label accepts it."""
+
+
+def comparison_problem(message, tid, path=None):
+    finding = ComparisonProblem(message, path or f'tasks/{tid}.md', label_only=True)
+    return ComparisonProblem(reviewer_label(finding, tid), finding.path, label_only=True)
+
+
+def test_exit_meaning(code, command):
+    """Retain the numeric exit alongside its meaning, without guessing for other runners."""
+    if isinstance(code, int) and uses_pytest({'test': s.join_command(command)}):
+        meaning = {0: 'tests passed', 1: 'tests failed', 2: 'test execution or collection was interrupted',
+                   3: 'pytest had an internal error', 4: 'pytest command-line usage error',
+                   5: 'no tests were collected', 124: 'test timed out', 127: 'test command could not start'}.get(code)
+        if meaning:
+            return f'{code} ({meaning})'
+    return str(code)
 
 
 class AssertionProblem(ReviewProblem):
@@ -2899,6 +2972,40 @@ def completion_changed(root, base, record, staged=False):
     return False
 
 
+def completion_kind_problem(root, base, record, staged=False):
+    """An exemption needs prior definition or an explicit reviewer decision."""
+    if record['status'] not in FINISHED:
+        return None
+    run = latest_test_run(root, record, staged)
+    old = {entry['hash'] for entry in s.entries(root, record['id'], rev=base)}
+    fresh = completion_changed(root, base, record, staged)
+    if not fresh and (not run or run.get('hash') in old):
+        return None
+    if run.get('refactor'):
+        kind = 'refactor'
+    elif run.get('no_code_change'):
+        kind = 'verification'
+    elif fresh:
+        material = test_material(root, base, staged)
+        code = {path for path in changed_paths(root, base, staged) - material if needs_task_receipt(path)}
+        if 'code_paths' in record:
+            code &= declared_code_paths(record, code)
+        else:
+            code -= other_recorded_paths(root, record, base, code, staged)
+        if code:
+            return None
+        kind = 'verification'
+    else:
+        return None
+    before = fields_at(root, record['id'], base) or {}
+    if before.get('kind') == kind:
+        return None
+    tid = record['id']
+    text = f'{tid}: {kind} completion needs review; its definition on the base did not declare kind: {kind}'
+    finding = AssertionProblem(text, f'tasks/{tid}.md', label_only=True)
+    return AssertionProblem(reviewer_label(finding, tid), finding.path, label_only=True)
+
+
 @s.cached_read
 def finished_code_change(root, base, record, staged=False):
     """New completion evidence must describe the code a squash would retain."""
@@ -2976,7 +3083,7 @@ def stub_problem(root, base, record, *, staged=False, timeout=None, counts=None,
                                     f"tasks/{record['id']}.md", label_only=True)
         return ComparisonProblem(reviewer_label(finding, record['id']), finding.path, label_only=True)
     if isinstance(code, str) or code in {5, 124, 127} or uses_pytest(record) and code in {3, 4}:
-        return f"{record['id']}: could not run its test with changed functions stubbed out: {code}"
+        return f"{record['id']}: could not run its test with changed functions stubbed out: {test_exit_meaning(code, command)}"
     if code == 0:
         subject = 'its new or changed tests still pass' if tests else 'its test still passes'
         names = test_names(tests) if tests else '; '.join(descriptions)
@@ -3120,7 +3227,8 @@ def test_change_problems(root, base, record, timeout=None, *, staged=False, stri
     except (OSError, s.Refused, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as error:
         if notes is not None:
             notes.append(f"{record['id']}: REF comparison skipped against {base}: {error}")
-        return [f"{record['id']}: could not compare its changed tests with {base}: {error}"]
+        return [comparison_problem(f"{record['id']}: could not compare its changed tests with {base}: {error}",
+                                   record['id'])]
 
 
 def _test_change_problems(root, base, record, timeout=None, *, staged=False, strict=False, allow=False,
@@ -3308,9 +3416,12 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                         matches = {path for path in candidates if path == stem + '.py'
                                    or path.startswith(stem + '/') and path.endswith('.py')}
                         new_module |= bool(matches) and not bool(matches & repository_files(root, base))
-                if (isinstance(own_code, str) or own_code == 124
-                        or uses_pytest(record) and own_code in {3, 4} or missing and not new_module):
-                    test_failure(f'{tid}: could not run its current test on {base}: {missing or own_code}')
+                if (isinstance(own_code, str) or own_code in {124, 127}
+                        or uses_pytest(record) and own_code in {3, 4, 5} or missing and not new_module):
+                    problems.append(comparison_problem(
+                        f'{tid}: could not compare its current test on {base}: '
+                        f'{missing or test_exit_meaning(own_code, command)}', tid))
+                    return problems
                 elif refactor:
                     if own_code != 0 or pytest_no_pass(own_output):
                         test_failure(f'{tid}: a declared refactor needs its test to pass on {base}')
@@ -3353,7 +3464,9 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             if isinstance(base_code, str):
                 notes.append(f'{tid}: REF comparison skipped against {base}: {base_code}')
                 missing = s.missing_test_dependency(base_command, base_code, base_output, root=root)
-                test_failure(f'{tid}: could not run its tests from {base}: {missing or base_code}')
+                problems.append(comparison_problem(
+                    f'{tid}: could not compare its tests from {base}: '
+                    f'{missing or test_exit_meaning(base_code, base_command)}', tid))
                 return problems
             if base_code != 0:
                 # An unfinished task may have acceptance tests before the implementation.
@@ -3362,10 +3475,12 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                 if unavailable(own_code):
                     return problems
                 missing = s.missing_test_dependency(base_command, own_code, own_output, root=root)
-                if missing or isinstance(own_code, str):
+                if missing or isinstance(own_code, str) or own_code in {3, 4, 5, 124, 127}:
                     if own_output and (finishing or not staged):
                         s.print_test_output(own_output, failed=True)
-                    test_failure(f'{tid}: could not run its tests on {base}: {missing or own_code}')
+                    problems.append(comparison_problem(
+                        f'{tid}: could not compare its tests on {base}: '
+                        f'{missing or test_exit_meaning(own_code, base_command)}', tid))
                     return problems
                 if own_code != 0:
                     addition_rule()
@@ -3407,7 +3522,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                                    f'this increase in {outcome} tests')
     except (OSError, s.Refused, ValueError, subprocess.SubprocessError) as error:
         notes.append(f'{tid}: REF comparison skipped against {base}: {error}')
-        problems.append(f'{tid}: could not compare its changed tests with {base}: {error}')
+        problems.append(comparison_problem(f'{tid}: could not compare its changed tests with {base}: {error}', tid))
     return problems
 
 
@@ -3691,10 +3806,10 @@ def unowned_test_failure(root, base, path, material, staged, timeout, counts):
             return None
         before, before_output = run_ref_test(root, Path(temporary) / 'base', base, command, timeout, counts)
         missing = s.missing_test_dependency(command, before, before_output, root=root)
-        if missing or isinstance(before, str) or before in {5, 124, 127}:
-            raise s.Refused(f'could not compare {path}: tests on {base}: {missing or before}')
-        if isinstance(code, str) or code in {5, 124, 127}:
-            raise s.Refused(f'could not compare {path}: tests from {base} on this code: {code}')
+        if missing or isinstance(before, str) or before in {2, 3, 4, 5, 124, 127}:
+            raise s.Refused(f'could not compare {path}: tests on {base}: {missing or test_exit_meaning(before, command)}')
+        if isinstance(code, str) or code in {2, 3, 4, 5, 124, 127}:
+            raise s.Refused(f'could not compare {path}: tests from {base} on this code: {test_exit_meaning(code, command)}')
         if before != 0:
             return None
         return f'{path}: its version from {base} fails on this code (behaviour changed)'
@@ -3751,7 +3866,11 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
             try:
                 failure = unowned_test_failure(root, base, path, material, staged, timeout, counts)
             except (s.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
-                problems.append(str(error))
+                if 'tests' in labels:
+                    if notes is not None:
+                        notes.append(str(error) + ' (allowed by workorder-allow:tests)')
+                else:
+                    problems.append(comparison_problem(str(error), 'tests', path))
                 failure = None
             if failure:
                 labels = allow if explicit_allow is None else explicit_allow
@@ -3775,29 +3894,33 @@ def repository_review_problems(root, base, all_records, staged=False, allow=(), 
 
 
 def code_path_problems(root, base, changed, code, all_records, staged, allow, notes):
-    """Optional scopes apply only when every task adding receipts declares one."""
+    """A work receipt covers only its declared scope; unrelated receipts cannot widen it."""
     contributors = []
     for tid in sorted({s.receipt_task(path) for path in changed} - {None}):
         if tid not in all_records:
             continue
         try:
             old = {entry['hash'] for entry in s.entries(root, tid, rev=base)}
-            if any(entry['hash'] not in old for entry in s.entries(root, tid, staged)):
+            if any(entry['hash'] not in old and entry['kind'] in {'implemented', 'test'}
+                   for entry in s.entries(root, tid, staged)):
                 contributors.append(tid)
         except s.Refused:
             continue  # ordinary receipt checks report invalid evidence
-    if not contributors or any('code_paths' not in all_records[tid] for tid in contributors):
+    scoped = [tid for tid in contributors if 'code_paths' in all_records[tid]]
+    if not scoped:
         return []
-    scopes = {posixpath.normpath(path) for tid in contributors for path in all_records[tid]['code_paths']}
+    scopes = {posixpath.normpath(path) for tid in scoped for path in all_records[tid]['code_paths']}
     outside = sorted(path for path in code
                      if not any(scope == '.' or path == scope or path.startswith(scope + '/') for scope in scopes))
     problems = []
     for path in outside:
-        if {'scope:' + tid for tid in contributors} & set(allow):
-            notes.append(f'accepted: {path} (outside code paths of {", ".join(contributors)})')
+        if {'scope:' + tid for tid in scoped} & set(allow):
+            notes.append(f'accepted: {path} (outside code paths of {", ".join(scoped)})')
         else:
-            problems.append(reviewer_label(f'{path} is outside the code paths of {", ".join(contributors)}',
-                                           "scope:" + contributors[0]))
+            finding = AssertionProblem(f'{path} is outside the code paths of {", ".join(scoped)}', path,
+                                       label_only=True)
+            problems.append(AssertionProblem(reviewer_label(finding, 'scope:' + scoped[0]), path,
+                                             label_only=True))
     return problems
 
 
@@ -3838,8 +3961,10 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
     if approving_review:
         notes += ['approval did not cover: ' + str(problem) for problem in problems
                   if getattr(problem, 'label_only', False)]
-    problems = [problem for problem in problems
-                if not (isinstance(problem, ComparisonProblem) and problem.split(':', 1)[0] in explicit_allow)]
+    accepted_comparisons = [problem for problem in problems
+                           if isinstance(problem, ComparisonProblem) and problem.split(':', 1)[0] in explicit_allow]
+    notes += [str(problem) + ' (allowed by explicit label)' for problem in accepted_comparisons]
+    problems = [problem for problem in problems if problem not in accepted_comparisons]
     warnings = [problem for problem in problems if isinstance(problem, ReviewProblem)
                 and not isinstance(problem, (TestFirstProblem, AssertionProblem, ComparisonProblem))] if base and review == 'warn' else []
     counts['warnings'] = warnings
@@ -3917,27 +4042,29 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                     notes.append(text + ' (allowed)')
                 else:
                     problems.append(AssertionProblem(text, path, label_only=True))
-    if require_task and changed:
+    if (base or require_task) and changed:
         test_material = repository_test_files(root, base, all_records, staged)
         for record in all_records.values():
             test_material |= strict_test_files(root, record, base, staged)
-        code = {path for path in changed - test_material if needs_task_receipt(path)
-                and not any(fnmatch.fnmatchcase(path, pattern) for pattern in require_task_ignore)}
-        recorded = has_work_receipt(root, base, changed, staged, allow, new_tasks)
-        if not code or recorded:
-            new_tasks.clear()
-        if 'no-task' in allow:
-            if code and not recorded:
-                notes.append('accepted: no-task (code without task work)')
-            new_tasks.clear()
-        elif code and not recorded and not new_tasks:
-            problems.append('this change edits code but no task records it with a new implemented or test receipt; '
-                            'run workorder receipt implemented --task ID or workorder receipt test --task ID')
-            advice = renewal_advice(root, base, changed, staged)
-            if advice:
-                problems.append(advice)
-        if code:
-            problems += code_path_problems(root, base, changed, code, all_records, staged, allow, notes)
+        scope_code = {path for path in changed - test_material if needs_task_receipt(path)}
+        code = {path for path in scope_code
+                if not any(fnmatch.fnmatchcase(path, pattern) for pattern in require_task_ignore)}
+        if require_task:
+            recorded = has_work_receipt(root, base, changed, staged, allow, new_tasks)
+            if not code or recorded:
+                new_tasks.clear()
+            if 'no-task' in allow:
+                if code and not recorded:
+                    notes.append('accepted: no-task (code without task work)')
+                new_tasks.clear()
+            elif code and not recorded and not new_tasks:
+                problems.append('this change edits code but no task records it with a new implemented or test receipt; '
+                                'run workorder receipt implemented --task ID or workorder receipt test --task ID')
+                advice = renewal_advice(root, base, changed, staged)
+                if advice:
+                    problems.append(advice)
+        if scope_code:
+            problems += code_path_problems(root, base, changed, scope_code, all_records, staged, explicit_allow, notes)
     stray = [path for path in s.files(root, "tasks", staged) if not path.endswith(".md")
              and (changed is None or path in changed)]
     problems += [f"{path}: only task files belong in tasks/; a file here is outside the code fingerprint,"
@@ -3960,7 +4087,10 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                       if (path in repository_files(root, base)
                           or (path in repository_files(root) if staged else s.local_path(root, path).is_file()))
                       and posixpath.basename(path) not in PYTEST_CONFIG_NAMES | {'conftest.py'}}
-            if mapped or not any(_repository_test_file(path) for path in repository_files(root, base)):
+            if mapped:
+                continue
+            material = repository_test_files(root, base, all_records, staged) & repository_files(root, base)
+            if not any(posixpath.basename(path) not in PYTEST_CONFIG_NAMES | {'conftest.py'} for path in material):
                 continue
             problems.append(f'{tid}: no test files are known for its test; set test_paths')
         problems += repository_review_problems(root, base, all_records, staged, allow, strict_tests, errors, notes,
@@ -4057,6 +4187,12 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         elif record['status'] in FINISHED and record['contract'] == 'none' and tid not in cycles:
             supported.add(tid)
         if base:
+            exemption = completion_kind_problem(root, base, record, staged)
+            if exemption:
+                if tid in explicit_allow:
+                    notes.append(str(exemption) + ' (allowed)')
+                else:
+                    problems.append(exemption)
             advice = finished_code_change(root, base, record, staged)
             if advice:
                 problems.append(advice)
@@ -4343,7 +4479,7 @@ def test_line(record, history):
             where += f", same code as {short}"
         if newest["exit_code"] != 0:
             timed_out = 'timed out, ' if newest['exit_code'] == 124 else ''
-            latest = f"FAIL ({timed_out}exit {newest['exit_code']}, {where})"
+            latest = f"FAIL ({timed_out}exit {test_exit_meaning(newest['exit_code'], newest.get('command', []))}, {where})"
         elif not newest["valid"]:
             latest = f"not counted: files or HEAD changed while it ran ({where})"
         else:
@@ -4429,7 +4565,7 @@ def timeline(root, record, history):
             what = f"implemented {commit}"
         elif kind == "test":
             timed_out = 'timed out, ' if item['exit_code'] == 124 else ''
-            result = "PASS" if item["exit_code"] == 0 else f"FAIL ({timed_out}exit {item['exit_code']})"
+            result = "PASS" if item["exit_code"] == 0 else f"FAIL ({timed_out}exit {test_exit_meaning(item['exit_code'], item.get('command', []))})"
             what = f"test {result}: {s.join_command(item['command'])} on {commit}"
             reason = None
             if not item['valid']:

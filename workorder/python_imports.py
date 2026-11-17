@@ -45,10 +45,10 @@ def package_names(paths, *, modules=False):
     found = set()
     for relative in paths:
         path = Path(relative)
-        if path.suffix != '.py' or looks_like_test(relative):
-            continue
         parts = path.parts
-        src = parts[0] == 'src'
+        src = bool(parts) and parts[0] == 'src'
+        if path.suffix != '.py' or not src and looks_like_test(relative):
+            continue
         if src:
             parts = parts[1:]
         elif parts[0] in {'docs', 'doc', 'examples', 'example', 'scripts', 'tools', 'build', 'dist'}:

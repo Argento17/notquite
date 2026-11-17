@@ -87,7 +87,7 @@ def test_unfinished_command_can_be_repaired_before_receipts(local_repo):
 @pytest.mark.parametrize('explicit', [True, False])
 def test_renew_preserves_refactor_after_rebase(local_repo, explicit):
     root = local_repo
-    branch(root, test_text=TEST)
+    branch(root, test_text=TEST, kind='refactor')
     (root / 'calc.py').write_text(CODE.replace('a / b', '(a + 0) / b'))
     commit_all(root)
     ok(root, 'done', '--task', 'TASK-2', '--refactor')
@@ -118,7 +118,7 @@ def test_test_label_cannot_accept_scope(local_repo):
     assert result.returncode == 1, result.stdout + result.stderr
     assert 'workorder-allow:scope:TASK-2' in result.stdout
     assert check(root, '--allow', 'TASK-2,scope:TASK-2').returncode == 0
-    assert check(root, '--approving-review').returncode == 0
+    assert check(root, '--approving-review').returncode == 1
 
 
 def test_scope_label_parser_keeps_reviewer_boundary():

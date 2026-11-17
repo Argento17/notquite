@@ -94,7 +94,9 @@ def test_verification_exemption_survives_later_base_check(local_repo):
     assert 'TASK-2 DONE:' in output
     receipt = store.entries(root, 'TASK-2')[-1]
     assert receipt.get('no_code_change') is True
-    ok(root, 'check', '--base', 'origin/main', '--run-tests', '--all-tests')
+    result = cli(root, 'check', '--base', 'origin/main', '--run-tests', '--all-tests')
+    assert result.returncode == 1 and 'verification completion needs review' in result.stdout
+    ok(root, 'check', '--base', 'origin/main', '--run-tests', '--all-tests', '--allow', 'TASK-2')
 
 
 def finished_multiplication(root):

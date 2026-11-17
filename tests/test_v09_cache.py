@@ -207,7 +207,7 @@ def test_done_and_hooks_share_one_run_but_explicit_check_runs_fresh(local_repo):
     stop = subprocess.run([PYTHON, '-m', 'workorder', 'hook', 'stop'], cwd=root, env=env,
                           input='{}', capture_output=True, text=True)
     assert stop.returncode == 0, stop.stdout + stop.stderr
-    checked = cli(root, 'check', '--base', base, '--run-tests', '--all-tests')
+    checked = cli(root, 'check', '--base', base, '--run-tests', '--all-tests', '--allow', 'TASK-1')
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert len(executions(counter)) == 3
     assert store.record(root, 'TASK-1')['status'] == 'DONE'
