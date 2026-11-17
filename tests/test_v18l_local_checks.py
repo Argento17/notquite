@@ -90,7 +90,7 @@ def test_staged_notes_unowned_test_changes_in_work_in_progress(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert ('Note: tests/test_style.py: its version from origin/main fails on this code (behaviour changed); '
             'a reviewer accepts it with the label workorder-allow:tests') in result.stdout
-    assert 'done refuses this until you run workorder done --task ID --needs-review' in result.stdout
+    assert 'done refuses this until you run workorder done --task TASK-1 --needs-review' in result.stdout  # 1.0.1: the real id
 
 
 def test_staged_refuses_new_skip_and_changed_old_test_no_task_owns(tmp_path):
@@ -306,7 +306,7 @@ def test_an_honest_change_to_what_an_old_test_expects_needs_one_label(tmp_path):
     git(root, 'add', '-A')
     result = staged(root)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'done refuses this until you run workorder done --task ID --needs-review' in result.stdout
+    assert 'done refuses this until you run workorder done --task TASK-1 --needs-review' in result.stdout  # 1.0.1: the real id
     commit(root, 'fix')
     assert cli(root, 'done', '--task', 'TASK-1').returncode == 1
     ok(root, 'done', '--task', 'TASK-1', '--needs-review')

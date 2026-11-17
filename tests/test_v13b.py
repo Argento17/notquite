@@ -108,7 +108,10 @@ def test_approval_names_accepted_findings(local_repo):
     store.receipt(root, 'TASK-3', 'test', [PYTHON, 'tests/test_calc.py'])
     store.set_task_field(root, 'TASK-3', 'status', 'DONE')
     output = ok(root, 'check', '--base', base, '--allow', 'TASK-3,tests,no-task', '--approving-review')
-    assert 'accepted by an approving review: TASK-3 (new task), tests/test_calc.py (changed lines)' in output
+    # 1.0.1: each item is credited to what cleared it; here the given labels, not the approval.
+    assert 'accepted by the label workorder-allow:TASK-3: TASK-3 (new task)' in output
+    assert 'accepted by the label workorder-allow:TASK-3 or workorder-allow:tests: tests/test_calc.py (changed lines)' in output
+    assert 'accepted by an approving review' not in output
     pending = ok(root, 'done', '--task', 'TASK-3', '--needs-review', '--no-code-change')
     assert 'pending review: the pull request needs workorder-allow:TASK-3 or an approving review' in pending
 

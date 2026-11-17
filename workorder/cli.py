@@ -150,7 +150,9 @@ def parser():
                             " workflow for Workorder workflow changes)")
     check.add_argument('--approving-review', action='store_true',
                        help='an approving review clears every finding except edits to existing tests and Workorder'
-                            ' workflow changes, which need labels; --allow names explicit labels')
+                            ' workflow changes, which need labels, as do existing tests that now fail and a task\'s'
+                            ' pending review of them (its task label); failed current tests and unsupported claims'
+                            ' always refuse; --allow names explicit labels')
     check.add_argument('--owner-accepts', metavar='LABELS', default='',
                        help='with --base in solo mode: labels the repository owner added (same ids as --allow);'
                             ' they clear what --allow would and print as owner acceptance, never as review')
@@ -235,7 +237,7 @@ def claim_warning(root, tid, action):
     return held
 
 
-def done_refusal(tid, status, lines, other=(), *, needs_review=False):
+def done_refusal(tid, status, lines, other=(), *, needs_review=False, recordable=True):
     """Show this task's findings once and one next action; summarize other tasks."""
     reasons = list(dict.fromkeys(part.strip() for line in lines if line.startswith('  Missing:')
                                  for part in line.removeprefix('  Missing:').splitlines() if part.strip()))
@@ -270,6 +272,13 @@ def done_refusal(tid, status, lines, other=(), *, needs_review=False):
         elif not needs_review:
             steps = [f'  Next:     fix the test, or run workorder done --task {tid} --needs-review; '
                      f'the pull request needs workorder-allow:{tid} or an approving review']
+    elif (own and not other and not needs_review and recordable
+          and all(gate._accepts_allow_label(reason) for reason in own)):
+        # Findings done --needs-review records (an edited or weakened existing test): offer it, naming
+        # the one label that then clears the review.
+        label_only = [{'label_only': 'an approving review clears this' not in reason} for reason in own]
+        steps = [f'  Next:     fix the test, or run workorder done --task {tid} --needs-review; the pull request then '
+                 + gate.pending_review_message(tid, label_only).removeprefix('pending review: the pull request ')]
     print(steps[0] if steps else f'  Next:     address the findings, then run workorder done --task {tid} again')
 
 
@@ -406,7 +415,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             if item["exit_code"]:
                 lines = [line for line in lines if not line.startswith('  Next:')]
                 lines.append('  Next:     fix the code or the test, then run workorder done again')
-            done_refusal(tid, status, lines, needs_review=needs_review)
+            done_refusal(tid, status, lines, needs_review=needs_review,
+                         recordable=item['valid'] and not item['exit_code'])
             return 1
         from . import project_tests
         if project_test:
@@ -415,7 +425,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                                                  notes=project_notes, timeout=timeout)
             console.print_lines(project_notes, prefix='Note: ')
             if project_problems:
-                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in project_problems])
+                # done --needs-review does not record project-test failures: no offer of it here.
+                done_refusal(tid, status, [f'  Missing:  {problem}' for problem in project_problems],
+                             recordable=False)
                 return 1
         else:
             print('Note: ' + project_tests.deferred_line(root))
@@ -426,7 +438,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
         if tied_problems:
             done_refusal(tid, status, [f'  Missing:  {problem}' for problem in tied_problems]
                          + ['  Next:     fix the test or the code, or correct the item\'s (test: path::name), '
-                            f'then run workorder done --task {tid} again'])
+                            f'then run workorder done --task {tid} again'], recordable=False)
             return 1
         print(tied or "Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
         if tied:
@@ -550,10 +562,17 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             exemption = gate.completion_kind_note(root, revision, s.record(root, tid))
             if exemption:
                 print(f'Note: {exemption}')
+        pending_now = gate.pending_findings(root, s.record(root, tid)) if needs_review else []
         if base and gate.fields_at(root, tid, revision) is None:
-            lines.append('  Next:     the pull-request check will ask for an approving review: this task is new '
-                         f'in this change (the reviewer reads its definition; or the label workorder-allow:{tid}); '
-                         'a second pull request is not needed')
+            if any(item['label_only'] for item in pending_now):
+                # Approval cannot clear an existing test's change: the task's label clears both.
+                lines.append(f'  Next:     the pull-request check will ask for the label workorder-allow:{tid}: '
+                             'it accepts this new task\'s definition and its pending review (an approving review '
+                             'is not enough: it changes existing tests); a second pull request is not needed')
+            else:
+                lines.append('  Next:     the pull-request check will ask for an approving review: this task is new '
+                             f'in this change (the reviewer reads its definition; or the label workorder-allow:{tid}); '
+                             'a second pull request is not needed')
         print("\n".join(done_evidence(lines, tid, base, proven, results)))
         _, owed, delivery = gate.verdict(root, s.record(root, tid))
         debt = f"; still owes: {', '.join(owed + delivery)}" if owed or delivery else ""
