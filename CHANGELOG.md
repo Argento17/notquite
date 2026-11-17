@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.17.0 (unreleased)
+## 0.17.0 (17 Nov 2026)
 
 - Treat declared code paths and package source as code even when named like tests;
   explicit test paths take precedence. Configure test filename and folder globs
