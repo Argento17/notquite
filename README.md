@@ -2,7 +2,7 @@
 
 A coding agent's session ends mid-task; the next session does not know what was being done, where it stopped or what remains. Workorder keeps the task outside the conversation, with the same structure every time: mission, scope, acceptance, test, dependencies, progress and the next step. Any later session or agent runs `workorder show` and recovers it, so tasks survive new conversations and handoffs.
 
-Agents also say DONE when nothing proves it. Workorder refuses that DONE until the task's test passes now, failed on the code before the change, and fails with the change stubbed out.
+Agents also say DONE when nothing proves it. Workorder refuses that DONE until the task's test passes now and failed on the code before the change (for Python code, also with the change stubbed out).
 
 **A verified test result is not a verified task.** DONE means the test proves the change did something; whether the task was done right is a person's acceptance, a separate state recorded with `workorder accept`.
 
@@ -83,9 +83,8 @@ Any test command works; the deeper checks are Python-only today.
 | Fails with the changed functions stubbed out | Python code | Python code |
 | Existing tests edited, removed or skipped | Per test | Per file in `test_paths` |
 | Acceptance items tied to a test | Yes | No |
-| Project test failures compared with the base | Per failing test | No |
 
-A wrapper such as `sh test.sh` needs `--test-paths`; [full table](docs/reference.md#language-support).
+Wrappers such as `sh test.sh` need `--test-paths`; [full table](docs/reference.md#language-support).
 
 ## The review rule
 
@@ -131,13 +130,13 @@ Run `workorder init` in every clone (Git does not clone hooks); it also adds thi
 
 ## Speed
 
-`done` runs only the task's own test: on the new code, the code before the change and the change stubbed out, at the same time. An unchanged base result is reused.
+`done` runs only the task's own test, its three runs at the same time, and reuses an unchanged base result.
 
-**Your whole suite runs once, in the pull-request check.** When `init` finds pytest, it turns on the project test there; `done --project-test` runs it on request, and `workorder init --no-project-test` turns it off.
+**Your whole suite runs once, in the pull-request check.** `init` turns this on when it finds pytest; `workorder init --no-project-test` turns it off.
 
 ## What it does not do
 
-- It does not judge whether the task was done right: DONE is evidence, acceptance is a person's (`workorder accept` or a review). Items ending `(test: path::name)` tie to a test `done` checks.
+- It does not judge whether the task was done right: DONE is evidence; acceptance is a person's (`workorder accept` or a review).
 - Local hooks can be skipped with `git commit --no-verify`; the pull-request check is what counts.
 - It does not prove the software works in production or read agent conversations.
 

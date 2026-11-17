@@ -80,7 +80,7 @@ def test_agent_block_is_short_and_names_the_essentials():
 
 def test_reference_has_contents_and_is_shorter():
     reference = (PACKAGE / 'docs/reference.md').read_text(encoding='utf-8')
-    assert words(reference) < 13000
+    assert words(reference) < 14000  # 1.0 adds solo mode, acceptance and language support
     contents = reference.split('## ', 1)[0]
     anchors = re.findall(r'\]\(#([a-z0-9-]+)\)', contents)
     headings = {re.sub(r'[^a-z0-9 -]', '', h.lower()).replace(' ', '-')
