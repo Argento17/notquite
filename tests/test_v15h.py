@@ -103,7 +103,10 @@ def test_two_new_tasks_complete_with_their_own_functions(local_repo, unscoped):
 
 @pytest.mark.parametrize('unscoped', [False, True])
 @pytest.mark.parametrize('action', ['done', 'check', 'precommit', 'stop'])
-def test_calling_other_tasks_function_does_not_prove_own_change(local_repo, unscoped, action):
+def test_calling_other_tasks_function_does_not_prove_own_change(local_repo, unscoped, action, monkeypatch):
+    # 0.18: local hooks refuse reviewer findings and hand-set DONE; this exercises the note path,
+    # which is now warning mode (WORKORDER_REVIEW=warn, the local --review warn).
+    monkeypatch.setenv('WORKORDER_REVIEW', 'warn')
     root = local_repo
     setup(root)
     define(root, 'TASK-1', 'beta', None if unscoped else 'beta.py')

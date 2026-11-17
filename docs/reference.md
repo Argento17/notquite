@@ -100,8 +100,15 @@ warns about a named path that does not exist yet. Creating it before `new`,
 including an untracked file in the same change, avoids the warning.
 The flag does not accept failed current tests, missing evidence, changed test
 commands or dependencies. Without it, `done`
-refuses test changes locally. The pre-commit hook notes test changes, including
-branch edits made while merging main. During a pending merge, test files whose
+refuses test changes locally, including new skips/xfails and earlier versions failing
+in test files no task owns. The pre-commit and Stop hooks refuse the same findings
+for the tasks the change touches, naming the label the pull request needs; they are
+notes only for a task with `done --needs-review` in this change or with
+`WORKORDER_REVIEW=warn` (the local equivalent of `--review warn`). A DONE/CLOSED claim
+new since the target, on a task whose code or tests changed, needs the completion
+record `done` writes in its test receipt (`completion: true`); a hand-set status is
+refused locally. Claims already on the target are not re-judged. The hooks note
+branch test edits made while merging main. During a pending merge, test files whose
 staged content equals the incoming parent's content get no test-change note.
 The pull-request check refuses branch test changes without
 the reviewer's `workorder-allow:<ID>` label (or an approving review where allowed).
