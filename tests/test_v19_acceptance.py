@@ -45,8 +45,9 @@ def test_done_show_and_check_name_evidence_and_acceptance_apart(local_repo):
     done = finished(root)
     awaiting = ('Acceptance: tied tests pass (1 of 2 items); awaiting a person (1 item); '
                 'a person confirms with workorder accept --task TASK-1')
-    assert '  Evidence: verified: the declared test passed on this code\n  ' + awaiting in done
-    assert 'TASK-1 DONE: its declared test passed on this code' in done
+    assert ("  Evidence: verified: passes now, failed on origin/main's code, failed with the change stubbed out\n  "
+            + awaiting) in done
+    assert 'TASK-1 DONE: evidence verified' in done.splitlines()
     shown = ok(root, 'show', '--task', 'TASK-1')
     assert '  Claimed:  DONE\n  Evidence: verified: recorded receipts support the claim' in shown
     assert awaiting in shown

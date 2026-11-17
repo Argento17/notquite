@@ -495,7 +495,9 @@ def retirement_problem(root, base, record):
             "set its status back")
 ACCEPTANCE_NOTE = ("the evidence covers the task's test only, not its Acceptance list;"
                    " finish every Acceptance item before claiming DONE")
-UNCLAIMED_OWES = "its Acceptance items, then status DONE (the evidence for its test is in place)"
+# A hand-recorded passing run is not done's proof (fails on the base code, fails stubbed out).
+RECORDED_RUN = "its recorded test run passed; done has not shown the test proves the change"
+UNCLAIMED_OWES = f"its Acceptance items, then workorder done ({RECORDED_RUN})"
 
 
 def owes(record, owed, delivery=()):
@@ -513,7 +515,7 @@ def unfinished_headline(record, done, delivery, open_waits):
     if record['status'] == 'RETIRED':
         return f"{record['id']} RETIRED (finished, then retired); {RETIRED_LINE}"
     debt = done + delivery + open_waits
-    detail = 'owes: ' + ', '.join(debt) if debt else 'its test evidence is in place'
+    detail = 'owes: ' + ', '.join(debt) if debt else RECORDED_RUN
     return f"{record['id']} {record['status']} (not claimed finished); {detail}"
 
 
@@ -2088,7 +2090,8 @@ def test_result(run, counts, *, quiet=False, failures_only=False):
         counts['tests'] = counts.get('tests', 0) + 1
         if run.cached:
             counts['cached'] = counts.get('cached', 0) + 1
-    return run.returncode, (run.stdout or '') + (run.stderr or '')
+    output = (run.stdout or '') + (run.stderr or '')
+    return run.returncode, ReusedOutput(output) if run.cached else output
 
 
 def _test_key(record, timeout):
@@ -2146,6 +2149,14 @@ def prefetch_tests(root, records, results, counts=None, timeout=None, staged=Fal
     s.invalidate_reads()
 
 
+PASSED_NOTE = 'its test passed when this check ran it'
+REUSED_NOTE = 'its test passed in the reused result (not run again)'
+
+
+class ReusedOutput(str):
+    """Output of a test result reused from an earlier run: no note may say this run ran it."""
+
+
 def run_declared_test(root, record, counts=None, notes=None, strict=False, results=None, regression=False,
                       timeout=None):
     """Run a task's declared test here (CI), without a shell; return a problem line, or None if it passed."""
@@ -2174,7 +2185,7 @@ def run_declared_test(root, record, counts=None, notes=None, strict=False, resul
         return f"regression: {tid}'s test fails on this code\n{reason}" if regression else reason
     if code == 0:
         if notes is not None and not empty and not test_update_noted(notes, tid):
-            note = f"{tid}: its test passed when this check ran it"
+            note = f"{tid}: {REUSED_NOTE if isinstance(output, ReusedOutput) else PASSED_NOTE}"
             if note not in notes:
                 notes.append(note)
         return None
@@ -2721,6 +2732,7 @@ class AcceptedNote(str):
 
 
 OWNER_ACCEPTANCE = 'accepted by the owner (solo mode; no independent review)'
+APPROVED_SUFFIX = ' (cleared by the approving review)'  # no --allow label: not an owner's label in solo mode
 ACCEPTED_SUFFIX = re.compile(r' \((?:allowed|definition allowed|allowed by workorder-allow:tests|accepted by review)\)$')
 OWNER_SUFFIX = ' (accepted by the owner in solo mode; no independent review)'
 
@@ -2967,7 +2979,8 @@ def local_test_problems(root, base, record, *, pending_review=False, command_not
             labeled.append(problem)
     notes[start:] = [comparison_message(line, base, ref, label) for line in notes[start:]]
     if repaired:
-        notes[:] = [line for line in notes if line != f"{record['id']}: its test passed when this check ran it"]
+        notes[:] = [line for line in notes
+                    if line not in {f"{record['id']}: {PASSED_NOTE}", f"{record['id']}: {REUSED_NOTE}"}]
     return [comparison_message(line, base, ref, label) for line in labeled]
 
 
@@ -3700,7 +3713,7 @@ def test_change_problems(root, base, record, timeout=None, *, staged=False, stri
                                      approved=approved)
     except (OSError, s.Refused, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError) as error:
         if notes is not None:
-            notes.append(f"{record['id']}: REF comparison skipped against {base}: {error}")
+            notes.append(f"{record['id']}: comparison with {base} skipped: {error}")
         return [comparison_problem(f"{record['id']}: could not compare its changed tests with {base}: {error}",
                                    record['id'])]
 
@@ -3938,14 +3951,20 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
         if refactor_changes:
             review(f'{tid}: its test files changed; use --needs-review', lines=True)
     if record.get('status') == 'RETIRED':
-        notes.append(f'{tid}: REF comparison skipped against {base}: it is retired, so its test does not rerun')
+        notes.append(f'{tid}: comparison with {base} skipped: it is retired, so its test does not rerun')
         return problems
     if not run_tests:
-        notes.append(f'{tid}: REF comparison skipped against {base}: use --run-tests to run it')
+        notes.append(f'{tid}: comparison with {base} skipped: use --run-tests to run it')
+        return problems
+    missing = None if finishing else unfinished_test_missing(root, record, staged)
+    if missing:
+        # Not a finding: one Note, without the test output of a run that has nothing to collect.
+        if missing not in notes:
+            notes.append(missing)
         return problems
     command = declared_test(record)
     if not command:
-        notes.append(f'{tid}: REF comparison skipped against {base}: no concrete current test command')
+        notes.append(f'{tid}: comparison with {base} skipped: no concrete current test command')
         if paths:
             test_failure(f'{tid}: its test files changed but it declares no test for this check to run')
         return problems
@@ -4024,11 +4043,11 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             selected = selected_test_files(root, record, base, staged)
             existing = selected & repository_files(root, base)
             if not existing or not base_command:
-                reason = 'no selected test files at REF' if not existing else 'no concrete test command at REF'
+                reason = f'no selected test files at {base}' if not existing else f'no concrete test command at {base}'
                 # New tests have no old version to compare. Their origin note
                 # already explains this; missing selections still need a reason.
                 if existing or not selected:
-                    notes.append(f'{tid}: REF comparison skipped against {base}: {reason}')
+                    notes.append(f'{tid}: comparison with {base} skipped: {reason}')
                 return problems
             base_key = ('base', base, tuple(paths), tuple(base_command), s.test_timeout(record, timeout), staged)
             if not paths and base_command == command:
@@ -4049,7 +4068,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
             if unavailable(base_code):
                 return problems
             if isinstance(base_code, str):
-                notes.append(f'{tid}: REF comparison skipped against {base}: {base_code}')
+                notes.append(f'{tid}: comparison with {base} skipped: {base_code}')
                 missing = s.missing_test_dependency(base_command, base_code, base_output, root=root)
                 problems.append(comparison_problem(
                     f'{tid}: could not compare its tests from {base}: '
@@ -4108,7 +4127,7 @@ def _test_change_problems(root, base, record, timeout=None, *, staged=False, str
                             review(f'{tid}: more tests are {outcome} than at {base} ({old_counts[outcome]} -> {new_counts[outcome]})',
                                    f'this increase in {outcome} tests', reason=TEST_WEAKENED)
     except (OSError, s.Refused, ValueError, subprocess.SubprocessError) as error:
-        notes.append(f'{tid}: REF comparison skipped against {base}: {error}')
+        notes.append(f'{tid}: comparison with {base} skipped: {error}')
         problems.append(comparison_problem(f'{tid}: could not compare its changed tests with {base}: {error}', tid))
     return problems
 
@@ -4282,7 +4301,20 @@ def renewal_advice(root, base, changed, staged=False):
     return None
 
 
+def base_workorder_workflows(root, base):
+    """The Workorder workflow files at BASE: workorder.yml or a workflow running its label step."""
+    return [path for path in sorted(repository_files(root, base)) if path.startswith('.github/workflows/')
+            and (path == '.github/workflows/workorder.yml'
+                 or b'python -m workorder.review_labels' in (_test_bytes(root, path, base) or b''))]
+
+
 def has_work_receipt(root, base, changed, staged=False, allow=(), new_tasks=None):
+    return bool(work_receipt_tasks(root, base, changed, staged, allow, new_tasks))
+
+
+def work_receipt_tasks(root, base, changed, staged=False, allow=(), new_tasks=None):
+    """The tasks whose new receipts in this change record its code work."""
+    found = []
     for tid in sorted({s.receipt_task(path) for path in changed} - {None}):
         try:
             before = fields_at(root, tid, base)
@@ -4303,13 +4335,32 @@ def has_work_receipt(root, base, changed, staged=False, allow=(), new_tasks=None
                 if before is None and tid not in allow and new_tasks is not None:
                     new_tasks.add(tid)
                     continue
-                return True
+                found.append(tid)
+                continue
             runs = counting_runs(record, history[history.index(implemented) + 1:], implemented)
             if runs and runs[-1]['hash'] not in old and runs[-1]['valid'] and runs[-1]['exit_code'] == 0:
-                return True
+                found.append(tid)
         except (s.Refused, ValueError):
             continue  # invalid receipts are reported by the task's ordinary checks
-    return False
+    return found
+
+
+def unfinished_work_problem(root, base, tid, staged=False):
+    """Code recorded only by an unfinished task's hand receipts lands without done's comparisons.
+
+    done's completion record (also with --needs-review) shows the test fails on the base code and
+    with the change stubbed out; receipts recorded by hand show only that the test passed.
+    """
+    record = s.record(root, tid, staged)
+    if record['status'] not in {'IN_PROGRESS', 'BLOCKED'}:
+        return None
+    carried = {entry['hash'] for entry in s.entries(root, tid, rev=base)}
+    if any(entry['kind'] == 'test' and entry.get('completion') is True and entry['hash'] not in carried
+           for entry in s.entries(root, tid, staged)):
+        return None
+    # A review finding: --review warn makes it a warning, as for the other findings an approval clears.
+    return ReviewProblem(f"{tid}'s code lands unfinished without done's evidence (receipts recorded by hand "
+                         f"show only that its test passed); {label_advice(tid)}", f'tasks/{tid}.md')
 
 
 def finishes_here(root, record, revision, staged=False):
@@ -4448,8 +4499,10 @@ def summarize_notes(notes, verbose=False):
     for kind, lines in groups.items():
         if len(lines) == 1:
             result.extend(lines)
-        elif kind == 'its test passed when this check ran it':
+        elif kind == PASSED_NOTE:
             result.append(f"{len(lines)} tasks' tests passed when this check ran them")
+        elif kind == REUSED_NOTE:
+            result.append(f"{len(lines)} tasks' tests passed in reused results (not run again)")
         elif kind == 'its test file is not there yet; an unfinished task may land':
             result.append(f'{len(lines)} tasks: their test files are not there yet; an unfinished task may land')
         elif not re.match(r'[A-Z][A-Z0-9]*-[1-9][0-9]*\b', lines[0]):
@@ -4732,6 +4785,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 problems.append(failure)
     new_tasks = set()
     if base:
+        workflows = None
         for path in sorted(changed or ()):
             if not path.startswith('.github/workflows/'):
                 continue
@@ -4739,6 +4793,12 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             current = _test_bytes(root, path, staged=staged) or b''
             if (path == '.github/workflows/workorder.yml'
                     or b'python -m workorder.review_labels' in previous + current):
+                if workflows is None:
+                    workflows = base_workorder_workflows(root, base)
+                if not workflows and current and path not in repository_files(root, base):
+                    # Setting up: a first Workorder workflow adds a check; it weakens none.
+                    notes.append(f'{path}: Workorder workflow added; none existed on {base}, so no label is needed')
+                    continue
                 text = (f'{path}: Workorder workflow changed; '
                         + label_advice('workflow', True, 'it changes the Workorder workflow'))
                 if 'workflow' in explicit_allow:
@@ -4753,17 +4813,26 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
         code = {path for path in scope_code
                 if not any(fnmatch.fnmatchcase(path, pattern) for pattern in require_task_ignore)}
         if require_task:
-            recorded = has_work_receipt(root, base, changed, staged, allow, new_tasks)
+            recorders = work_receipt_tasks(root, base, changed, staged, allow, new_tasks)
+            recorded = bool(recorders)
             if not code or recorded:
                 new_tasks.clear()
+            for tid in recorders if code else ():
+                unfinished = unfinished_work_problem(root, base, tid, staged)
+                if unfinished and tid in allow:
+                    notes.append(str(unfinished) + (' (allowed)' if tid in explicit_allow else APPROVED_SUFFIX))
+                    notes.append(f'accepted: {tid} (unfinished work)')
+                elif unfinished:
+                    problems.append(unfinished)
             if 'no-task' in allow:
                 if code and not recorded:
                     notes.append('accepted: no-task (code without task work)')
                 new_tasks.clear()
             elif code and not recorded and not new_tasks:
                 problems.append('this change edits code but no task records it with a new implemented or test receipt; '
-                                'run workorder receipt implemented --task ID or workorder receipt test --task ID; '
-                                + label_advice('no-task'))
+                                'run workorder done --task ID (or with --needs-review); to land unfinished work, '
+                                'first run workorder receipt implemented --task ID, then workorder receipt test --task ID, '
+                                'and get a review; ' + label_advice('no-task'))
                 advice = renewal_advice(root, base, changed, staged)
                 if advice:
                     problems.append(advice)
@@ -4837,6 +4906,8 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
             continue
         if (tid in reopened or run_tests and (comparison or record['status'] in FINISHED
                                              and (all_tests or tid in worked))):
+            if tid not in reopened and unfinished_test_missing(root, record, staged):
+                continue  # its comparison notes the missing file instead of running the test
             runnable.append(record)
     prefetch_tests(root, runnable, results, counts, timeout, staged, jobs, snapshot=bool(base),
                    protected=repository_files(root, base) if base else ())
@@ -4935,7 +5006,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                         f'(the reviewer reads its definition; a second pull request is not needed), '
                         f'or the label workorder-allow:{tid}')
                 if tid in allow:
-                    notes.append(line + " (definition allowed)")
+                    notes.append(line + (" (definition allowed)" if tid in explicit_allow else APPROVED_SUFFIX))
                     notes.append(f'accepted: {tid} (new task)')
                 else:
                     problems.append(line)
@@ -4947,7 +5018,7 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
                 if tid in proven:
                     notes.append(f'{tid} is new in this pull request; its test fails on {base} and passes now')
                 elif tid in allow:
-                    notes.append(line + ' (definition allowed)')
+                    notes.append(line + (' (definition allowed)' if tid in explicit_allow else APPROVED_SUFFIX))
                     notes.append(f'accepted: {tid} (new task)')
                 else:
                     problems.append(line)

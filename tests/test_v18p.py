@@ -32,7 +32,7 @@ def test_approval_clears_scope(local_repo):
     assert f'{CLEARS}, or a reviewer accepts it with the label workorder-allow:scope:TASK-1' in line
     result = check(root, '--require-task', '--approving-review')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert check(root, '--require-task', '--allow', 'scope:TASK-1').returncode == 0
+    assert check(root, '--require-task', '--allow', 'scope:TASK-1,TASK-1').returncode == 0  # round 22: the hand receipts of an unfinished task also need its label
 
 
 def test_approval_clears_code_without_task(local_repo):

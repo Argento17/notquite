@@ -127,7 +127,7 @@ def test_unfinished_failing_or_missing_tests_are_notes_in_base_and_hook(local_re
     for flags in [('--base', base, '--run-tests', '--allow', 'TASK-1'), ('--staged',)]:
         result = cli(root, 'check', *flags)
         assert result.returncode == 0, result.stdout + result.stderr
-        if missing and flags == ('--staged',):
+        if missing:  # one Note in the base check too, without a Failure block (round 22)
             assert 'Note: TASK-1: its test file is not there yet; an unfinished task may land' in result.stdout
             assert 'Failure:' not in result.stdout
         else:
@@ -220,7 +220,7 @@ def test_production_refactor_is_not_an_inferred_test_change(local_repo):
     commit_all(root)
     store.receipt(root, 'TASK-1', 'implemented')
     store.receipt(root, 'TASK-1', 'test', [PYTHON, '-m', 'pytest', '-q', 'tests'])
-    result = cli(root, 'check', '--base', base, '--run-tests', '--all-tests', '--require-task')
+    result = cli(root, 'check', '--base', base, '--run-tests', '--all-tests', '--require-task', '--allow', 'TASK-1')  # round 22: the hand receipts of an unfinished task also need its label
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
     assert 'test files' not in output

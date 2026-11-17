@@ -72,7 +72,7 @@ def test_done_success_only_suggests_push_with_origin(local_repo, tmp_path, remot
         git(local_repo, 'remote', 'add', remote, str(tmp_path / 'unused-remote'))
     output = ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     success = next(line for line in output.splitlines() if line.startswith('TASK-1 DONE:'))
-    assert success == 'TASK-1 DONE: its declared test passed on this code'
+    assert success == 'TASK-1 DONE: evidence verified'
     assert output.splitlines()[-1] == ('commit tasks/ and .workorder/'
                                       + (' and push' if remote == 'origin' else ''))
 
@@ -177,7 +177,7 @@ def test_check_unclaimed_test_evidence_never_says_closed(local_repo, status):
     evidence(local_repo)
     checked = ok(local_repo, 'check', 'TASK-1')
     shown = ok(local_repo, 'show', '--task', 'TASK-1')
-    headline = f'TASK-1 {status} (not claimed finished); its test evidence is in place'
+    headline = f'TASK-1 {status} (not claimed finished); its recorded test run passed; done has not shown the test proves the change'
     assert checked.startswith(headline) and shown.startswith(headline)
     assert 'CLOSED' not in checked and 'CLOSED' not in shown
 

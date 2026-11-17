@@ -172,7 +172,11 @@ def test_require_task_needs_new_implementation_or_test_receipt(local_repo, metad
     result = cli(root, 'check', '--base', base, '--require-task')
     assert result.returncode == 1 and 'implemented or test receipt' in result.stdout
     store.receipt(root, 'TASK-1', 'implemented')
-    assert cli(root, 'check', '--base', base, '--require-task').returncode == 0
+    # The receipt records the code; an unfinished task lands it only with a review (round 22).
+    unfinished = cli(root, 'check', '--base', base, '--require-task')
+    assert unfinished.returncode == 1 and 'implemented or test receipt' not in unfinished.stdout
+    assert "TASK-1's code lands unfinished without done's evidence" in unfinished.stdout
+    assert cli(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-1').returncode == 0
 
 
 @pytest.mark.parametrize('status', ['DONE', 'CLOSED'])
@@ -215,7 +219,7 @@ def test_skipped_ref_comparison_is_explained(local_repo, monkeypatch, reason):
     probe.write_text(probe.read_text() + '\n# new line\n')
     notes = []
     gate.test_change_problems(root, base, store.record(root, 'TASK-1'), notes=notes)
-    assert any('REF comparison skipped' in note for note in notes) == (reason != 'new'), notes
+    assert any(note.split(': ', 1)[-1].startswith('comparison with ') and ' skipped' in note for note in notes) == (reason != 'new'), notes
 
 
 @pytest.mark.parametrize('kind', ['skip', 'config'])

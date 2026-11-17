@@ -57,7 +57,9 @@ def print_once(message):
 
 
 def print_test_output(output, errors='', failed=False, label=None):
-    # The same output can be used for evidence, current, REF and all-task checks.
+    if not (output or '').strip() and not (errors or '').strip():
+        return  # a silent command: no empty "Failure:" block before its finding
+    # The same output can be used for evidence, current, base and all-task checks.
     key = ('test-output', failed, re.sub(r' in \d+(?:\.\d+)?s', ' in <time>s', output + errors))
     seen = _TEST_OUTPUTS.get()
     if seen is not None:
