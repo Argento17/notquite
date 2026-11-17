@@ -39,6 +39,7 @@ Gate reads share validation until a test, hook/filter execution or Workorder wri
 Protected test files retain their staleness checks, including doctests in Python docstrings and tests under docs/. Changing a task's test paths does not rewrite its old receipt's syntax map or by itself change another task's recorded code.
 Claims are advisory: `note` and `receipt` warn when another clone holds the task's claim, and `done` refuses with `is claimed by` until the holder releases it or `done --take-over` is used, which adds the takeover to Progress. The pull-request check only prints a Note when a task was finished by someone other than its claim holder.
 After a squash removes original commits, a renewed DONE/CLOSED claim still checks the recorded paths, deletions, modes and content. This rule also applies with Git read reuse disabled (`WORKORDER_GIT_CACHE=0`).
+`Evidence: verified` is not acceptance. With `--require-acceptance`, `Acceptance: awaiting a person`, a `stale since` acceptance (its code changed after it) or one `recorded in this change` refuses: approve the head (`confirmed in review by NAME`), or have a person run `workorder accept --task ID` (refused for an agent) and land it first. Tied tests alone do not count.
 
 <!-- refusal-family current-tests -->
 ## A task's current test fails or runs nothing
@@ -126,9 +127,9 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 
 <!-- refusal-inventory workorder/__init__.py 51c6a4d75952a2c005eb33acda81f0834b2f1e0dffae215a7d9cd26f48759af2 records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
-<!-- refusal-inventory workorder/bootstrap.py f9ec3d59381cf7784913115bbee20ff45b1ac830e8dd39665fdf517d6207ee1d records,workflow,project-test -->
-<!-- refusal-inventory workorder/cli.py 00601bdf7c3986ce4a64e354f9abd120adb8f840e9d1430e3ea1dacc82cbc4b2 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
-<!-- refusal-inventory workorder/gate.py 32b5fd3a40997f22c65cc90998368d85bffeeca150d7e364615a6e320300b783 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
+<!-- refusal-inventory workorder/bootstrap.py 6bd899d9156a64637fcbdd97fb558aab150a1cfe8765668698b954ee66795227 records,workflow,project-test -->
+<!-- refusal-inventory workorder/cli.py 090a2b09dbcdfe826ac2e0b7f64713879fef5090a183dfb90d01c3e3dae9dc91 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
+<!-- refusal-inventory workorder/gate.py 105a31523b535a1ab935d252d4ee0e3b1843aa66069eca077d8e178e4c924476 code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 84c2d9a3f4cb85cc24bccd023e98b2959733d3dcae092541ecc3a82c6bff3d63 evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 974ac6ecacb3575182a0903cdff7d011d68e052daf0deffea905cb03443d1346 project-test -->
 <!-- refusal-inventory workorder/project_tests.py f65af83dd6885820c0d9a8d739d12aebd6dce97a1ff859b821b252d545f32b34 project-test,records -->
@@ -136,8 +137,8 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/python_imports.py 6c7412fae56fed15a3a03a97cce2e13a2c817e8ad8d3edacc2d5f84de537d420 imports -->
 <!-- refusal-inventory workorder/python_stubs.py a241120e76a9632ba6013f520a30b13afcb8e06faa69af57175829255950cbda weak-tests -->
 <!-- refusal-inventory workorder/python_tests.py 31645fe31f89adb02d2d05c83eb6844a9f8adf5c8c554e26a49996c6e23313ac test-edits -->
-<!-- refusal-inventory workorder/review_labels.py c473f08753a21712cbb29e516376bacd376c55a7523f59a9f8985294cc5a6f0f definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
+<!-- refusal-inventory workorder/review_labels.py a727b20911731838c7f7f9982a626b6bf968233d8e876127cd652f68cbf60dd1 definitions,test-edits,old-tests,scope,workflow,pending,project-test -->
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
-<!-- refusal-inventory workorder/store.py 7ce5092167a284491e8dbacc6780f3ff00b624f52a06660ed44a4c1b3cf5bb0d records,evidence,current-tests,removal,pending -->
+<!-- refusal-inventory workorder/store.py 72cef0a7e798044e4833c8daae3fafdcf625a41a9cb1b6bccc77ef159ba8a303 records,evidence,current-tests,removal,pending -->
 <!-- refusal-inventory workorder/git_reads.py c406e897d3776a2eefb175775f1cf8144f2d6991a666432e1337bb739c5c0371 records,evidence -->
 <!-- refusal-inventory workorder/console.py 05f5ef10f1e818b11840f1aad889661f477678caa4851f3b2af2703cd32ff092 records,current-tests -->

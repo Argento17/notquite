@@ -218,7 +218,9 @@ def cached_read(function, *, git_query=False, diff_query=False, refresh_after=Fa
 
 
 ID = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*\Z")
-KINDS = {"implemented", "test", "merged", "deployed", "live"}
+KINDS = {"implemented", "test", "merged", "deployed", "live", "accepted"}
+# accepted is written only by workorder accept: a person confirming the Acceptance items.
+EVIDENCE_KINDS = KINDS - {"accepted"}
 NAMESPACE = "refs/tags/workorder/"
 
 
@@ -1261,6 +1263,13 @@ def verify_receipt(root, tid, value):
                 or not isinstance(item.get("command"), list) or not item["command"]
                 or any(not isinstance(a, str) for a in item["command"])):
             raise Refused(f"{tid}: command receipt needs its arguments, exit code and validity")
+    if item['kind'] == 'accepted' and (
+            not re.fullmatch(r'[0-9a-f]{64}', str(item.get('implemented', '')))
+            or 'note' in item and (not isinstance(item['note'], str) or not item['note'].strip())):
+        raise Refused(f'{tid}: invalid acceptance receipt')
+    if 'acceptance_tests' in item and (item['kind'] != 'test' or not isinstance(item['acceptance_tests'], list)
+                                       or any(not isinstance(node, str) for node in item['acceptance_tests'])):
+        raise Refused(f'{tid}: invalid acceptance tests')
     if 'completion' in item and (item['kind'] != 'test' or item['completion'] is not True):
         raise Refused(f'{tid}: invalid completion record')
     if 'no_code_change_base' in item:
@@ -1430,6 +1439,28 @@ _PROPOSED_RECEIPTS = ContextVar('workorder_proposed_receipts', default=None)
 def proposed_receipts(root, tid):
     transaction = _PROPOSED_RECEIPTS.get()
     return transaction[2] if transaction and transaction[:2] == (root, tid) else None
+
+
+def annotate_acceptance_tests(root, tid, nodes):
+    """Record on the unpublished completion receipt which tied Acceptance tests done checked."""
+    pending = proposed_receipts(root, tid)
+    if not pending or pending[-1]['kind'] != 'test' or not pending[-1].get('completion'):
+        raise Refused('acceptance tests need a proposed test receipt')
+    item = pending[-1]
+    item['acceptance_tests'] = sorted(set(nodes))
+    item.pop('hash')
+    item['hash'] = digest(packed(item).encode())
+    invalidate_reads(metadata_only=True)
+
+
+def acceptance_receipt(root, tid, implemented, note=None):
+    """A person's confirmation that the task's Acceptance items are met, chained like other receipts."""
+    commit = head(root)
+    data = {'kind': 'accepted', 'commit': commit, 'code': code_digest(root, commit), 'implemented': implemented}
+    if note is not None:
+        data['note'] = note.strip()
+    with ledger_lock(root, tid):
+        return append(root, tid, data)
 
 
 def annotate_pending_review(root, tid, findings):
@@ -2048,7 +2079,7 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
     repository(root)
     definition = record(root, tid)
     commit = head(root)
-    if kind not in KINDS:
+    if kind not in EVIDENCE_KINDS:
         raise Refused("unknown receipt kind")
     if kind in {"implemented", "test"} and not clean_code(root):
         raise Refused("commit the code before recording implementation or tests; "

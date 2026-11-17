@@ -13,7 +13,7 @@ from test_v05 import commit_all
 
 
 PASS = f'{PYTHON} -c pass'
-NOTICE = 'Acceptance lists are not checked; 1 supported claim rests on its declared test only.'
+NOTICE = 'Evidence: verified for 1 supported claim (its declared test); Acceptance: 1 awaiting a person'
 
 
 def fill_sections(path):
@@ -509,7 +509,8 @@ def test_acceptance_summary_counts_only_supported_contractless_claims(local_repo
     evidence(root, 'TASK-4')
     result = cli(root, 'check')
     assert result.returncode == 1
-    assert 'Acceptance lists are not checked; 2 supported claims rest on their declared tests only.' in result.stdout
+    assert ('Evidence: verified for 2 supported claims (their declared tests); Acceptance: 2 awaiting a person'
+            in result.stdout)
 
 
 def test_docs_state_review_rights_and_opt_in_policies():

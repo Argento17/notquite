@@ -4065,6 +4065,57 @@ def has_work_receipt(root, base, changed, staged=False, allow=(), new_tasks=None
     return False
 
 
+def finishes_here(root, record, revision, staged=False):
+    """A finished task this change finishes: newly DONE/CLOSED, or its code or tests changed here."""
+    return (committed_status(root, record['id'], revision) not in FINISHED
+            or task_change_touched(root, revision, record, staged))
+
+
+def acceptance_problem(tid, state, recorded_here=False):
+    if recorded_here:
+        return (f'{tid}: Acceptance: {state} (recorded in this change); --require-acceptance needs an approving'
+                ' review here: Workorder cannot tell who wrote a receipt file')
+    return (f'{tid}: Evidence: verified; Acceptance: {state}; --require-acceptance needs a person:'
+            f' workorder accept --task {tid}, or an approving review of the pull request')
+
+
+def acceptance_findings(root, supported, staged, base, revision, notes, counts, review, require):
+    """One Acceptance note per task the change finishes (with base), counts for the summary,
+    and with require, a problem for each finished task no person has accepted."""
+    tally = {}
+    problems = []
+    for tid in sorted(supported):
+        record = s.record(root, tid, staged)
+        state = acceptance_state(root, record, staged)
+        recorded_here = False
+        if base and state.confirmed and state.receipt is not None:
+            try:
+                before = {item['hash'] for item in s.entries(root, tid, rev=revision)}
+            except s.Refused:
+                before = set()
+            recorded_here = state.receipt['hash'] not in before
+        # The tasks this change finishes, and an acceptance it records, are what a review approves.
+        finishing = bool(base) and (recorded_here or finishes_here(root, record, revision, staged))
+        if finishing and review:
+            state, recorded_here = acceptance_state(root, record, staged, review=review), False
+        kind = ('stale' if state.stale else 'recorded' if recorded_here
+                else 'confirmed' if state.confirmed else 'awaiting')
+        tally[kind] = tally.get(kind, 0) + 1
+        if require and (not base or finishing) and kind != 'confirmed':
+            problems.append(acceptance_problem(tid, state, recorded_here))
+        elif finishing:
+            notes.append(f'{tid}: Evidence: verified; Acceptance: {state}'
+                         + (' (recorded in this change)' if recorded_here else ''))
+    counts['acceptance'] = tally
+    return problems
+
+
+def acceptance_summary(tally):
+    words = {'confirmed': 'confirmed by a person', 'recorded': 'recorded in this change (not reviewed)',
+             'stale': 'stale', 'awaiting': 'awaiting a person'}
+    return ', '.join(f'{tally[key]} {words[key]}' for key in words if tally.get(key))
+
+
 def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all_tests=False,
                   unchanged_base=False):
     claims = "not claimed finished" if single_unclaimed else f"{counts['claimed']} claimed DONE or CLOSED"
@@ -4089,9 +4140,9 @@ def check_summary(counts, run_tests=False, single_unclaimed=False, unchanged_all
             line += f"; compared {_count(counts['unowned_tests'], 'unowned test file')}"
     if counts.get('tests_only'):
         n = counts['tests_only']
-        rest = ("supported claim rests on its declared test only." if n == 1
-                else "supported claims rest on their declared tests only.")
-        line = f"Acceptance lists are not checked; {n} {rest}\n" + line
+        claims = 'supported claim (its declared test)' if n == 1 else 'supported claims (their declared tests)'
+        tally = acceptance_summary(counts.get('acceptance') or {})
+        line = f"Evidence: verified for {n} {claims}; Acceptance: {tally or 'not shown'}\n" + line
     return line
 
 
@@ -4140,7 +4191,8 @@ def summarize_notes(notes, verbose=False):
     for note in notes:
         match = re.match(r'([A-Z][A-Z0-9]*-[1-9][0-9]*)(?:: | )(.*)', note)
         exemption = any(text in note for text in ('finished with --no-code-change', 'is a declared refactor',
-                                                   'DONE pending review', "'s test was written in this change"))
+                                                   'DONE pending review', "'s test was written in this change",
+                                                   ': Evidence: verified; Acceptance: '))
         key = match[2] if match and not exemption else note
         groups.setdefault(key, []).append(note)
     result = []
@@ -4302,7 +4354,14 @@ def code_path_problems(root, base, changed, code, all_records, staged, allow, no
 @s.test_output_session()
 def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, counts=None,
           strict_tests=False, all_tests=False, require_task=False, timeout=None, review="refuse",
-          approving_review=False, require_test_first=False, jobs=None, require_task_ignore=(), local_hook=False):
+          approving_review=False, require_test_first=False, jobs=None, require_task_ignore=(), local_hook=False,
+          require_acceptance=False, approvers=(), owner_acceptance=None):
+    """Problems that refuse the check; notes and counts are filled in.
+
+    Acceptance: with base, an approving review (approving_review, naming approvers) counts as a
+    person's acceptance of the tasks this change finishes. owner_acceptance is the hook for solo
+    mode: a phrase such as 'by the owner NAME', counted the same way when set.
+    """
     counts = {} if counts is None else counts
     notes = [] if notes is None else notes
     # Share validation across the gate's reads, rather than observing the whole
@@ -4349,7 +4408,12 @@ def check(root, staged=False, base=None, notes=None, allow=(), run_tests=False, 
     counts['warnings'] = warnings
     problems = [problem for problem in problems if problem not in warnings]
     refused = set(re.findall(r'\b[A-Z][A-Z0-9]*-[1-9][0-9]*\b', '\n'.join(problems)))
-    counts['tests_only'] = len(counts.pop('_supported', set()) - refused)
+    supported = counts.pop('_supported', set()) - refused
+    counts['tests_only'] = len(supported)
+    review = (f"in review by {', '.join(approvers) or 'an approving reviewer'}" if approving_review and base
+              else owner_acceptance if base else None)
+    problems += acceptance_findings(root, supported, staged, base, revision, notes, counts, review,
+                                    require_acceptance)
     accepted = sorted({note.removeprefix('accepted: ') for note in notes if note.startswith('accepted: ')})
     notes[:] = [note for note in notes if not note.startswith('accepted: ')]
     if approving_review and accepted:
@@ -4768,14 +4832,115 @@ def _check(root, staged=False, base=None, notes=None, allow=(), run_tests=False,
     return list(dict.fromkeys(problems))
 
 
+class Acceptance(str):
+    """A finished task's Acceptance state, kept apart from its evidence.
+
+    The text follows "Acceptance: ". confirmed is True only for a person's confirmation on the
+    task's current code: an acceptance receipt, or the pull-request check's `review` phrase.
+    Tied tests are shown, but they are the author's evidence, not a person's acceptance.
+    """
+    confirmed = False
+    receipt = None  # the acceptance receipt behind a confirmed or stale state
+    stale = False
+
+
+def _acceptance(text, confirmed=False, receipt=None, stale=False):
+    result = Acceptance(text)
+    result.confirmed, result.receipt, result.stale = confirmed, receipt, stale
+    return result
+
+
+def acceptance_receipt(history):
+    return next((item for item in reversed(history) if item['kind'] == 'accepted'), None)
+
+
+def _accepted_change(root, record, implemented, named, staged=False):
+    """The task's files the acceptance covered that differ now, or None when unchanged.
+
+    Compares the accepted implementation's recorded paths with the current tree, so a squash
+    merge or a renewal of the same code keeps the acceptance; paths a newer implementation
+    added count as a change too.
+    """
+    if named is None:
+        return ['(the accepted implementation receipt)']
+    paths = named.get('implementation_paths')
+    if paths is None:  # receipts from before 0.14 record no paths: compare the implementation itself
+        return [] if named is implemented else ['(the implementation)']
+    tree = s.code_tree(root, s.index_tree(root) if staged else s.head(root))
+    changed = sorted(path for path, entry in paths.items() if tree.get(path) != entry)
+    added = {path for path in (implemented.get('implementation_paths') or {}) if path not in paths}
+    if 'code_paths' in record:
+        added = declared_code_paths(record, added)
+    return changed + sorted(added)
+
+
+def _stale_since(root, implemented, accepted, changed):
+    """The first commit after the acceptance that changed its files, else the newer implementation."""
+    files = [path for path in changed if not path.startswith('(')]
+    if files and s.has_commit(root, accepted['commit']):
+        listed = s.git(root, 'rev-list', '--reverse', f"{accepted['commit']}..HEAD", '--', *files,
+                       required=False).stdout.split()
+        if listed:
+            return listed[0][:7]
+    return implemented['commit'][:7]
+
+
+def acceptance_state(root, record, staged=False, *, review=None):
+    """Acceptance of a finished task: confirmed by a person, stale, or what is still awaited."""
+    tid = record['id']
+    history = s.entries(root, tid, staged)
+    recognise_squashed(root, tid, history, staged)
+    implemented = newest_implementation(history)
+    accepted = acceptance_receipt(history)
+    if accepted and implemented and not implemented['missing']:
+        named = next((item for item in history if item['hash'] == accepted['implemented']), None)
+        changed = _accepted_change(root, record, implemented, named, staged)
+        when = accepted['at'][:10]
+        if not changed and not review:
+            return _acceptance(f"confirmed by {accepted['who']} on {when}", True, accepted)
+        if changed and not review:
+            return _acceptance(f"stale since {_stale_since(root, implemented, accepted, changed)}"
+                               f" (confirmed by {accepted['who']} on {when}; the task's code changed after it)",
+                               receipt=accepted, stale=True)
+    if review:
+        return _acceptance(f'confirmed {review}', True)
+    items = s.acceptance_items(s.read_text(root, f'tasks/{tid}.md', staged))
+    tied = [node for _, node in items if node is not None]
+    checked = set()
+    if implemented and not implemented['missing']:
+        runs = counting_runs(record, history[history.index(implemented) + 1:], implemented)
+        if runs and runs[-1]['exit_code'] == 0 and runs[-1]['valid']:
+            recorded = [run for run in runs if 'acceptance_tests' in run]
+            checked = set(recorded[-1]['acceptance_tests']) if recorded else set()
+    passing = sum(node in checked for node in tied)
+    waiting = len(items) - passing
+    parts = []
+    if passing:
+        parts.append(f'tied tests pass ({passing} of {_count(len(items), "item")})')
+    if not items:
+        parts.append('awaiting a person (no Acceptance items listed)')
+    elif waiting:
+        parts.append(f'awaiting a person ({_count(waiting, "item")})')
+    else:
+        parts.append('awaiting a person to confirm')
+    return _acceptance('; '.join(parts))
+
+
+def acceptance_line(state, indent='  ', tid=None):
+    hint = (f'; a person confirms with workorder accept --task {tid}'
+            if tid and not state.confirmed and not state.stale else '')
+    hint = hint or (f'; a person accepts again with workorder accept --task {tid}' if tid and state.stale else '')
+    return f'{indent}Acceptance: {state}{hint}'
+
+
 RECORDED_EVIDENCE = 'recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)'
 
 
 def evidence_status(record, computed, debt, rerun=False):
     if record['status'] in FINISHED and computed in FINISHED and not debt:
         if rerun:
-            return 'the declared test passed on this code'
-        return RECORDED_EVIDENCE + f'; computed: {computed}'
+            return 'verified: the declared test passed on this code'
+        return 'verified: ' + RECORDED_EVIDENCE + f'; computed: {computed}'
     return 'claim not supported on this code' if debt and computed == 'CLOSED' else computed
 
 
@@ -4931,7 +5096,7 @@ def uncounted(root, record, history):
     """
     item, before = history[-1], history[:-1]
     kind = item["kind"]
-    if kind == "implemented" or (kind in {"test", "deployed", "live"}
+    if kind == "accepted" or kind == "implemented" or (kind in {"test", "deployed", "live"}
                                  and (item["exit_code"] != 0 or not item["valid"])):
         return None
     tid = record["id"]
@@ -5012,6 +5177,8 @@ def timeline(root, record, history):
                 what += f" (does not count: {reason})"
         elif kind == "merged":
             what = f"merged: {item.get('ref', '')} at {commit}"
+        elif kind == "accepted":
+            what = f"accepted on {commit}" + (f": {item['note']}" if item.get('note') else '')
         else:
             what = f"{kind} read-back {item.get('target', '')}: {'ok' if item['valid'] else 'not valid'} ({commit})"
         if item["missing"]:
@@ -5044,6 +5211,8 @@ def record_lines(root, tid):
     stale_debt = debt if stale else []
     if record['status'] in FINISHED:
         headline = f"{tid}\n  Claimed:  {record['status']}\n  Evidence: {evidence_status(record, computed, debt)}"
+        if not debt:
+            headline += '\n' + acceptance_line(acceptance_state(root, record), tid=tid)
     else:
         headline = unfinished_headline(record, done, delivery, open_waits)
     lines = [headline,
@@ -5137,6 +5306,8 @@ def explain(root, tid, claim=None, rerun=False):
     if claimed in FINISHED:
         lines = [f"NOT DONE  {tid}" if debt else f"{claimed}  {tid}", "",
                  f"  Claimed:  {claimed}", f"  Evidence: {evidence_status(record, computed, debt, rerun)}"]
+        if not debt:
+            lines.append(acceptance_line(acceptance_state(root, record), tid=tid))
     else:
         lines = [unfinished_headline(record, done, delivery, open_waits), ""]
     lines += [f"  Commit:   {commit or 'none recorded'}", f"  Test:     {test}"]

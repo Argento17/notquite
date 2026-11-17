@@ -46,6 +46,8 @@ def parser():
     init.add_argument("--update-workflow", action="store_true", help="rewrite the workflow and show its diff; --check previews only")
     init.add_argument("--light", action="store_true", help="write a trial workflow with review warnings and no task requirement")
     init.add_argument('--test-first', action='store_true', help='require tests to land before implementation in the workflow')
+    init.add_argument('--require-acceptance', action='store_true',
+                      help="refuse DONE tasks in the pull request until a person accepts them (an approving review)")
     project = init.add_mutually_exclusive_group()
     project.add_argument('--project-test', metavar='CMD', help="set the project's test command in .workorder/config.json"
                          " (a first init turns on python -m pytest -q when it finds pytest tests)")
@@ -88,8 +90,12 @@ def parser():
     new.add_argument("--template", choices=["extended", "simple"], default="extended",
                      help="extended: planning fields and Context/Scope/Lanes/Acceptance/Progress sections;"
                           " simple: the seven required fields only, as in 0.1.0 (default: extended)")
+    accept = commands.add_parser("accept", help="record that a person confirms a DONE task's Acceptance items"
+                                 " (refused for an agent: WORKORDER_AGENT is set)")
+    accept.add_argument("--task", required=True)
+    accept.add_argument("--note", help="what the person checked (kept in the acceptance receipt)")
     receipt = commands.add_parser("receipt", help="record evidence: implemented, test, merged, deployed, live")
-    receipt.add_argument("kind", choices=sorted(s.KINDS))
+    receipt.add_argument("kind", choices=sorted(s.EVIDENCE_KINDS))
     receipt.add_argument("--task", required=True)
     receipt.add_argument("--target", help="deployment name, required for deployed and live")
     receipt.add_argument("--ref", default="refs/heads/main",
@@ -138,6 +144,12 @@ def parser():
     check.add_argument('--approving-review', action='store_true',
                        help='accept review findings except old-test failures and test-first exceptions; --allow names explicit labels')
     check.add_argument('--require-test-first', action='store_true', help='with --base: require tests to land before implementation')
+    check.add_argument('--require-acceptance', action='store_true',
+                       help="refuse DONE/CLOSED tasks a person has not accepted (workorder accept, or with --base"
+                            " an approving review); tied tests alone are the author's evidence")
+    check.add_argument('--approved-by', metavar='NAMES', default='',
+                       help='with --approving-review: the approving reviewers, named in Acceptance lines'
+                            ' (the workflow sets this)')
     check.add_argument("--run-tests", action="store_true",
                        help="run selected tasks' tests; with --base, include tasks with changed tests and REF comparisons")
     check.add_argument("--strict-tests", action="store_true",
@@ -368,6 +380,9 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                             f'then run workorder done --task {tid} again'])
             return 1
         print(tied or "Acceptance is not checked by Workorder: confirm each item is met.", flush=True)
+        if tied:
+            s.annotate_acceptance_tests(root, tid, [node for _, node in s.acceptance_items(
+                s.read_text(root, f"tasks/{tid}.md")) if node is not None])
         results = {}
         notes = []
         stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results, notes=notes)
@@ -491,6 +506,45 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
 
 
 @s.read_session()
+def accept_task(root, tid, note=None):
+    """A person confirms a DONE task's Acceptance items on the tested code; an agent cannot."""
+    if 'WORKORDER_AGENT' in os.environ:
+        raise s.Refused(f"{tid}: an agent cannot accept a task (WORKORDER_AGENT is set); acceptance is a person"
+                        f" confirming the Acceptance items: ask a person to run workorder accept --task {tid}"
+                        " or to approve the pull request")
+    if note is not None and not note.strip():
+        raise s.Refused('a note needs some text')
+    record = s.record(root, tid)
+    if record['status'] not in gate.FINISHED:
+        raise s.Refused(f"{tid} is {record['status']}; acceptance needs it DONE with supported evidence:"
+                        f" run workorder done --task {tid} first")
+    dirty = s.dirty_paths(root)
+    if dirty:
+        raise s.Refused('commit the code first; ' + s.describe_dirty(dirty))
+    lines, refused = gate.explain(root, tid)
+    if refused:
+        print("\n".join(lines))
+        raise s.Refused(f"{tid}: its evidence does not support {record['status']}; acceptance needs supported evidence")
+    history = s.entries(root, tid)
+    gate.recognise_squashed(root, tid, history)
+    implemented = gate.newest_implementation(history)
+    if implemented is None or implemented['missing']:
+        raise s.Refused(f'{tid}: its implementation is not in this clone; run workorder renew --task {tid} first')
+    if (s.code_digest(root, s.head(root)) != implemented['code']
+            and gate.task_change_touched(root, implemented.get('seen_on', implemented['commit']), record)):
+        raise s.Refused(f"{tid}: its code changed after the tested commit {implemented['commit'][:7]};"
+                        f" run workorder renew --task {tid} on this commit first")
+    item = s.acceptance_receipt(root, tid, implemented['hash'], note)
+    print(f"{tid} accepted by {item['who']} on {item['commit'][:7]}"
+          + (f": {item['note']}" if item.get('note') else ''))
+    state = gate.acceptance_state(root, s.record(root, tid))
+    print(f"  Evidence: verified\n  Acceptance: {state}")
+    push = " and push" if s.has_origin(root) else ""
+    print(f"commit .workorder/{push}")
+    return 0
+
+
+@s.read_session()
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     command = []
@@ -518,6 +572,8 @@ def run_command(options, command, run):
                 raise s.Refused("--allow, --approving-review, --strict-tests, --require-task and --require-test-first go with --base")
             if options.review and not options.base:
                 raise s.Refused("--review goes with --base")
+            if options.approved_by and not options.approving_review:
+                raise s.Refused("--approved-by goes with --approving-review")
             if options.all_tests and not options.run_tests:
                 raise s.Refused("--all-tests goes with --run-tests")
             if options.task and options.run_tests:
@@ -534,6 +590,7 @@ def run_command(options, command, run):
             from .bootstrap import initialize
             return initialize(root, options.check, options.force, claude=options.claude,
                               update_workflow=options.update_workflow, light=options.light, test_first=options.test_first,
+                              require_acceptance=options.require_acceptance,
                               project_test=options.project_test, no_project_test=options.no_project_test)
         elif options.action == "hook":
             from .hooks import run
@@ -608,6 +665,8 @@ def run_command(options, command, run):
             print(f"{options.task} still owes: {gate.owes(record, done, delivery)}")
             failed = item.get("exit_code", 0) != 0 or not item.get("valid", True)
             return 1 if failed or reason else 0
+        elif options.action == "accept":
+            return accept_task(root, s.task_id(options.task), options.note)
         elif options.action == "show":
             snapshot = s.fetch_upstream(root)
             if snapshot == {}:
@@ -694,10 +753,17 @@ def run_command(options, command, run):
             if options.staged or options.base:
                 raise s.Refused("--staged and --base check every task; leave out the task")
             lines, refused = gate.explain(root, task_argument(options.task))
-            print("\n".join(lines))
             record = s.record(root, task_argument(options.task))
             claimed = record["status"] in gate.FINISHED
-            print(gate.check_summary(dict(tasks=1, claimed=int(claimed),
+            tally = {}
+            if claimed and not refused:
+                state = gate.acceptance_state(root, record)
+                tally = {'stale' if state.stale else 'confirmed' if state.confirmed else 'awaiting': 1}
+                if options.require_acceptance and not state.confirmed:
+                    refused = True
+                    lines += [f"  Missing:  {gate.acceptance_problem(record['id'], state)}"]
+            print("\n".join(lines))
+            print(gate.check_summary(dict(tasks=1, claimed=int(claimed), acceptance=tally,
                                          tests_only=int(claimed and not refused and record['contract'] == 'none')),
                                      single_unclaimed=not claimed))
             return int(refused)
@@ -709,7 +775,9 @@ def run_command(options, command, run):
                                   options.strict_tests, options.all_tests, options.require_task,
                                   timeout=options.timeout, review=options.review or "refuse",
                                   approving_review=options.approving_review, require_test_first=options.require_test_first,
-                                  jobs=options.jobs, require_task_ignore=options.require_task_ignore)
+                                  jobs=options.jobs, require_task_ignore=options.require_task_ignore,
+                                  require_acceptance=options.require_acceptance,
+                                  approvers=[name.strip() for name in options.approved_by.split(',') if name.strip()])
             if (options.staged and not counts["tasks"] and not problems and not notes
                     and not counts.get("warnings") and not options.run_tests):
                 return 0

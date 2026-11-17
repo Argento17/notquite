@@ -41,12 +41,20 @@ def accepted_labels(pull_request, pages):
     return allowed, notices
 
 
+LOGIN = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\Z')
+
+
 def accepted_review(pull_request, pages):
     """An undismissed approval of this head by someone other than its author."""
+    return bool(approving_reviewers(pull_request, pages))
+
+
+def approving_reviewers(pull_request, pages):
+    """The logins with an undismissed approval of this head, other than its author."""
     author = pull_request.get('user') or {}
     head = (pull_request.get('head') or {}).get('sha')
     if not head or not author.get('login'):
-        return False
+        return []
     latest = {}
     for page in pages:
         for review in page:
@@ -57,8 +65,8 @@ def accepted_review(pull_request, pages):
                 continue
             if review.get('state') in {'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'}:
                 latest[actor.get('id') or actor['login'].casefold()] = review
-    return any(review.get('state') == 'APPROVED' and review.get('commit_id') == head
-               for review in latest.values())
+    return sorted({review['user']['login'] for review in latest.values()
+                   if review.get('state') == 'APPROVED' and review.get('commit_id') == head})
 
 
 def main():
@@ -73,11 +81,15 @@ def main():
         print(','.join(allowed))
         return
     with open(sys.argv[3], encoding='utf-8') as stream:
-        approved = accepted_review(pull_request, json.load(stream))
+        approvers = approving_reviewers(pull_request, json.load(stream))
     # Keep explicit labels separate: an approval cannot accept an old-test failure.
     arguments = ['--allow', ','.join(allowed)] if allowed else []
-    if approved:
+    if approvers:
         arguments.append('--approving-review')
+        # Logins name the reviewers in Acceptance lines; only plain GitHub logins reach the shell.
+        named = [login for login in approvers if LOGIN.fullmatch(login)]
+        if named:
+            arguments += ['--approved-by', ','.join(named)]
     print(' '.join(arguments))  # all words are fixed flags or validated allowance IDs
 
 

@@ -27,10 +27,11 @@ Contents: [Commands](#commands) · [Task files](#task-files) ·
 
 | Command | What it does |
 |---|---|
-| `workorder init [--check] [--force] [--claude] [--update-workflow] [--light] [--test-first] [--project-test CMD \| --no-project-test]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs the pre-commit hook, and writes the workflow if absent. A first init that finds pytest sets the project test `python -m pytest -q` ([project test](#current-runs-cache-and-summaries)); `--project-test` stores another command in `.workorder/config.json`, `--no-project-test` turns it off. `--update-workflow` rewrites the workflow and shows a diff (only a preview with `--check`). `--check` reports missing setup without writing and exits 1 if incomplete. `--force` keeps a different hook as `pre-commit.workorder-previous` and calls it first. `--claude` merges hooks into `.claude/settings.json` |
+| `workorder init [--check] [--force] [--claude] [--update-workflow] [--light] [--test-first] [--require-acceptance] [--project-test CMD \| --no-project-test]` | Adds the README agent block once to AGENTS.md and CLAUDE.md, installs the pre-commit hook, and writes the workflow if absent. A first init that finds pytest sets the project test `python -m pytest -q` ([project test](#current-runs-cache-and-summaries)); `--project-test` stores another command in `.workorder/config.json`, `--no-project-test` turns it off. `--update-workflow` rewrites the workflow and shows a diff (only a preview with `--check`). `--check` reports missing setup without writing and exits 1 if incomplete. `--force` keeps a different hook as `pre-commit.workorder-previous` and calls it first. `--require-acceptance` adds that option to the workflow's pull-request check. `--claude` merges hooks into `.claude/settings.json` |
 | `workorder new --title T --owner O [--ships none\|repo\|live] [--prefix TASK] [--template extended\|simple] [--test COMMAND] [--test-paths PATH ...] [--code-paths PATH ...] [--acceptance TEXT ...] [--kind feature\|fix\|refactor\|verification] [--local] [--test-first]` | Reserves the next id on `origin`, or numbers it locally with no `origin` or with `--local` (no tag pushed), and writes `tasks/<id>.md` (extended by default; `simple` writes the seven required fields). `ships` defaults to `none`. `--acceptance` (repeatable) writes Acceptance items; `--kind` writes `kind` (none by default) |
 | `workorder done --task ID [--note TEXT] [--timeout SECONDS] [--jobs N] [--needs-review] [--no-code-change] [--refactor] [--require-test-first] [--take-over] [--verbose]` | Runs the declared test and writes DONE, receipts and the note together when the evidence supports it; a refusal changes nothing. Prints the Acceptance list for confirmation. Never commits or pushes |
 | `workorder show --task ID [--verbose]` | The task as a record: claimed and evidence status, what is owed, dependencies, kind, mission, summary, next, body sections, a dated receipt timeline, any computed merge and Progress. Prints a next step for owed evidence or unclaimed Acceptance work |
+| `workorder accept --task ID [--note TEXT]` | A person confirms a finished task's Acceptance items with an `accepted` receipt; refused for an agent; see [evidence and acceptance](#evidence-and-acceptance) |
 | `workorder note --task ID [--next TEXT] [NOTE]` | Sets `next`, adds `- YYYY-MM-DD: NOTE` to Progress, or both |
 | `workorder renew --task ID [--refactor \| --no-refactor] [--timeout SECONDS] [-- CMD...]` | Records `implemented` and the task's test again on the current commit: one step after a squash merge or rebase. The merge itself is computed, never recorded |
 | `workorder retire ID --reason TEXT` | Marks a DONE or CLOSED task RETIRED and adds the reason to Progress; see [retiring](#task-files) |
@@ -39,9 +40,9 @@ Contents: [Commands](#commands) · [Task files](#task-files) ·
 | `workorder receipt merged --task ID [--ref refs/heads/main]` | Fetches the branch from `origin` and records the commit it points to |
 | `workorder receipt deployed --task ID --target NAME -- CMD...` | Runs a read-back command; valid only if it exits 0 and prints the full commit ID |
 | `workorder receipt live --task ID --target NAME -- CMD...` | The same, recorded after the deployment |
-| `workorder check [ID]` / `check --task ID` | No argument: every task, one line per problem, or `check: OK`. With a task (or `tasks/ID.md`): that task explained |
+| `workorder check [ID]` / `check --task ID` | No argument: every task, one line per problem, or `check: OK`. With a task (or `tasks/ID.md`): that task explained. `--require-acceptance` also refuses finished tasks no person has accepted |
 | `workorder check --staged` | The pre-commit hook: checks the staged tasks this commit touches (task file, receipts, contract or its evidence) and their dependents. Refuses a commit that newly claims DONE or CLOSED on code other than the implemented code, and command changes on unfinished tasks |
-| `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--review warn\|refuse] [--all-tests] [--require-task] [--require-task-ignore GLOB] [--require-test-first] [--approving-review] [--timeout SECONDS] [--jobs N]` | The pull-request check: changed task records and receipts, all repository test roots, every task whose tests changed, and dependents. Refuses stale claims, changed receipts, unsupported definitions and removed tasks; see [checks against a base](#checks-against-a-base) |
+| `workorder check --base REF [--verbose] [--allow IDS] [--run-tests] [--strict-tests] [--review warn\|refuse] [--all-tests] [--require-task] [--require-task-ignore GLOB] [--require-test-first] [--require-acceptance] [--approving-review [--approved-by NAMES]] [--timeout SECONDS] [--jobs N]` | The pull-request check: changed task records and receipts, all repository test roots, every task whose tests changed, and dependents. Refuses stale claims, changed receipts, unsupported definitions and removed tasks; see [checks against a base](#checks-against-a-base) |
 | `workorder repair --task ID` | Verifies a conflicted legacy append, keeps the common prefix and converts each side's extra lines to receipt files |
 | `workorder claim --task ID` / `release --task ID [--force]` | Takes or gives up a task with a pushed tag; see [claims](#claims-and-ids) |
 | `workorder claims` / `workorder ready` | Active claims / open tasks: free, held, blocked or waiting for delivery |
@@ -890,7 +891,7 @@ or `(some comparisons cached)`; a missing executable does not count. Otherwise a
 line says `no declared test ran in this check`, or just `no task changed in this
 change` when nothing changed, even after merging main's test edit. Unreadable and removed tasks are counted, but not
 as claims; one unfinished task reads `checked 1 task (not claimed finished)`.
-Supported claims without a contract get the Acceptance reminder. Checks exit 0
+Supported claims without a contract get the Evidence and Acceptance summary line. Checks exit 0
 to accept and 1 to refuse.
 
 A run with zero passed tests, even all skipped or xfailed, never supports DONE:
@@ -1005,7 +1006,8 @@ only when someone other than the author made it on the current head; old-head, d
 reviews do not, and a later request for changes from that reviewer replaces it. Missing history or
 actor identity supplies nothing. Account IDs and case-insensitive logins identify the author. The API
 uses the workflow's read-only token; a failed request stops the check. Labels supply `--allow`; a
-counted review supplies `--approving-review`. The checkout uses the event's head commit, so a review
+counted review supplies `--approving-review`, and `--approved-by` with the approvers' logins (plain
+GitHub logins only), which Acceptance lines name. The checkout uses the event's head commit, so a review
 of an earlier head cannot accept a later one.
 
 The review rule: an approving review clears every finding except changes to existing tests (edited,
@@ -1059,6 +1061,8 @@ its hash. Every receipt has `task`, `kind`, `at`, `who` (`WORKORDER_AGENT` when 
 Optional members, which older receipts may omit:
 
 - Command receipts: `command`, `exit_code`, `valid`. Read-backs: `target`, `output_sha256`. Merges: `ref`.
+- `accepted` (1.0, from `workorder accept`): `implemented` (the accepted implementation receipt's
+  hash) and optional `note`; earlier versions refuse it. `done` adds `acceptance_tests` (tied node ids).
 - `done --no-code-change`: `no_code_change: true` and `no_code_change_base`. `done --refactor`:
   `refactor: true`. `done --needs-review`: `pending_review: true` and `pending_findings` (objects
   with `message` and `label_only`). 0.13.0 reads these; 0.14 applies their review rules.
@@ -1179,8 +1183,9 @@ line endings and byte order mark. CRLF checkouts, as Git on Windows may make, re
 In `show` and `check ID`, an unclaimed task starts
 `TASK-1 IN_PROGRESS (not claimed finished); its test evidence is in place`, or `owes: ...`. A
 supported finished task prints
-``Evidence: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)``
-and its computed status. If HEAD differs from the implementation, Result names the implemented
+``Evidence: verified: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)``
+and its computed status, then its `Acceptance:` line ([evidence and acceptance](#evidence-and-acceptance)).
+`done` prints `Evidence: verified: the declared test passed on this code`. If HEAD differs from the implementation, Result names the implemented
 commit the test passed on. A test that does not count shows `(does not count: <reason>)`, even with
 exit 0. `show` suggests `workorder done --task ID` for outstanding work, first asking for a concrete
 command when the task has `test: any`. A named check says `TASK-1's files are unchanged since <sha>`
@@ -1190,6 +1195,19 @@ Before a merge, `merge of the tested code` is owed; advice about differing merge
 when the target changed implementation paths since the merge base. An unsupported claim shows
 `Evidence: claim not supported on this code` and a Result such as
 `Result: the DONE claim is on code other than the tested code; run workorder renew --task TASK-1`.
+
+## Evidence and acceptance
+
+DONE is `Evidence: verified`: the declared test, which the author wrote, supports the claim. A
+second line, `Acceptance:`, says whether a person agrees it is the right result:
+`confirmed by NAME on DATE` (`workorder accept --task ID`, on the tested code and refused when
+`WORKORDER_AGENT` is set), `confirmed in review by NAME` (an approving review of the tasks the pull
+request finishes), `stale since COMMIT` (the task's code changed after it), or
+`tied tests pass (N of M items)` / `awaiting a person (N items)`. Tied tests are not a person.
+
+Missing acceptance is a Note; `check --require-acceptance` (or `init --require-acceptance` for the
+workflow) refuses instead. Workorder cannot tell who wrote a receipt file, so an acceptance recorded
+in the same pull request counts there only with an approving review.
 
 ## Task-first development
 
