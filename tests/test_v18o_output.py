@@ -149,3 +149,16 @@ def test_show_accepts_verbose(local_repo):
     result = cli(root, 'show', '--task', 'TASK-1', '--verbose')
     assert result.returncode == 0, result.stderr
     assert 'TASK-1' in result.stdout
+
+
+def test_a_run_that_shortens_nothing_removes_an_older_full_output(local_repo):
+    root = local_repo
+    many_failures_project(root)
+    assert run_action(root, 'check').returncode == 1
+    assert (root / LOG).is_file()
+    # The same change, fixed: nothing is shortened, so no older file may be left to mislead.
+    (root / 'app.py').write_text('value = 1\nfeature = True\n')
+    commit_all(root)
+    result = run_action(root, 'check')
+    assert 'Full output:' not in result.stdout + result.stderr
+    assert not (root / LOG).exists(), result.stdout + result.stderr

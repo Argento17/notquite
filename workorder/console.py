@@ -102,6 +102,18 @@ def session(root=None, *, verbose=False, hint='rerun with --verbose to print it 
         _RUN.reset(token)
         if run.shortened is not None:
             _save(run)
+        else:
+            _discard(run)
+
+
+def _discard(run):
+    """A run that shortened nothing leaves no older run's file to be mistaken for its own."""
+    path = log_path(run.root) if run.root is not None else None
+    if path is not None:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _save(run):

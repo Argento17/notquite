@@ -120,4 +120,4 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/source.py 0add0ef1557d79323de7dbb42b2454f5db074fcf0e8272f538d125de536fbd6d code-receipts,renewal,weak-tests -->
 <!-- refusal-inventory workorder/store.py 2ede7bb7804809f5b3ba05144da426459d34453800356985246f0ba9a06b6161 records,evidence,current-tests,removal,pending -->
 <!-- refusal-inventory workorder/git_reads.py c406e897d3776a2eefb175775f1cf8144f2d6991a666432e1337bb739c5c0371 records,evidence -->
-<!-- refusal-inventory workorder/console.py 879b543a24336b284aa45985ea9a749478e981841a153f4d3ee61d9d26490939 records,current-tests -->
+<!-- refusal-inventory workorder/console.py 05f5ef10f1e818b11840f1aad889661f477678caa4851f3b2af2703cd32ff092 records,current-tests -->
