@@ -129,7 +129,7 @@ The test in `tests/test_v16b_guide.py` requires these meanings and remedies, and
 <!-- refusal-inventory workorder/__init__.py 471c11c395aac0e41ca692d0f5a023515c37594572c415d16f71dbd54c3b9926 records -->
 <!-- refusal-inventory workorder/__main__.py cb39dacc1a942b75221dd33c3d3828202d9efb797bf559090b1b4a407ae8d5d6 records -->
 <!-- refusal-inventory workorder/bootstrap.py 1d84f97a254426844821a20c3413a0263d9d86912b111aef3f32c91b1a064fa7 records,workflow,project-test -->
-<!-- refusal-inventory workorder/cli.py 2540ff2787fce9bbca105d759a21583039c7d067399a1158a70758c3ca351275 records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
+<!-- refusal-inventory workorder/cli.py 0b2208f3a5fe87e6b1d502b7723db71c33ef9bb56db162a6f062b59ed8f7450d records,evidence,current-tests,definitions,weak-tests,test-first,pending,renewal,project-test -->
 <!-- refusal-inventory workorder/gate.py 8b5d5113d658f41cb5eedea07c902d8afc6b198d0ebbcc285a378c45b4d9d8ef code-receipts,current-tests,definitions,evidence,imports,old-tests,pending,project-test,records,removal,renewal,scope,test-edits,test-first,weak-tests,workflow -->
 <!-- refusal-inventory workorder/hooks.py 84c2d9a3f4cb85cc24bccd023e98b2959733d3dcae092541ecc3a82c6bff3d63 evidence,current-tests,test-edits,pending,renewal -->
 <!-- refusal-inventory workorder/project_report.py 966cf398e998321996e0e60827eaadb08c6dbe625a7126a0aa8d08c4fd2460ae project-test -->

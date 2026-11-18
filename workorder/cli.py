@@ -473,6 +473,7 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
             pool = ThreadPoolExecutor(max_workers=min(jobs or 3, 3) - 1)
             gate.prefetch_comparison(root, gate.comparison_base(root, base)[0], record, results, pool,
                                      timeout=timeout)
+            gate._debug(f'parallel runs started: {len(results.pending)}')
         stub = gate.stub_problem(root, revision, record, timeout=timeout, results=results, notes=notes)
         if stub and needs_review and gate._accepts_allow_label(stub):
             pending_findings.append(stub)
