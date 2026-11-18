@@ -145,7 +145,10 @@ def test_check_reports_scope(local_repo, mode, count, claimed):
     git(root, 'add', 'tasks')
     args = [*mode, base] if mode == ['--base'] else mode
     output = ok(root, 'check', *args)
-    assert output.splitlines()[-1] == f'checked {count} task{"" if count == 1 else "s"} ({claimed} claimed DONE or CLOSED)'
+    lines = output.splitlines()
+    if lines[-1] == 'check: OK':  # 1.0 lane P2: the verdict comes last (a single-task check prints none)
+        lines.pop()
+    assert lines[-1] == f'checked {count} task{"" if count == 1 else "s"} ({claimed} claimed DONE or CLOSED)'
     assert 'ran ' not in output
 
 
@@ -203,7 +206,8 @@ def test_base_guards_test_files(local_repo, explicit, change):
     assert result.returncode == (0 if change == 'add' else 1), result.stdout + result.stderr
     if change != 'add':
         lost = 1 if change == 'edit' else 2
-        assert f'TASK-1: its test files lost or changed {lost} lines since {base}' in result.stdout
+        # 1.0 lane P2: "1 line", not "1 lines".
+        assert f"TASK-1: its test files lost or changed {lost} line{'s' if lost != 1 else ''} since {base}" in result.stdout
         assert 'tests/test example.py' in result.stdout
         assert 'a reviewer accepts it with the label workorder-allow:TASK-1' in result.stdout
         ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
@@ -365,7 +369,7 @@ def test_base_test_paths_still_guard_files_after_paths_removed(local_repo):
     commit_all(root)
     result = cli(root, 'check', '--review', 'refuse', '--base', base)
     assert result.returncode == 1 and 'test_paths changed' in result.stdout
-    assert 'lost or changed 1 lines' in result.stdout
+    assert 'lost or changed 1 line since' in result.stdout  # 1.0 lane P2: was "1 lines"
     ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
 
 
@@ -384,7 +388,7 @@ def test_test_paths_normalise_parent_components(local_repo, explicit):
     probe.write_text('pass\n')
     commit_all(root)
     result = cli(root, 'check', '--review', 'refuse', '--base', base)
-    assert result.returncode == 1 and 'lost or changed 1 lines' in result.stdout
+    assert result.returncode == 1 and 'lost or changed 1 line since' in result.stdout  # 1.0 P2: was "1 lines"
     ok(root, 'check', '--review', 'refuse', '--base', base, '--allow', 'TASK-1')
 
 

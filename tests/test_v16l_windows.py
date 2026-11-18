@@ -78,18 +78,18 @@ def test_lf_editor_and_crlf_checkout_reuse_only_identical_bytes(local_repo, byte
     git(root, 'update-ref', 'refs/remotes/origin/main', base)
     assert (root / 'app.py').read_bytes() == b'items = []\n'
     ok(root, 'done', '--task', 'TASK-1', '--no-code-change')
-    # Explicit completion records evidence and verifies the claim afresh.
-    assert counter.read_text().splitlines() == ['run', 'run']
+    # Explicit completion records evidence and verifies the claim afresh, in one run (1.0 lane P2: was two).
+    assert counter.read_text().splitlines() == ['run']
     git(root, 'add', 'tasks', '.workorder')
 
     first = cli(root, 'check', '--staged')
     assert first.returncode == (1 if byte_sensitive else 0), first.stdout + first.stderr
     assert '(result reused from the run at ' not in first.stdout
-    assert counter.read_text().splitlines() == ['run', 'run', 'run']
+    assert counter.read_text().splitlines() == ['run', 'run']
     second = cli(root, 'check', '--staged')
     assert second.returncode == first.returncode, second.stdout + second.stderr
     assert '(result reused from the run at ' in second.stdout
-    assert counter.read_text().splitlines() == ['run', 'run', 'run']
+    assert counter.read_text().splitlines() == ['run', 'run']
     assert (root / 'app.py').read_bytes() == b'items = []\n'
     if byte_sensitive:
         assert 'AssertionError' in first.stdout + first.stderr

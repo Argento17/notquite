@@ -62,6 +62,14 @@ def pytest_sessionfinish(session, exitstatus):
     data = {"outcomes": _workorder_outcomes, "summary": "",
             "short_summary": "\\n".join(error for error, _ in _workorder_errors),
             "failures": [detail for _, detail in _workorder_errors]}
+    # Node ids are relative to the rootdir this run chose. A base rerun that
+    # names nodes must choose the same rootdir and configuration file.
+    config = session.config
+    rootdir = getattr(config, "rootpath", None) or getattr(config, "rootdir", None)
+    inifile = (getattr(config, "inipath", None) if hasattr(config, "inipath")
+               else getattr(config, "inifile", None))
+    data["layout"] = {"rootdir": str(rootdir) if rootdir else None,
+                      "inifile": str(inifile) if inifile else None}
     terminal = session.config.pluginmanager.getplugin("terminalreporter")
     if terminal is not None:
         verbose, reportchars = session.config.option.verbose, terminal.reportchars

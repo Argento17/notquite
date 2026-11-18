@@ -43,7 +43,7 @@ def output_project(root, *, broken_head=True, broken_base=False, quiet='-q'):
 
 
 def run_action(root, action):
-    flags = ('done', '--task', 'TASK-1') if action == 'done' else (
+    flags = ('done', '--task', 'TASK-1', '--project-test') if action == 'done' else (
         'check', '--base', 'origin/main', '--run-tests')
     return cli(root, *flags)
 
@@ -60,10 +60,24 @@ def test_project_failure_output_is_bounded_and_base_prints_only_counts(local_rep
     assert 'PASSING CAPTURE MUST STAY HIDDEN' not in output
     assert not re.search(r'^[.sxF]{10,}', output, re.M), output
     assert '\x1b[' not in output
+    assert 'failure detail 099' not in output
+    assert len(output.splitlines()) < 120, output
+    expected_base = '1 failed' if broken_base else '1 passed'
+    # 1.0 lane P2: the base rerun is of the failing tests only, and says so.
+    assert re.search(r'Note: the rerun on origin/main of the 1 project test that fails on this code \('
+                     + expected_base + r' in [\d.]+s\)', output), output
+    if broken_base:
+        # 1.0 lane P2: a failure that already fails on the base is only a Note: no failure body is
+        # printed; the full output file keeps it.
+        assert 'FAILED tests/test_project.py::test_project[a - b]' not in output
+        assert 'assert app.value == number' not in output
+        assert 'Note: the project test also fails on origin/main: tests/test_project.py::test_project[a - b]' in output
+        saved = (root / '.git/workorder/last-output.txt').read_text()
+        assert 'FAILED tests/test_project.py::test_project[a - b]' in saved
+        return
     assert 'FAILED tests/test_project.py::test_project[a - b]' in output
     assert 'assert app.value == number' in output
     assert '1 failed, 60 passed, 1 skipped, 1 xfailed in ' in output
-    assert 'failure detail 099' not in output
     # 0.18: the first failure is cut at 20 lines (was 60); the rest is in .git/workorder/last-output.txt.
     assert '[first failure: 20 of ' in output
     section = next(i for i, line in enumerate(output.splitlines())
@@ -71,11 +85,7 @@ def test_project_failure_output_is_bounded_and_base_prints_only_counts(local_rep
     cut = next(i for i, line in enumerate(output.splitlines())
                if '[first failure: 20 of ' in line)
     assert cut - section == 20, output
-    assert len(output.splitlines()) < 120, output
     assert len(re.findall(r'^FAILED tests/test_project.py::test_project', output, re.M)) == 1
-    expected_base = '1 failed' if broken_base else '1 passed'
-    assert re.search(r'Note: the project test on origin/main \(' + expected_base
-                     + r' in [\d.]+s\)', output), output
     if not broken_base:
         assert '(passes on origin/main)' in output
         if action == 'done':
@@ -91,7 +101,7 @@ def test_passing_project_prints_one_line_with_pytest_counts(local_repo, action, 
     result = run_action(root, action)
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
-    lines = [line for line in output.splitlines() if 'project test' in line]
+    lines = [line for line in output.splitlines() if 'project test' in line and not line.startswith('Time:')]
     assert len(lines) == 1, output
     assert re.fullmatch(r'Note: the project test passed on this code '
                         r'\(61 passed, 1 skipped, 1 xfailed in [\d.]+s\)', lines[0]), output
@@ -152,7 +162,8 @@ def test_parallel_project_failure_keeps_exact_node_id(local_repo, capsys):
     output = capsys.readouterr().out
     assert len(problems) == 1
     assert 'test_project[a - b] (passes on origin/main)' in problems[0]
-    assert any('the project test on origin/main (1 passed in ' in note for note in notes)
+    assert any('the rerun on origin/main of the 1 project test that fails on this code (1 passed in ' in note
+               for note in notes)
     assert re.search(r'^FAILED tests/test_project.py::test_project\[a - b\]', output, re.M)
     assert '1 failed, 60 passed, 1 skipped, 1 xfailed in ' in output
     assert len(output.splitlines()) < 70

@@ -108,7 +108,10 @@ def test_approval_names_accepted_findings(local_repo):
     store.receipt(root, 'TASK-3', 'test', [PYTHON, 'tests/test_calc.py'])
     store.set_task_field(root, 'TASK-3', 'status', 'DONE')
     output = ok(root, 'check', '--base', base, '--allow', 'TASK-3,tests,no-task', '--approving-review')
-    assert 'accepted by an approving review: TASK-3 (new task), tests/test_calc.py (changed lines)' in output
+    # 1.0.1: each item is credited to what cleared it; here the given labels, not the approval.
+    assert 'accepted by the label workorder-allow:TASK-3: TASK-3 (new task)' in output
+    assert 'accepted by the label workorder-allow:TASK-3 or workorder-allow:tests: tests/test_calc.py (changed lines)' in output
+    assert 'accepted by an approving review' not in output
     pending = ok(root, 'done', '--task', 'TASK-3', '--needs-review', '--no-code-change')
     assert 'pending review: the pull request needs workorder-allow:TASK-3 or an approving review' in pending
 
@@ -261,14 +264,14 @@ def test_optional_code_paths_require_task(local_repo, paths, changed, refused):
     (root / changed).write_text('value = 2\n')
     commit_all(root)
     ok(root, 'renew', '--task', 'TASK-2')
-    result = cli(root, 'check', '--base', base, '--require-task')
+    result = cli(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-2')  # round 22: the hand receipts of an unfinished task also need its label
     assert result.returncode == int(refused), result.stdout + result.stderr
     if refused:
         assert f'{changed} is outside the code paths of TASK-2' in result.stdout
         assert 'workorder-allow:scope:TASK-2' in result.stdout
         assert '(or an approving review)' not in result.stdout
-        ok(root, 'check', '--base', base, '--require-task', '--allow', 'scope:TASK-2')
-        assert cli(root, 'check', '--base', base, '--require-task', '--allow', 'tests').returncode == 1
+        ok(root, 'check', '--base', base, '--require-task', '--allow', 'scope:TASK-2,TASK-2')
+        assert cli(root, 'check', '--base', base, '--require-task', '--allow', 'tests,TASK-2').returncode == 1
 
 
 def test_code_paths_use_union_and_legacy_opt_out(local_repo):
@@ -281,11 +284,11 @@ def test_code_paths_use_union_and_legacy_opt_out(local_repo):
     commit_all(root)
     for tid in ('TASK-2', 'TASK-3'):
         ok(root, 'renew', '--task', tid)
-    ok(root, 'check', '--base', base, '--require-task')
+    ok(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-2,TASK-3')  # round 22: the hand receipts of an unfinished task also need its label
     other.write_text(other.read_text().replace('code_paths: ["src/unrelated.py"]\n', ''))
-    result = cli(root, 'check', '--base', base, '--require-task')
+    result = cli(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-2,TASK-3')
     assert result.returncode == 1 and 'workorder-allow:scope:TASK-2' in result.stdout
-    ok(root, 'check', '--base', base, '--require-task', '--allow', 'scope:TASK-2')
+    ok(root, 'check', '--base', base, '--require-task', '--allow', 'scope:TASK-2,TASK-2,TASK-3')
 
 
 def test_code_paths_test_receipt_and_staged_definition(local_repo):

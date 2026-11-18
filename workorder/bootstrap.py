@@ -16,12 +16,12 @@ from . import store as s
 AGENT_BLOCK = r"""## Tasks
 - Start from the task: if the repository has an origin remote, run `git fetch origin`. On main, update with `git pull --rebase origin main`. On a feature branch, merge or rebase main as needed. Run `workorder show --task <id>` and follow its Scope, Acceptance, test and progress.
 - Set `WORKORDER_AGENT` when sharing a Git identity. Run `workorder claim --task <id>` before work.
-- Do the work with a test that fails without it. Commit, then run `workorder done --task <id> --note "<what was done>"`. Report refusals; do not claim completion after one.
+- Do the work with a test that fails without it. Commit, then run `workorder done --task <id> --note "<what was done>"`. Report refusals; never claim completion after one or run `workorder accept`.
 - Keep unfinished progress with `workorder note --task <id> --next "<next step>" "<progress>"`; done clears next.
 - Never edit a task's status or receipts by hand. Commit tasks/ and .workorder/ with the work.
 - Renew only when the task's own code or tests changed after DONE: `workorder renew --task <id>`.
 - Before saying done, run `workorder check --base origin/main --run-tests --all-tests --require-task`.
-- Output is shortened; the full text is in `.git/workorder/last-output.txt`.
+- Shortened output is saved in full to `.git/workorder/last-output.txt`.
 """
 
 HOOK = r"""#!/bin/sh
@@ -68,18 +68,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        # Optional: append --require-task-ignore GLOB for each code path exception, for example:
+@AUTHOR_ENV@        # Optional: append --require-task-ignore GLOB for each code path exception, for example:
         # --require-task-ignore 'docs/**' --require-task-ignore '*.md'
         run: |
           trap 'status=$?; if [ "$status" -ne 0 ]; then echo "Reviewer guide: https://github.com/Argento17/workorder/blob/main/docs/reviewer-guide.md" >&2; fi; exit "$status"' 0
           # Reviewed task ids, unowned tests, or the code-to-task requirement.
           gh api --paginate --slurp "repos/$GH_REPO/issues/$PR_NUMBER/events" > "$RUNNER_TEMP/workorder-label-events.json"
           gh api --paginate --slurp "repos/$GH_REPO/pulls/$PR_NUMBER/reviews" > "$RUNNER_TEMP/workorder-reviews.json"
-          allowances=$(python -m workorder.review_labels "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/workorder-label-events.json" "$RUNNER_TEMP/workorder-reviews.json" "$BASE")
+@SOLO_LOOKUP@          allowances=$(python -m workorder.review_labels @SOLO_OPTION@"$GITHUB_EVENT_PATH" "$RUNNER_TEMP/workorder-label-events.json" "$RUNNER_TEMP/workorder-reviews.json" "$BASE")
           @REVIEW_COMMENT@
           workorder check --base "$BASE" --run-tests --all-tests @REVIEW_OPTIONS@ $allowances
 """
 
+# Solo mode (init --solo) adds the author's permission lookup; without it the workflow is unchanged.
+SOLO_AUTHOR_ENV = '          PR_AUTHOR: ${{ github.event.pull_request.user.login }}\n'
+SOLO_LOOKUP = (
+    "          # Solo mode: the author's own labels count only if GitHub confirms the author as owner or admin.\n"
+    '          gh api "repos/$GH_REPO/collaborators/$PR_AUTHOR/permission" > "$RUNNER_TEMP/workorder-permission.json"'
+    """ || echo '{}' > "$RUNNER_TEMP/workorder-permission.json"\n""")
+SOLO_OPTION = '--solo "$RUNNER_TEMP/workorder-permission.json" '
+SOLO_LIMIT = ('Solo mode: your own workorder-allow labels count as owner acceptance when GitHub confirms you as the'
+              ' repository owner or an admin; the check prints them as owner acceptance, never as review, and'
+              ' every check still runs. Your labels are the only human step: an agent that acts with your GitHub'
+              ' credentials could add them, so give agents a token without permission to label pull requests.')
+
+
+OLD_REVIEW_COMMENT = ('# Test changes are refused unless a reviewer other than the author adds the label or approves'
+                      ' this head; --review warn is optional.')
+NEW_REVIEW_COMMENT = ('# Changes to existing tests are refused unless a reviewer other than the author adds the label'
+                      ' (approval is not enough); approving this head clears other findings; --review warn is optional.')
 
 def default_branch(root):
     """Choose the push trigger from local refs without fetching during setup."""
@@ -143,19 +160,137 @@ def dependency_group(path):
     return next((name for name in ('test', 'tests', 'dev') if name in groups), None)
 
 
+def _poetry_specifier(text):
+    """Poetry's version constraint as a pip specifier; '' (any version) for what pip cannot say."""
+    if '||' in text:
+        return ''
+    result = []
+    for part in (part.strip() for part in text.split(',')):
+        caret = re.fullmatch(r'([\^~])\s*(\d+(?:\.\d+)*)', part)
+        if part in {'', '*'}:
+            continue
+        if caret:
+            numbers = [int(number) for number in caret[2].split('.')]
+            if caret[1] == '^':  # the leftmost nonzero part may not change
+                index = next((i for i, number in enumerate(numbers) if number), len(numbers) - 1)
+            else:  # ~1.2.3 and ~1.2 allow patch changes, ~1 minor changes
+                index = min(1, len(numbers) - 1)
+            upper = numbers[:index + 1]
+            upper[-1] += 1
+            result += [f'>={caret[2]}', '<' + '.'.join(map(str, upper))]
+        elif re.fullmatch(r'(?:~=|==|!=|>=|<=|>|<)\s*[\w.*+!-]+', part):
+            result.append(part.replace(' ', ''))
+        elif re.fullmatch(r'=?\s*\d+(?:\.\d+)*(?:\.\*)?', part):
+            result.append('==' + part.lstrip('= '))
+        else:
+            return ''
+    return ','.join(result)
+
+
+def _poetry_requirement(name, value):
+    """One Poetry dependency as a pip requirement, or None for Python itself, paths, URLs and Git."""
+    if (not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', name)
+            or name.lower() == 'python'):
+        return None
+    extras = []
+    if isinstance(value, dict):
+        if any(key in value for key in ('git', 'path', 'url', 'file')):
+            return None
+        extras = [extra for extra in value.get('extras', []) if isinstance(extra, str)]
+        value = value.get('version', '*')
+    specifier = _poetry_specifier(value) if isinstance(value, str) else ''
+    return name + (f"[{','.join(extras)}]" if extras else '') + specifier
+
+
+_POETRY_DEV = r"""^\s*\[\s*tool\s*\.\s*poetry\s*\.\s*["']?dev-dependencies["']?\s*\]"""
+_POETRY_GROUP = r"""^\s*\[\s*tool\s*\.\s*poetry\s*\.\s*group\s*\.\s*["']?(test|tests|dev)["']?\s*\.\s*dependencies\s*\]"""
+_TOML_ENTRY = r"""^\s*["']?([A-Za-z0-9][A-Za-z0-9._-]*)["']?\s*=\s*(.*?)\s*(?:#.*)?$"""
+_TOML_STRING = r"""["']([^"']*)["']"""
+
+
+def _poetry_tables(text):
+    """Poetry's test and dev dependency tables by group name, read without tomllib (Python 3.10)."""
+    tables, current = {}, None
+    for line in text.splitlines():
+        if re.match(r'^\s*\[', line):
+            group = re.match(_POETRY_GROUP, line)
+            current = (tables.setdefault('dev', {}) if re.match(_POETRY_DEV, line)
+                       else tables.setdefault(group[1], {}) if group else None)
+            continue
+        entry = re.match(_TOML_ENTRY, line)
+        if current is None or not entry:
+            continue
+        value = entry[2]
+        if value.startswith('{'):
+            if re.search(r'\b(?:git|path|url|file)\s*=', value):
+                value = {'git': True}
+            else:
+                version = re.search(r'\bversion\s*=\s*' + _TOML_STRING, value)
+                extras = re.search(r'\bextras\s*=\s*\[([^\]]*)\]', value)
+                value = {'version': version[1] if version else '*',
+                         'extras': re.findall(_TOML_STRING, extras[1]) if extras else []}
+        else:
+            quoted = re.fullmatch(_TOML_STRING, value)
+            value = quoted[1] if quoted else '*'
+        current[entry[1]] = value
+    return tables
+
+
+def poetry_dependencies(path):
+    """Poetry's test or dev groups ([tool.poetry.group.NAME.dependencies], or the older
+    [tool.poetry.dev-dependencies] as dev) and their packages as pip requirements."""
+    if not path.is_file():
+        return [], []
+    text = path.read_text(encoding='utf-8')
+    try:
+        import tomllib
+    except ImportError:
+        tables = _poetry_tables(text)
+    else:
+        try:
+            poetry = tomllib.loads(text).get('tool', {}).get('poetry', {})
+        except ValueError as error:
+            raise s.Refused(f'pyproject.toml cannot be read: {error}') from None
+        poetry = poetry if isinstance(poetry, dict) else {}
+        found = poetry.get('group', {})
+        tables = {name: group['dependencies'] for name, group in (found.items() if isinstance(found, dict) else ())
+                  if isinstance(group, dict) and isinstance(group.get('dependencies'), dict)}
+        if isinstance(poetry.get('dev-dependencies'), dict):
+            tables['dev'] = {**poetry['dev-dependencies'], **tables.get('dev', {})}
+    groups = [name for name in ('test', 'tests', 'dev') if tables.get(name)]
+    requirements = []
+    for name in groups:
+        for package, value in tables[name].items():
+            requirement = _poetry_requirement(package, value)
+            if requirement and requirement not in requirements:
+                requirements.append(requirement)
+    return groups, requirements
+
+
 def project_install(root):
-    group = dependency_group(s.local_path(root, 'pyproject.toml'))
+    """The workflow's install command for project test dependencies, and where it came from."""
+    path = s.local_path(root, 'pyproject.toml')
+    group = dependency_group(path)
     if group:
-        return f"python -m pip install --upgrade 'pip>=25.1' && python -m pip install --group {group} ."
-    if has_test_extra(s.local_path(root, 'pyproject.toml')):
-        return "python -m pip install -e '.[test]'"
+        return (f"python -m pip install --upgrade 'pip>=25.1' && python -m pip install --group {group} .",
+                f'the {group} group under [dependency-groups] in pyproject.toml')
+    if has_test_extra(path):
+        return "python -m pip install -e '.[test]'", 'the test extra in pyproject.toml'
+    groups, requirements = poetry_dependencies(path)
+    if groups:
+        # pip installs the project's own dependencies through its build backend. Poetry's test
+        # and dev groups are not package metadata, so the workflow names them as pip requirements;
+        # it needs neither Poetry nor a poetry.lock, which may be stale.
+        return (' '.join(['python -m pip install -e .', *map(shlex.quote, requirements)]),
+                'the Poetry ' + ' and '.join(groups) + ' dependencies in pyproject.toml;'
+                ' after changing them, run workorder init --update-workflow')
     for name in ('requirements-dev.txt', 'requirements.txt'):
         if s.local_path(root, name).is_file():
-            return f'python -m pip install -r {name}'
+            return f'python -m pip install -r {name}', name
     from . import gate
     if any(gate.uses_pytest(record) for record in gate.records(root, errors={}).values()):
-        return 'python -m pip install pytest'
-    return None
+        return 'python -m pip install pytest', 'a task test that uses pytest'
+    return None, None
 
 
 def workorder_install():
@@ -217,10 +352,15 @@ def earlier_agent_block(text):
 
 @s.changing_repository()
 def initialize(root, check=False, force=False, claude=False, update_workflow=False, light=False, test_first=False,
-               project_test=None, no_project_test=False):
+               require_acceptance=False,
+               project_test=None, no_project_test=False, solo=False):
     """Report or install setup; rewrite an existing workflow only when explicitly requested."""
     from .python_imports import installed_src
     from . import project_tests
+    if solo and light:
+        raise s.Refused('--solo and --light do not combine: --light only warns, so it asks nobody to accept')
+    if solo and not update_workflow and s.local_path(root, '.github/workflows/workorder.yml').exists():
+        raise s.Refused('solo mode changes the existing workflow: run workorder init --update-workflow --solo')
     detected = None
     if project_test is None and not no_project_test and 'project_test' not in project_tests._settings(root):
         # Only a first setup turns it on: re-running init after an upgrade keeps existing choices.
@@ -305,7 +445,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
         missing = True
         print('.github/workflows/workorder.yml: missing')
     else:
-        dependencies = project_install(root)
+        dependencies, source = project_install(root)
         dependency_step = ('      - name: Install project test dependencies\n'
                            f'        run: {dependencies}\n') if dependencies else (
                                '      # Replace this step with your test dependency installation.\n'
@@ -316,24 +456,48 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             '@WORKORDER@', shlex.quote(workorder_install())).replace(
             '@DEFAULT_BRANCH@', json.dumps([default_branch(root)])).replace(
             '@REVIEW_OPTIONS@', ('--review warn' if light else '--require-task')
-            + (' --require-test-first' if test_first else '')).replace(
+            + (' --require-test-first' if test_first else '')
+            + (' --require-acceptance' if require_acceptance else '')).replace(
             '@REVIEW_COMMENT@', '# Trial setup: restore defaults with workorder init --update-workflow.' if light
-            else '# Test changes are refused unless a reviewer other than the author adds the label or approves this head; --review warn is optional.')
+            else "# Solo mode: the owner's own labels count as owner acceptance, never as review; an approval by someone else still counts." if solo
+            else NEW_REVIEW_COMMENT).replace(
+            '@AUTHOR_ENV@', SOLO_AUTHOR_ENV if solo else '').replace(
+            '@SOLO_LOOKUP@', SOLO_LOOKUP if solo else '').replace('@SOLO_OPTION@', SOLO_OPTION if solo else '')
         original = path.read_text(encoding='utf-8') if path.exists() else ''
         if update_workflow:
             print(''.join(difflib.unified_diff(original.splitlines(keepends=True),
                                               workflow.splitlines(keepends=True),
                                               fromfile=str(path.relative_to(root)),
                                               tofile=str(path.relative_to(root)))), end='')
+        # 1.0's review comment said approval clears test edits; the corrected comment changes no step.
+        comment_only = original != workflow and original.replace(OLD_REVIEW_COMMENT, NEW_REVIEW_COMMENT) == workflow
         if check:
-            missing |= original != workflow
-            print('.github/workflows/workorder.yml: ' + ('needs update' if original != workflow else 'up to date'))
+            missing |= original != workflow and not comment_only
+            print('.github/workflows/workorder.yml: ' + (
+                'up to date (only its review comment is older; --update-workflow corrects it)' if comment_only
+                else 'needs update' if original != workflow else 'up to date'))
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(workflow, encoding='utf-8', newline='\n')
             written.append('.github/workflows/workorder.yml')
             print('.github/workflows/workorder.yml: written')
-        print('CI dependencies: ' + (dependencies or 'no project test dependencies detected'))
+        print('CI dependencies: ' + (f'{dependencies} (from {source})' if dependencies
+                                     else 'no project test dependencies detected'))
+        # The record follows the workflow just written or previewed: solo mode only with --solo.
+        if project_tests.set_solo(root, solo, check=True):
+            if solo:
+                print('.workorder/config.json: solo mode already recorded')
+        elif check:
+            missing = True
+            print('.workorder/config.json: ' + ('solo mode not recorded' if solo
+                                                else 'solo mode recorded; init --update-workflow turns it off'))
+        else:
+            project_tests.set_solo(root, solo)
+            written.append(project_tests.CONFIG)
+            print('.workorder/config.json: ' + ('solo mode recorded' if solo
+                                                else 'solo mode turned off (init --update-workflow --solo keeps it)'))
+        if solo:
+            print(SOLO_LIMIT)
     if settings:
         path, updated, changed = settings
         if not changed:
@@ -354,8 +518,8 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             project_tests.configure(root, project_test)
             written.append(project_tests.CONFIG)
             print(f'.workorder/config.json: project test on: {project_test} (pytest found in {detected});'
-                  ' done and the pull-request check run your full suite once; if it takes minutes,'
-                  ' turn it off with workorder init --no-project-test')
+                  ' the pull-request check runs your full suite once (done runs it with --project-test);'
+                  ' if it takes minutes, turn it off with workorder init --no-project-test')
     elif project_test is not None and not project_matches:
         if check:
             missing = True
@@ -375,6 +539,7 @@ def initialize(root, check=False, force=False, claude=False, update_workflow=Fal
             written.append(project_tests.CONFIG)
             print('.workorder/config.json: project test turned off')
     if not check:
+        written = list(dict.fromkeys(written))
         print('Files written:' if written else 'No files written.')
         for name in written:
             print(f'  {name}')

@@ -22,6 +22,12 @@ class ReadCache(dict):
         self.configurations = {}
         self.contents = {}
         self.snapshots = {}
+        # Objects named by a full ID (alone or as ID:path) never change, so their reads are
+        # shared even when the repository's state cannot be observed (a large work tree).
+        self.objects = {}
+        self.object_batches = {}
+        self.object_bytes = 0
+        self.lock = threading.Lock()
 
     def fork(self):
         """Copy observations before a worker starts; its first read revalidates them."""
@@ -42,8 +48,11 @@ class ReadCache(dict):
     def checking(self, root, *, isolated=False):
         identity = (root, isolated)
         reusable = self.stack[-1][1] if self.stack and self.stack[-1][0] == identity else True
+        # Reads nested in one observation share a memo, also when the state cannot be observed.
+        memo = self.stack[-1][3] if self.stack else None
         if (not self.stack or self.stack[-1][0] != identity
                 or self.stack[-1][2] != self.generation):
+            memo = {}
             state = None if identity in self.disabled else repository_state(
                 Path(root), isolated=isolated, configurations=self.configurations,
                 contents=self.contents, snapshots=self.snapshots)
@@ -68,9 +77,9 @@ class ReadCache(dict):
             # starts the next one for enclosing scopes of the same repository.
             # Cached callers still compare their own starting generation before
             # saving a result, so they cannot retain a value spanning a write.
-            self.stack[:] = [(identity, reusable, self.generation) if frame[0] == identity else frame
+            self.stack[:] = [(identity, reusable, self.generation, memo) if frame[0] == identity else frame
                              for frame in self.stack]
-        self.stack.append((identity, reusable, self.generation))
+        self.stack.append((identity, reusable, self.generation, memo))
         try:
             yield reusable
         finally:
@@ -79,9 +88,10 @@ class ReadCache(dict):
     def close(self, root=None):
         """Reap all batches, or only those inside a checkout being removed."""
         directory = Path(root).resolve() if root is not None else None
-        for key in list(self.batches):
-            if directory is None or Path(key[0]).resolve().is_relative_to(directory):
-                self.batches.pop(key).close()
+        for batches in (self.batches, self.object_batches):
+            for key in list(batches):
+                if directory is None or Path(key[0]).resolve().is_relative_to(directory):
+                    batches.pop(key).close()
 
 
 def _configuration_path(value, root, env, *, origin=None):
@@ -492,8 +502,21 @@ def repository_state(root, *, isolated=False, configurations=None, contents=None
             # Reflogs, pseudorefs and in-progress merge/rebase state affect Git
             # reads too. Only Workorder's non-evidence caches are excluded.
             visit(directory, tree=True, metadata=True)
-        if (common / 'objects/info/alternates').exists():
-            return None
+        alternates = common / 'objects/info/alternates'
+        if alternates.exists():
+            # A comparison copy borrows its repository's objects (clone --shared). Observe
+            # the borrowed object folders like the copy's own; deeper chains are not read.
+            for line in alternates.read_text(encoding='utf-8').splitlines():
+                if not line.strip() or line.startswith('#'):
+                    continue
+                borrowed = Path(line.strip())
+                if not borrowed.is_absolute():
+                    borrowed = common / 'objects' / borrowed
+                borrowed = borrowed.resolve()
+                if not borrowed.is_dir() or (borrowed / 'info/alternates').exists():
+                    return None
+                digest.update(b'alternate\0' + os.fsencode(borrowed))
+                visit(borrowed, tree=True, metadata=True)
         if env.get('GIT_INDEX_FILE'):
             visit(root / env['GIT_INDEX_FILE'], metadata=True)
         configuration = _git_configuration(root, gitdir, common, env, environment, configurations, contents, observe)

@@ -72,7 +72,7 @@ def test_done_success_only_suggests_push_with_origin(local_repo, tmp_path, remot
         git(local_repo, 'remote', 'add', remote, str(tmp_path / 'unused-remote'))
     output = ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     success = next(line for line in output.splitlines() if line.startswith('TASK-1 DONE:'))
-    assert success == 'TASK-1 DONE: its declared test passed on this code'
+    assert success == 'TASK-1 DONE: evidence verified'
     assert output.splitlines()[-1] == ('commit tasks/ and .workorder/'
                                       + (' and push' if remote == 'origin' else ''))
 
@@ -117,7 +117,9 @@ def test_agent_block_updates_origin_explicitly():
     assert '`git pull`' not in bootstrap.AGENT_BLOCK
     assert bootstrap.AGENT_BLOCK.strip() in (PACKAGE / 'README.md').read_text()
     readme = ' '.join((PACKAGE / 'README.md').read_text().split())
-    assert len((PACKAGE / 'README.md').read_text().splitlines()) <= 130
+    # The Mermaid flow chart is a picture, not lines to read.
+    chartless = re.sub(r'^```mermaid\n.*?^```\n', '', (PACKAGE / 'README.md').read_text(), flags=re.M | re.S)
+    assert len(chartless.splitlines()) <= 130
     assert "If the task's own code or test files changed, run `workorder renew --task <id>`." in readme
 
 
@@ -175,7 +177,7 @@ def test_check_unclaimed_test_evidence_never_says_closed(local_repo, status):
     evidence(local_repo)
     checked = ok(local_repo, 'check', 'TASK-1')
     shown = ok(local_repo, 'show', '--task', 'TASK-1')
-    headline = f'TASK-1 {status} (not claimed finished); its test evidence is in place'
+    headline = f'TASK-1 {status} (not claimed finished); its recorded test run passed; done has not shown the test proves the change'
     assert checked.startswith(headline) and shown.startswith(headline)
     assert 'CLOSED' not in checked and 'CLOSED' not in shown
 
@@ -226,9 +228,9 @@ def test_skipped_only_rerun_does_not_also_say_passed(local_repo, all_tests):
 
 def test_release_versions_and_reference_pin():
     from workorder import __version__
-    assert __version__ == '0.18.0'
-    assert 'version = "0.18.0"' in (PACKAGE / 'pyproject.toml').read_text()
-    assert 'workorder==0.18.0' in (PACKAGE / 'docs/reference.md').read_text()
+    assert __version__ == '1.0.0'
+    assert 'version = "1.0.0"' in (PACKAGE / 'pyproject.toml').read_text()
+    assert 'workorder==1.0.0' in (PACKAGE / 'docs/reference.md').read_text()
 
 
 def test_init_workflow_uses_running_version(local_repo, monkeypatch):

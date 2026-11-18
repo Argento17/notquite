@@ -6,6 +6,7 @@ from .console import print
 
 import json
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 
@@ -65,6 +66,41 @@ def remove(root, *, check=False):
         return 'project_test' not in settings
     del settings['project_test']
     s.local_path(root, CONFIG).write_text(json.dumps(settings, indent=2) + '\n', encoding='utf-8')
+    s.invalidate_reads()
+    return True
+
+
+def solo(root, rev=None):
+    """Whether .workorder/config.json records solo mode (workorder init --solo), here or at rev.
+
+    A missing or unreadable file at rev records nothing.
+    """
+    if rev is None:
+        value = _settings(root).get('solo', False)
+    else:
+        shown = s.git(root, 'show', f'{rev}:{CONFIG}', required=False)
+        try:
+            settings = json.loads(shown.stdout) if shown.returncode == 0 else {}
+        except ValueError:
+            settings = {}
+        value = settings.get('solo', False) if isinstance(settings, dict) else False
+    if not isinstance(value, bool):
+        raise s.Refused(f'{CONFIG}: solo must be true or false')
+    return value
+
+
+def set_solo(root, on, *, check=False):
+    """Record or clear solo mode, preserving other settings; a check reports whether it already matches."""
+    settings = _settings(root)
+    if check or settings.get('solo', False) is on:
+        return settings.get('solo', False) is on
+    if on:
+        settings['solo'] = True
+    else:
+        settings.pop('solo', None)
+    path = s.local_path(root, CONFIG)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2) + '\n', encoding='utf-8')
     s.invalidate_reads()
     return True
 
@@ -147,13 +183,20 @@ def _report(path):
     return value
 
 
-def _failure_output(report, output):
+def _failure_output(report, output, quiet=False):
     from . import console
     sections = report.get('failures') or []
+    if quiet and not console.verbose():
+        full = [report.get('short_summary'), *sections, report.get('summary')]
+        text = '\n'.join(filter(None, full))
+        if text:
+            print('', end='', full=text + '\n', dedupe=False)  # kept in the saved full output only
+        return
     if sections and not console.verbose():
         # The FAILED lines and the start of the first failure, once per run.
         full = [report.get('short_summary'), *sections, report.get('summary')]
-        print(console.short_failures(report.get('short_summary') or '', sections, report.get('summary') or ''),
+        print(console.capped(console.short_failures(report.get('short_summary') or '', sections,
+                                                    report.get('summary') or '')),
               end='', full='\n'.join(filter(None, full)) + '\n', dedupe=False)
         return
     if report.get('short_summary'):
@@ -171,7 +214,9 @@ def _failure_output(report, output):
         if len(lines) > 60:
             print('[project-test output truncated to last 60 lines]')
         if lines:
-            print('\n'.join(lines[-60:]))
+            text = '\n'.join(lines[-60:])
+            shown = console.capped(text)
+            print(shown, full=None if shown == text else text + '\n')
     for section in sections:
         lines = section.splitlines()
         print('\n'.join(lines[:60]))
@@ -190,12 +235,67 @@ def _reported_command(root, words, report):
     return [*python, '-c', source, *_options(pytest_arguments(words), ['-rfE', '--color=no'])]
 
 
-def _selected_command(words, nodes, report):
+NO_CONFIG = '__workorder_no_config.ini'
+
+
+def _given(words, names):
+    arguments = pytest_arguments(words) or []
+    return any(word == name or word.startswith(name + '=') or (name == '-c' and word.startswith('-c'))
+               for word in arguments for name in names)
+
+
+def _layout(root, words, report, revision):
+    """Pin the current run's rootdir and configuration file for the base rerun.
+
+    Node ids are relative to the rootdir pytest chose. Naming those nodes on the
+    base changes where pytest looks for configuration (a tests/pytest.ini, say),
+    and with it the rootdir and the ids. Returns the rootdir relative to the
+    repository, the options that pin both, and any overlay; None when the run
+    did not report them or chose a rootdir outside the repository. A configuration
+    file the base revision lacks (added in this change) means none on the base.
+    """
+    layout = report.get('layout')
+    if not isinstance(layout, dict):
+        return None
+
+    def inside(value):
+        try:
+            return Path(value).resolve().relative_to(Path(root).resolve()).as_posix()
+        except (OSError, ValueError, RuntimeError):
+            return None
+
+    rootdir = inside(layout['rootdir']) if isinstance(layout.get('rootdir'), str) else None
+    if rootdir is None:
+        return None
+    options, overlays = [], {}
+    if not _given(words, ('--rootdir',)):
+        options.append('--rootdir=' + rootdir)
+    if not _given(words, ('-c', '--config-file')):
+        inifile = layout.get('inifile')
+        config = (inside(inifile) or inifile) if isinstance(inifile, str) else None
+        if config is None or not (Path(config).is_absolute() or config in gate.repository_files(root, revision)):
+            # No configuration file: an empty one stops pytest finding one near the nodes.
+            config = posixpath.normpath(posixpath.join(rootdir, NO_CONFIG))
+            overlays[config] = (b'# Workorder: the project test ran without a pytest configuration file\n', None)
+        options += ['-c', config]
+    return rootdir, options, overlays
+
+
+def _node_argument(node, rootdir):
+    """A node id names its file relative to the rootdir; a command argument, relative to the working folder."""
+    if rootdir in {None, '.'}:
+        return node
+    path, separator, rest = node.partition('::')
+    return posixpath.normpath(posixpath.join(rootdir, path)) + separator + rest
+
+
+def _selected_command(words, nodes, report, layout=None):
     record = {'test': s.join_command(words)}
     positions = set(gate.pytest_collection_arguments(record))
     selected = [word for index, word in enumerate(words) if index not in positions]
-    selected = pytest_selection.command(selected + list(nodes), nodes)
-    selected = _options(selected, ['-rfE', '--color=no'])
+    rootdir, pins, overlays = layout or (None, [], {})
+    selected = pytest_selection.command(selected + [_node_argument(node, rootdir) for node in nodes], nodes)
+    selected = _options(selected, [*pins, '-rfE', '--color=no'])
     # Configured addopts can contain more collection paths. Always deselect
     # everything outside the failed nodes, including when no node is present.
     source = (_report_source(report) + '\nimport pytest\n'
@@ -208,7 +308,16 @@ def _selected_command(words, nodes, report):
               '    items[:] = [item for item in items if item.nodeid in WANTED]\n'
               '    if deselected:\n'
               '        config.hook.pytest_deselected(items=deselected)\n')
-    return selected, {pytest_selection.MODULE + '.py': (source.encode('utf-8'), None)}
+    return selected, {**overlays, pytest_selection.MODULE + '.py': (source.encode('utf-8'), None)}
+
+
+DEFERRED = ('the project test runs in the pull-request check (check --run-tests), not in done; '
+            'run done --project-test to run it now')
+
+
+def deferred_line(root):
+    """done's line when it leaves the project test to the pull-request check; an unreadable setting still refuses."""
+    return UNSET if command(root) is None else DEFERRED
 
 
 def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeout=None):
@@ -217,6 +326,17 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
     Returned failures are ordinary strings: warning mode cannot turn an observed
     current failure into a pass. Only its explicit tests label can.
     """
+    from contextlib import nullcontext
+    from .timing import phase
+    try:
+        configured = command(root) is not None
+    except s.Refused:
+        configured = True  # _run reports the unreadable setting
+    with phase('project test') if configured else nullcontext():
+        return _run(root, base=base, label=label, notes=notes, counts=counts, allow=allow, timeout=timeout)
+
+
+def _run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeout=None):
     notes = [] if notes is None else notes
     try:
         words = command(root)
@@ -243,30 +363,41 @@ def run(root, *, base=None, label=None, notes=None, counts=None, allow=(), timeo
                 summary = f" ({report['summary']})" if report.get('summary') else ''
                 notes.append('the project test passed on this code' + summary)
             return []
-        if pytest:
-            _failure_output(report, output)
         failed = sorted(node for node, outcome in report.get('outcomes', {}).items()
                         if outcome == 'FAILED') if pytest and code == 1 else []
+        current_failures = (report, output) if pytest else None
         if not failed:
+            _failure_output(*current_failures) if current_failures else None
             return finding(f'the project test fails on this code (exit {gate.test_exit_meaning(code, words)}); '
                            'could not identify failing tests to compare with the base')
         base = base or gate.local_test_base(root)
         if not base:
+            _failure_output(*current_failures)
             return finding('the project test fails on this code: ' + ', '.join(failed)
                            + '; could not compare: no target is available locally')
         display = (label or base).removeprefix('refs/remotes/').removeprefix('refs/heads/')
         base_report = Path(temporary) / 'base.json'
-        selected, overlays = _selected_command(words, failed, base_report)
         try:
             revision = s.git(root, 'rev-parse', '--verify', f'{base}^{{commit}}').stdout.strip()
+            selected, overlays = _selected_command(words, failed, base_report, _layout(root, words, report, revision))
             before, before_output = gate.run_ref_test(
                 root, Path(temporary) / 'base', revision, selected, timeout, counts, overlays)
         except (s.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
+            _failure_output(*current_failures)
             return finding(f'the project test fails on this code; could not compare with {display}: {error}')
         report = _report(base_report)
         if report.get('summary'):
-            notes.append(f"the project test on {display} ({report['summary']})")
+            # Only the tests that failed here were rerun on the base, not the whole suite.
+            rerun = (f"{len(failed)} project test{'s' if len(failed) != 1 else ''} that "
+                     f"fail{'s' if len(failed) == 1 else ''} on this code")
+            notes.append(f"the rerun on {display} of the {rerun} ({report['summary']})")
         outcomes = report.get('outcomes', {}) if before in {0, 1} else {}
+        if any(outcomes.get(node) != 'FAILED' for node in failed):
+            _failure_output(*current_failures)
+        else:
+            # Each failure already fails on the base, so it is only a Note: no failure body here;
+            # the saved full output keeps it.
+            _failure_output(*current_failures, quiet=True)
 
     problems = []
     for node in failed:

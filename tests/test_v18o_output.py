@@ -42,7 +42,7 @@ def many_failures_project(root, count=12, *, own_failure=False, ids=None):
 
 
 def run_action(root, action, *extra):
-    flags = ('done', '--task', 'TASK-1') if action == 'done' else (
+    flags = ('done', '--task', 'TASK-1', '--project-test') if action == 'done' else (
         'check', '--base', 'origin/main', '--run-tests')
     return cli(root, *flags, *extra)
 

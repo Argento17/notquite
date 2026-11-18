@@ -47,7 +47,7 @@ def test_done_preserves_existing_status_quotes(local_repo, quote):
     before = path.read_bytes()
     output = ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     assert path.read_bytes() == before.replace(f'status: {quote}IN_PROGRESS{quote}'.encode(), f'status: {quote}DONE{quote}'.encode())
-    assert 'its declared test passed on this code' in output
+    assert '  Evidence: verified: passes now' in output.splitlines()
     assert 'claim supported' not in output
 
 
@@ -57,7 +57,7 @@ def test_done_reports_merge_debt_and_missing_clone_hook(local_repo):
     commit_all(local_repo)
     unmerged_feature(local_repo)
     output = ok(local_repo, 'done', '--refactor', '--task', 'TASK-1')
-    assert ('TASK-1 DONE: its declared test passed on this code; still owes: merge of the tested code') in output
+    assert ('TASK-1 DONE: evidence verified; still owes: merge of the tested code') in output
     assert 'Warning: pre-commit hook is missing in this clone; run workorder init' in output
 
 
@@ -87,7 +87,7 @@ def test_check_and_show_use_claimed_and_evidence(local_repo):
     ok(local_repo, 'done', '--no-code-change', '--task', 'TASK-1')
     for args in [('check', 'TASK-1'), ('show', '--task', 'TASK-1')]:
         output = ok(local_repo, *args)
-        assert 'Claimed:  DONE' in output and 'Evidence: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)' in output
+        assert 'Claimed:  DONE' in output and 'Evidence: verified: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)' in output
         assert 'computed CLOSED' not in output and 'Computed:' not in output
     assert 'Result: the declared test passed on this code' in ok(local_repo, 'check', 'TASK-1')
 

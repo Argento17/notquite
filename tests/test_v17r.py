@@ -231,7 +231,7 @@ def test_outside_scope_needs_scope_label(local_repo, require_task, other_receipt
     result = check(root, *flags, '--approving-review', '--review', 'warn')
     assert result.returncode == 0, result.stdout + result.stderr
     assert check(root, *flags, '--allow', 'TASK-4').returncode == 1
-    result = check(root, *flags, '--allow', 'scope:TASK-4')
+    result = check(root, *flags, '--allow', 'scope:TASK-4' + (',TASK-4' if require_task else ''))  # round 22: the hand receipts of an unfinished task also need its label
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -247,7 +247,7 @@ def test_multifile_scope_union_covers_implementation(local_repo):
     for tid in ('TASK-1', 'TASK-4'):
         ok(root, 'receipt', 'implemented', '--task', tid)
     commit_all(root)
-    result = cli(root, 'check', '--base', 'origin/main', '--require-task')
+    result = cli(root, 'check', '--base', 'origin/main', '--require-task', '--allow', 'TASK-1,TASK-4')  # round 22: the hand receipts of an unfinished task also need its label
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -341,7 +341,7 @@ def test_unscoped_work_receipt_cannot_disable_another_scope(local_repo):
     result = check(root, '--require-task')
     assert result.returncode == 1
     assert 'outside.py is outside the code paths of TASK-1' in result.stdout
-    assert check(root, '--require-task', '--allow', 'scope:TASK-1').returncode == 0
+    assert check(root, '--require-task', '--allow', 'scope:TASK-1,TASK-1,TASK-4').returncode == 0  # round 22: the hand receipts of an unfinished task also need its label
 
 
 def test_package_testing_module_does_not_require_a_test_file_mapping(local_repo):

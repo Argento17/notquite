@@ -209,7 +209,8 @@ def test_recorded_evidence_is_not_presented_as_a_rerun(local_repo, action, ships
     store.set_task_field(root, 'TASK-2', 'status', status)
     args = ['show', '--task', 'TASK-2'] if action == 'show' else ['check', 'TASK-2'] if action == 'check-task' else ['check']
     output = ok(root, *args)
-    assert 'Evidence: recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)' in output
+    # show and check ID name the state (Evidence: verified: ...); the plain check keeps its note.
+    assert ('Evidence: ' if action == 'check' else 'Evidence: verified: ') + 'recorded receipts support the claim (not re-run here; `check --run-tests` re-runs it)' in output
 
 
 def test_comparison_summary_counts_tasks_not_both_code_runs(local_repo):
@@ -268,7 +269,7 @@ def test_fresh_runs_keep_fresh_evidence_wording(local_repo, action):
     commit_all(root)
     if action == 'done':
         output = ok(root, 'done', '--task', 'TASK-2')
-        assert 'its declared test passed on this code' in output
+        assert 'Evidence: verified: passes now' in output
     else:
         claim(root)
         output = ok(root, 'check', '--run-tests')

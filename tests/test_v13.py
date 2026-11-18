@@ -365,5 +365,6 @@ def test_done_reviews_changed_shared_expected_data(local_repo):
     assert 'workorder-allow:tests' in result.stdout
     output = ok(root, 'done', '--task', 'TASK-1', '--needs-review')
     assert 'pending review: the pull request needs workorder-allow:TASK-1' in output
-    assert 'workorder-allow:tests' in output
+    # 1.0.1: the Pending line lists the fact; the task label, not workorder-allow:tests, clears the review.
+    assert not [line for line in output.splitlines() if 'Pending:' in line and 'workorder-allow:tests' in line]
     ok(root, 'check', '--base', 'origin/main', '--run-tests', '--allow', 'tests,TASK-1')

@@ -13,7 +13,7 @@ from test_v05 import commit_all
 
 
 PASS = f'{PYTHON} -c pass'
-NOTICE = 'Acceptance lists are not checked; 1 supported claim rests on its declared test only.'
+NOTICE = 'Evidence: verified for 1 supported claim (its declared test); Acceptance: 1 awaiting a person'
 
 
 def fill_sections(path):
@@ -69,7 +69,7 @@ def test_init_check_is_read_only_and_install_is_idempotent(local_repo):
     pin = shlex.quote(bootstrap.workorder_install())
     generated = snapshot[3].decode()
     assert pin in generated
-    assert generated.strip().replace(pin, 'workorder==0.18.0') in reference.replace(
+    assert generated.strip().replace(pin, 'workorder==1.0.0') in reference.replace(
         example_dependencies, placeholder)
 
 
@@ -108,7 +108,7 @@ def test_done_records_only_changed_implementation_and_note(local_repo):
     output = ok(root, 'done', '--no-code-change', '--task', 'TASK-1', '--note', 'Ready for review')
     assert 'Acceptance is not checked by Workorder: confirm each item is met.' in output
     assert '- Adds correctly.' in output
-    success = 'TASK-1 DONE: its declared test passed on this code'
+    success = 'TASK-1 DONE: evidence verified'
     assert success in output and output.index('Acceptance') < output.index(success)
     assert store.record(root, 'TASK-1')['status'] == 'DONE'
     assert ': Ready for review' in path.read_text()
@@ -245,7 +245,11 @@ def test_require_task_records_code_changes(local_repo):
     assert refused.returncode == 1 and 'implemented or test receipt' in refused.stdout
     git(root, 'restore', 'tasks/TASK-1.md')
     store.receipt(root, 'TASK-1', 'implemented')
-    ok(root, 'check', '--base', base, '--require-task')
+    # A hand receipt records the code, but an unfinished task lands it only with a review (round 22).
+    unfinished = cli(root, 'check', '--base', base, '--require-task')
+    assert 'no task records it' not in unfinished.stdout
+    assert "TASK-1's code lands unfinished without done's evidence" in unfinished.stdout
+    ok(root, 'check', '--base', base, '--require-task', '--allow', 'TASK-1')
 
 
 @pytest.mark.parametrize('mode', ['plain', 'single', 'named', 'staged', 'base'])
@@ -324,7 +328,7 @@ def test_show_unclaimed_headline(local_repo, status):
     task(root, status=status, ships='none', test=PASS)
     evidence(root)
     output = ok(root, 'show', '--task', 'TASK-1')
-    assert output.splitlines()[0] == f'TASK-1 {status} (not claimed finished); its test evidence is in place'
+    assert output.splitlines()[0] == f'TASK-1 {status} (not claimed finished); its recorded test run passed; done has not shown the test proves the change'
     assert 'Evidence: CLOSED' not in output
 
 
@@ -509,13 +513,14 @@ def test_acceptance_summary_counts_only_supported_contractless_claims(local_repo
     evidence(root, 'TASK-4')
     result = cli(root, 'check')
     assert result.returncode == 1
-    assert 'Acceptance lists are not checked; 2 supported claims rest on their declared tests only.' in result.stdout
+    assert ('Evidence: verified for 2 supported claims (their declared tests); Acceptance: 2 awaiting a person'
+            in result.stdout)
 
 
 def test_docs_state_review_rights_and_opt_in_policies():
     text = (PACKAGE / 'docs/reference.md').read_text()
     for phrase in ('triage rights', 'CODEOWNERS', 'required', '--strict-tests', '--all-tests', '--require-task',
-                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==0.18.0'):
+                   'WORKORDER_AGENT', 'temporary copy', 'pipx install workorder', 'workorder==1.0.0'):
         assert phrase in text
     readme = (PACKAGE / 'README.md').read_text()
     for target in ('docs/reference.md', 'docs/guarantees.md', 'docs/shortcuts.md'):

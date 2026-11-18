@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.0.0 (18 Nov 2026)
+
+- **Continuity first.** The README and a new "How it works" page explain the product with flow charts: a
+  session ends mid-task, the next one recovers it with `workorder show` in the same structure every time,
+  and Workorder refuses a DONE the task's test does not prove.
+- **Evidence and acceptance are separate.** Every task shows `Evidence:` (what DONE means: the test proves
+  the change) and `Acceptance:` (a person agrees it is the right result). `workorder accept` records a
+  person's acceptance; an approving review counts as acceptance; `check --require-acceptance` (or
+  `init --require-acceptance`) refuses DONE tasks nobody accepted. Agents cannot accept.
+- **Solo mode.** `workorder init --solo`: when GitHub confirms the pull request's author as the
+  repository owner or an admin, their own `workorder-allow` labels count as owner acceptance, printed as
+  such and never as independent review. Every check still runs.
+- **Faster on large projects.** `done` runs only the task's own test, its three runs at the same time,
+  and reuses an unchanged base result; the whole suite runs once, in the pull-request check
+  (`done --project-test` runs it on request). Large repositories share reads they used to repeat, and the
+  pre-commit hook returns at once for documentation-only commits. On rich: `done` 12.6 s to about 3.5 s;
+  on pydantic: 15.5 s to 6.2 s, and 1.9 s when the base is unchanged. `done` and the check print a
+  `Time:` line.
+- **Standard editable installs work** (hatchling, setuptools, flit, poetry-core, pdm), in flat and src
+  layouts: comparison copies import their own code. Checked on pydantic, rich, requests, attrs and click.
+- **One branch, one pull request** is the normal path; the setup pull request can add the Workorder
+  workflow without a label. A task written and finished in one pull request needs an approving review.
+- **Tighter.** Code recorded only by an unfinished task's hand-written receipts needs `done`'s evidence
+  or a review. A refused `done` names every reason; a successful one states its proof; a failing check
+  ends with `check: NOT OK`.
+- **Project tests** compare with the base under the same pytest root and configuration (subfolder ini
+  files, `--rootdir`, `-c`); Poetry test groups are installed in the generated workflow.
+- A language support table: any test command counts by exit code; the deeper checks are Python-only.
+
 ## 0.18.0 (17 Nov 2026)
 
 - The README has a Speed section: `done` runs the task's test three times, and the project test (on by default

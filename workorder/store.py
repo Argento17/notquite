@@ -57,7 +57,9 @@ def print_once(message):
 
 
 def print_test_output(output, errors='', failed=False, label=None):
-    # The same output can be used for evidence, current, REF and all-task checks.
+    if not (output or '').strip() and not (errors or '').strip():
+        return  # a silent command: no empty "Failure:" block before its finding
+    # The same output can be used for evidence, current, base and all-task checks.
     key = ('test-output', failed, re.sub(r' in \d+(?:\.\d+)?s', ' in <time>s', output + errors))
     seen = _TEST_OUTPUTS.get()
     if seen is not None:
@@ -84,6 +86,19 @@ def test_reuse(enabled=True):
         yield
     finally:
         _REUSE_TESTS.reset(token)
+
+
+_REUSE_BASE = ContextVar("workorder_reuse_base", default=False)
+
+
+@contextmanager
+def base_reuse(enabled=True):
+    """Reuse a stored base-code result: the base does not change while someone works."""
+    token = _REUSE_BASE.set(enabled)
+    try:
+        yield
+    finally:
+        _REUSE_BASE.reset(token)
 
 
 _READS = ContextVar("workorder_reads", default=None)
@@ -171,7 +186,23 @@ def read_scope(root):
             yield
 
 
-def cached_read(function, *, git_query=False, diff_query=False, refresh_after=False):
+def _listing_runs_no_hook(cache, root):
+    """A work-tree diff can refresh the index, which runs core.fsmonitor or a post-index-change hook."""
+    key = ('no-index-hook', root, tuple(sorted(os.environ.items())))
+    found = cache.objects.get(key)
+    if found is None:
+        hook = _git_execute(root, 'rev-parse', '--git-path', 'hooks/post-index-change', required=False)
+        monitor = _git_execute(root, 'config', '--get', 'core.fsmonitor', required=False)
+        found = (not hook.returncode and bool(hook.stdout.strip())
+                 and not (Path(root) / hook.stdout.strip()).exists()
+                 and (monitor.returncode == 1 or monitor.stdout.strip().lower() in {'', 'false', 'no', 'off', '0'}))
+        cache.objects[key] = found
+    return found
+
+
+def cached_read(function, *, git_query=False, diff_query=False, refresh_after=False, scoped=False):
+    """scoped: when the repository state cannot be observed (a large work tree), reads nested in one
+    outer read still share the result, as they do when the state is observed once for that read."""
     @wraps(function)
     def read(*args, **kwargs):
         cache = _READS.get()
@@ -179,7 +210,18 @@ def cached_read(function, *, git_query=False, diff_query=False, refresh_after=Fa
             return function(*args, **kwargs)
         with cache.checking(args[0], isolated=kwargs.get('isolated', False)) as reusable:
             if not reusable:
-                return function(*args, **kwargs)
+                memo = cache.stack[-1][3]
+                if not scoped or kwargs.get('isolated') or not _listing_runs_no_hook(cache, args[0]):
+                    return function(*args, **kwargs)
+                key = (function, tuple(_read_key(arg) for arg in args),
+                       tuple((key, _read_key(value)) for key, value in sorted(kwargs.items())))
+                if key not in memo:
+                    generation = cache.generation
+                    result = function(*args, **kwargs)
+                    if generation != cache.generation:
+                        return result
+                    memo[key] = deepcopy(result)
+                return deepcopy(memo[key])
             state = cache.states[(args[0], kwargs.get('isolated', False))]
             if diff_query and args[1] in {'diff', 'status'} and (
                     state[3].is_file() or os.name == 'nt' and state[3].with_suffix('.exe').is_file()):
@@ -218,7 +260,9 @@ def cached_read(function, *, git_query=False, diff_query=False, refresh_after=Fa
 
 
 ID = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*\Z")
-KINDS = {"implemented", "test", "merged", "deployed", "live"}
+KINDS = {"implemented", "test", "merged", "deployed", "live", "accepted"}
+# accepted is written only by workorder accept: a person confirming the Acceptance items.
+EVIDENCE_KINDS = KINDS - {"accepted"}
 NAMESPACE = "refs/tags/workorder/"
 
 
@@ -274,6 +318,18 @@ def _git_read(root, *args, data=None, isolated=False):
         if raw is not None:
             return subprocess.CompletedProcess(['git', *args], 0,
                 raw.decode('utf-8', 'surrogateescape').replace('\r\n', '\n').replace('\r', '\n'), '')
+    cache = _READS.get()
+    if not isolated and data is None and _unobserved(cache, root):
+        found = _query_key(cache, root, args)
+        if found is not None:
+            key, location = found
+            saved = cache.objects.get(key)
+            if saved is not None:
+                return saved
+            result = _git_execute(root, *args, data=data, required=False, isolated=isolated)
+            if result.returncode == 0 and (location is None or _index_stamp(location) == key[-1]):
+                cache.objects[key] = result
+            return result
     return _git_execute(root, *args, data=data, required=False, isolated=isolated)
 
 
@@ -652,8 +708,18 @@ EXTENDED_BODY = """
 """
 
 
-# An Acceptance item may end with "(test: path::name)", a pytest node id that done checks.
-ACCEPTANCE_TEST = re.compile(r'\(test:\s*([^()\s]*)\s*\)\s*$')
+# An Acceptance item may end with "(test: path::name)", a pytest node id that done checks;
+# a full stop or other closing punctuation after it still ties the item.
+ACCEPTANCE_TEST = re.compile(r'\(test:\s*([^()\s]*)\s*\)[\s.,;:!?]*$')
+ACCEPTANCE_TIE_MARK = re.compile(r'\(\s*test\s*:', re.I)
+
+
+def acceptance_tie_problem(item):
+    """An item that mentions (test: but is not read as a tie: say so rather than ignore it."""
+    if ACCEPTANCE_TEST.search(item) or not ACCEPTANCE_TIE_MARK.search(item):
+        return None
+    return ("its (test: ...) is not read as a tie to a test; end the item with exactly one "
+            "(test: path::name), such as (test: tests/test_utils.py::test_trailing_slash)")
 
 
 def acceptance_node_problem(node):
@@ -693,6 +759,8 @@ def acceptance_lines(items):
         match = ACCEPTANCE_TEST.search(item)
         if match and acceptance_node_problem(match[1]):
             raise Refused(acceptance_node_problem(match[1]))
+        if acceptance_tie_problem(item):
+            raise Refused(f"acceptance item '{item}': {acceptance_tie_problem(item)}")
         lines.append(item if item.startswith(('- ', '* ')) else '- ' + item)
     return lines
 
@@ -1125,8 +1193,147 @@ def blob_bytes(root, spec):
     return item[2] if item is not None and item[1] == b'blob' else None
 
 
+# A full object ID, alone or with a path inside that commit or tree, always names the same object.
+IMMUTABLE_SPEC = re.compile(r'(?:[0-9a-f]{40}|[0-9a-f]{64})(?::[^\n\r]*)?\Z')
+OBJECT_CACHE_BYTES = 64 * 1024 * 1024
+
+
+def _immutable_object(cache, root, spec):
+    key = (root, tuple(sorted(os.environ.items())))
+    found = cache.objects.get((key, spec))
+    if found is not None:
+        return found
+    with cache.lock:
+        batch = cache.object_batches.get(key)
+        if batch is None:
+            batch = cache.object_batches[key] = Batch(root)
+    try:
+        item = batch.read(spec)
+    except (ValueError, OSError) as error:
+        with cache.lock:
+            if cache.object_batches.get(key) is batch:
+                cache.object_batches.pop(key).close()
+        raise Refused(str(error)) from error
+    # A missing object can arrive later (a fetch); only found objects are kept.
+    if item is not None and cache.object_bytes + len(item[2]) <= OBJECT_CACHE_BYTES:
+        cache.objects[(key, spec)] = item
+        cache.object_bytes += len(item[2])
+    return item
+
+
+def _index_stamp(path):
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _index_location(cache, root):
+    key = ('index', root, tuple(sorted(os.environ.items())))
+    location = cache.objects.get(key)
+    if location is None:
+        found = _git_execute(root, 'rev-parse', '--git-path', 'index', required=False)
+        if found.returncode or not found.stdout.strip():
+            return key, None
+        location = cache.objects[key] = Path(root) / found.stdout.strip()
+    return key, location
+
+
+_OBJECT_ID = re.compile(r'[0-9a-f]{40}|[0-9a-f]{64}')
+_QUERY_OPTIONS = {'ls-tree': {'-r', '-z', '-t', '--name-only'},
+                  'diff': {'--name-only', '-z', '--no-renames', '--cached'},
+                  'ls-files': {'-z', '--stage', '--cached'}}
+
+
+def _query_key(cache, root, args):
+    """A key for a listing whose answer is fixed by object IDs (and the index file, when it reads it)."""
+    if not args or args[0] not in _QUERY_OPTIONS:
+        return None
+    split = args.index('--') if '--' in args else len(args)
+    words = args[1:split]
+    options = {word for word in words if word.startswith('-')}
+    revisions = [word for word in words if not word.startswith('-')]
+    if not options <= _QUERY_OPTIONS[args[0]] or not all(_OBJECT_ID.fullmatch(word) for word in revisions):
+        return None
+    if args[0] == 'ls-tree':
+        return ('query', root, tuple(sorted(os.environ.items())), args), None
+    if args[0] == 'diff' and ('--cached' not in options or len(revisions) != 1):
+        return None
+    if args[0] == 'ls-files' and revisions:
+        return None
+    _, location = _index_location(cache, root)
+    if location is None:
+        return None
+    stamp = _index_stamp(location)
+    if stamp is None or _split_index(location):
+        return None
+    return ('query', root, tuple(sorted(os.environ.items())), args, stamp), location
+
+
+def _split_index(location):
+    """A split index also reads a shared index file, which its own stamp does not describe."""
+    try:
+        return any(name.startswith('sharedindex.') for name in os.listdir(Path(location).parent))
+    except OSError:
+        return True
+
+
+def _staged_object_id(cache, root, relative):
+    """The stage-0 index entry of a path, from a listing kept while the index file is unchanged."""
+    key, location = _index_location(cache, root)
+    if location is None:
+        return None
+    stamp = _index_stamp(location)
+    listing = cache.objects.get((key, stamp))
+    if stamp is None or _split_index(location):
+        return None
+    if listing is None:
+        result = subprocess.run(['git', 'ls-files', '--stage', '-z'], cwd=root, capture_output=True, timeout=30)
+        if result.returncode or _index_stamp(location) != stamp:
+            return None
+        listing = {}
+        for line in result.stdout.split(b'\0'):
+            fields, _, name = line.partition(b'\t')
+            parts = fields.split()
+            if len(parts) == 3 and parts[2] == b'0' and parts[0] in (b'100644', b'100755', b'120000'):
+                listing[name.decode('utf-8', 'surrogateescape')] = parts[1].decode('ascii')
+        with cache.lock:
+            for old in [item for item in cache.objects if isinstance(item, tuple) and len(item) == 2
+                        and item[0] == key]:
+                del cache.objects[old]
+            cache.objects[(key, stamp)] = listing
+    return listing.get(relative)
+
+
+def _unobserved(cache, root):
+    """Inside a read whose repository state cannot be observed, where nothing is otherwise reused.
+
+    An observable state keeps its own checks (replacement refs, pruned objects, split indexes).
+    Without one, objects by ID are still shared, unless replacement refs could change them.
+    """
+    if cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0' or not cache.stack or cache.stack[-1][1]:
+        return False
+    if os.environ.get('GIT_NO_REPLACE_OBJECTS') is not None or 'GIT_REPLACE_REF_BASE' in os.environ:
+        return False
+    key = ('no-replace-refs', root, tuple(sorted(os.environ.items())))
+    found = cache.objects.get(key)
+    if found is None:
+        refs = _git_execute(root, 'for-each-ref', '--count=1', '--format=%(refname)', 'refs/replace/',
+                            required=False)
+        found = cache.objects[key] = refs.returncode == 0 and not refs.stdout.strip()
+    return found
+
+
 def _batch_object(root, spec):
     cache = _READS.get()
+    if _unobserved(cache, root):
+        if IMMUTABLE_SPEC.fullmatch(spec):
+            return _immutable_object(cache, root, spec)
+        if spec.startswith(':') and not re.match(r':[0-3]:', spec) and not spec.startswith(':/'):
+            oid = _staged_object_id(cache, root, spec[1:])
+            if oid is not None:
+                return _immutable_object(cache, root, oid)
     if (cache is None or os.environ.get('WORKORDER_GIT_CACHE') == '0'
             or cache.stack and not cache.stack[-1][1]):
         batch = Batch(root)
@@ -1261,6 +1468,13 @@ def verify_receipt(root, tid, value):
                 or not isinstance(item.get("command"), list) or not item["command"]
                 or any(not isinstance(a, str) for a in item["command"])):
             raise Refused(f"{tid}: command receipt needs its arguments, exit code and validity")
+    if item['kind'] == 'accepted' and (
+            not re.fullmatch(r'[0-9a-f]{64}', str(item.get('implemented', '')))
+            or 'note' in item and (not isinstance(item['note'], str) or not item['note'].strip())):
+        raise Refused(f'{tid}: invalid acceptance receipt')
+    if 'acceptance_tests' in item and (item['kind'] != 'test' or not isinstance(item['acceptance_tests'], list)
+                                       or any(not isinstance(node, str) for node in item['acceptance_tests'])):
+        raise Refused(f'{tid}: invalid acceptance tests')
     if 'completion' in item and (item['kind'] != 'test' or item['completion'] is not True):
         raise Refused(f'{tid}: invalid completion record')
     if 'no_code_change_base' in item:
@@ -1430,6 +1644,28 @@ _PROPOSED_RECEIPTS = ContextVar('workorder_proposed_receipts', default=None)
 def proposed_receipts(root, tid):
     transaction = _PROPOSED_RECEIPTS.get()
     return transaction[2] if transaction and transaction[:2] == (root, tid) else None
+
+
+def annotate_acceptance_tests(root, tid, nodes):
+    """Record on the unpublished completion receipt which tied Acceptance tests done checked."""
+    pending = proposed_receipts(root, tid)
+    if not pending or pending[-1]['kind'] != 'test' or not pending[-1].get('completion'):
+        raise Refused('acceptance tests need a proposed test receipt')
+    item = pending[-1]
+    item['acceptance_tests'] = sorted(set(nodes))
+    item.pop('hash')
+    item['hash'] = digest(packed(item).encode())
+    invalidate_reads(metadata_only=True)
+
+
+def acceptance_receipt(root, tid, implemented, note=None):
+    """A person's confirmation that the task's Acceptance items are met, chained like other receipts."""
+    commit = head(root)
+    data = {'kind': 'accepted', 'commit': commit, 'code': code_digest(root, commit), 'implemented': implemented}
+    if note is not None:
+        data['note'] = note.strip()
+    with ledger_lock(root, tid):
+        return append(root, tid, data)
 
 
 def annotate_pending_review(root, tid, findings):
@@ -1738,11 +1974,22 @@ def test_timeout(record, override=None):
 def run_test(command, root, timeout=None, capture_output=True, *, isolated=False, cache_root=None,
              verify_imports=None):
     """Run a test without a shell; a deadline is recorded as a failed run, exit 124."""
-    from .python_imports import ImportFailure, bytecode_cache, environment, pytest_guard
+    from .timing import phase
+    with phase('new code', default=True):
+        return _run_test_process(command, root, timeout, capture_output, isolated=isolated, cache_root=cache_root,
+                                 verify_imports=verify_imports)
+
+
+def _run_test_process(command, root, timeout=None, capture_output=True, *, isolated=False, cache_root=None,
+                      verify_imports=None):
+    from .python_imports import ImportFailure, bytecode_cache, copy_imports, environment, pytest_guard
     # pytest parses this environment option with shlex even on Windows. Each
     # subprocess owns its pytest cache; neither cache affects our result key.
     env = environment(root, copy_environment() if isolated else os.environ.copy())
     with tempfile.TemporaryDirectory(prefix="workorder-pytest-", ignore_cleanup_errors=True) as cache:
+        if isolated and cache_root is not None:
+            # A comparison copy: the project's editable install must serve the copy.
+            env = copy_imports(root, cache_root, env, Path(cache) / "workorder-site")
         env["PYTEST_ADDOPTS"] = (env.get("PYTEST_ADDOPTS", "")
                                  + " -o cache_dir=" + shlex.quote(cache))
         with pytest_guard(command, root, verify_imports, env) as guard, \
@@ -2044,11 +2291,12 @@ def missing_test_dependency(command, code, output, root=None):
 
 
 def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", timeout=None,
-            no_code_change=False, refactor=False, pending_review=False, completion=False):
+            no_code_change=False, refactor=False, pending_review=False, completion=False, run=None):
+    """Record one receipt; `run` is done's (code, output) of this test already run in a copy."""
     repository(root)
     definition = record(root, tid)
     commit = head(root)
-    if kind not in KINDS:
+    if kind not in EVIDENCE_KINDS:
         raise Refused("unknown receipt kind")
     if kind in {"implemented", "test"} and not clean_code(root):
         raise Refused("commit the code before recording implementation or tests; "
@@ -2092,7 +2340,10 @@ def receipt(root, tid, kind, command=(), target=None, ref="refs/heads/main", tim
         if kind in {"deployed", "live"} and not target:
             raise Refused("read-backs need --target")
         try:
-            if kind == "test":
+            if kind == "test" and run is not None:
+                # Already run and printed by done, on this commit's code in a copy.
+                run = subprocess.CompletedProcess(list(command), run[0], str(run[1]), '')
+            elif kind == "test":
                 run = cached_test(command, root, test_timeout(definition, timeout), fresh=True)
                 print_test_output(run.stdout or '', run.stderr or '', failed=run.returncode != 0)
             else:
