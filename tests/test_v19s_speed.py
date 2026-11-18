@@ -86,10 +86,30 @@ def test_comparison_copies_share_the_object_store_instead_of_copying_it(local_re
     assert (root / 'app.py').read_text() == 'value = 1\n'
 
 
+class RunLog:
+    """Each test run writes its own file: runs at the same time cannot overwrite each other's line
+    (on Windows, Python's append mode is not atomic across processes)."""
+
+    def __init__(self, folder):
+        self.folder = folder
+        folder.mkdir(exist_ok=True)
+
+    def __str__(self):
+        return str(self.folder)
+
+    def read_text(self):
+        lines = (path.read_text() for path in sorted(self.folder.iterdir(), key=lambda path: path.name))
+        return ''.join(line if line.endswith('\n') else line + '\n' for line in lines)
+
+
+WRITE = ('    Path({folder!r}, f"{{__import__(\'time\').time_ns():020d}}-{{__import__(\'os\').getpid()}}")'
+         '.write_text({line})\n')
+
+
 def base_project(root, layout):
     """A task whose test logs which code it ran on: 'base' on the base code, 'new' on the change."""
     (root / '.gitignore').write_text('__pycache__/\n.pytest_cache/\n')
-    log = root.parent / 'base-runs.log'
+    log = RunLog(root.parent / 'base-runs')
     if layout == 'package':
         (root / 'app').mkdir()
         code = root / 'app' / '__init__.py'
@@ -104,9 +124,8 @@ def base_project(root, layout):
     (root / 'tests').mkdir()
     (root / 'tests' / 'test_own.py').write_text(
         'from pathlib import Path\n\nimport app\n\n\ndef test_own():\n'
-        f'    with Path({str(log)!r}).open("a") as output:\n'
-        '        output.write(app.version + "\\n")\n'
-        '    assert app.feature() is True\n')
+        + WRITE.format(folder=str(log), line='app.version + "\\n"')
+        + '    assert app.feature() is True\n')
     commit_all(root)
     return code, log
 
@@ -176,9 +195,8 @@ def timed_project(root):
     test.write_text(
         'import time\nfrom pathlib import Path\n\nimport app\n\n\ndef test_own():\n'
         '    start = time.time()\n    time.sleep(1)\n'
-        f'    with Path({str(log)!r}).open("a") as output:\n'
-        '        output.write(f"{app.version} {start} {time.time()}\\n")\n'
-        '    assert app.feature() is True\n')
+        + WRITE.format(folder=str(log), line='f"{app.version} {start} {time.time()}\\n"')
+        + '    assert app.feature() is True\n')
     commit_all(root)
     return log
 
