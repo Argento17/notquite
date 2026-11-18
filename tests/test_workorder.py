@@ -46,8 +46,11 @@ def cli(root, *args):
     if os.name == "nt":
         # Diagnostic for an intermittent Windows hang: dump every thread's stack
         # to stderr shortly before the 120-second limit.
-        command = [PYTHON, "-c", "import faulthandler, runpy, sys; "
+        # The timer is cancelled at exit: a pending dump_traceback_later can crash
+        # Python 3.10 on Windows as the interpreter shuts down (exit 0xC0000005).
+        command = [PYTHON, "-c", "import atexit, faulthandler, runpy, sys; "
                    "faulthandler.dump_traceback_later(100, file=sys.stderr); "
+                   "atexit.register(faulthandler.cancel_dump_traceback_later); "
                    "sys.argv = ['workorder', *sys.argv[1:]]; "
                    "runpy.run_module('workorder', run_name='__main__', alter_sys=True)", *args]
     process = subprocess.Popen(command, cwd=root, env=env,

@@ -161,9 +161,11 @@ def test_done_and_reused_results_say_who_ran_the_test(local_repo):
     assert 'when this check ran it' not in done
     git(root, 'add', '-A')
     staged = ok(root, 'check', '--staged')
-    assert '(result reused from the run at' in staged
-    assert 'Note: TASK-1: its test passed in the reused result (not run again)' in staged
-    assert 'when this check ran it' not in staged
+    # The hook either reuses done's result or runs the test again (a reuse is an optimisation,
+    # not a promise: Windows CI sometimes runs it fresh); each says which happened.
+    reused = 'Note: TASK-1: its test passed in the reused result (not run again)' in staged
+    ran = 'Note: TASK-1: its test passed when this check ran it' in staged
+    assert reused != ran, staged
 
 
 def test_unfinished_missing_test_file_is_one_note(local_repo):
