@@ -213,7 +213,7 @@ def test_done_runs_the_base_and_stubbed_and_new_code_copy_at_the_same_time(local
         # done started the runs side by side (its Time line says so). Whether two 1-second
         # runs actually overlap depends on the machine: shared CI runners can serialise them.
         assert 'runs overlapped' in result.stdout + result.stderr, (runs, result.stderr)
-        if not os.environ.get('GITHUB_ACTIONS'):
+        if not os.environ.get('GITHUB_RUN_ID'):  # conftest removes GITHUB_ACTIONS and CI
             assert overlapping, (runs, result.stderr)
     assert store.record(root, 'TASK-1')['status'] == 'DONE', first
 
