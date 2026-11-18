@@ -7,6 +7,14 @@ Agents also say DONE when nothing proves it. Workorder refuses that DONE until t
 **A verified test result is not a verified task.** DONE means the test proves the change did something; whether the task was done right is a person's acceptance, a separate state recorded with `workorder accept`.
 
 ```mermaid
+flowchart LR
+    T(["Every task:<br/>the same fields"]) --> W["The work<br/>mission and context<br/>scope: what is in and out<br/>acceptance: the result a person checks"]
+    T --> P["The proof<br/>test: the command that proves it<br/>receipts: each commit and test result"]
+    T --> S["Where it stands<br/>status<br/>progress notes<br/>next step"]
+    T --> O["People and links<br/>owner<br/>depends on, blocks"]
+```
+
+```mermaid
 flowchart TD
     A["An agent works on a task<br/>workorder new wrote tasks/TASK-1.md"] --> B["The session ends mid-task<br/>progress and the next step<br/>stay in the task"]
     B --> C["A new session picks it up<br/>workorder show:<br/>the same structure every time"]
@@ -22,11 +30,9 @@ flowchart TD
 
 ![Comic: a coding agent says DONE and Workorder refuses until the task's test passes; then the next session picks up where the work left off from `workorder show`](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)
 
-Every task is a Markdown file in `tasks/`; receipts go in `.workorder/`. `workorder done` refuses a DONE while Scope or Acceptance is empty.
+Every task is a Markdown file in `tasks/`; receipts go in `.workorder/`. `workorder done` refuses a DONE while Scope or Acceptance is empty. Needs Git and Python 3.10 or newer; no server or database. Tested in CI on Linux and Windows (Python 3.10, 3.12, 3.13).
 
 [How it works](docs/how-it-works.md) · [Reviewer guide](docs/reviewer-guide.md) · [Reference](docs/reference.md) · [Guarantees and limits](docs/guarantees.md) · [Shortcuts Workorder flags](docs/shortcuts.md)
-
-Needs Git and Python 3.10 or newer; no server or database. Tested in CI on Linux and Windows (Python 3.10, 3.12, 3.13).
 
 ## Quick start
 

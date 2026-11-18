@@ -34,7 +34,7 @@ def test_readme_leads_with_continuity_then_proof():
 
 
 def test_flow_chart_tells_interruption_recovery_refusal_proof_done():
-    chart = MERMAID.findall(README)[0]
+    chart = next(chart for chart in MERMAID.findall(README) if 'flowchart TD' in chart)
     ordered, positions = in_order(chart, ['ends mid-task', 'A new session picks it up', 'workorder show',
                                           'same structure', 'finishes the work', 'claims DONE', 'Refused',
                                           'adds the proof', 'DONE, with receipts', 'pull request'])

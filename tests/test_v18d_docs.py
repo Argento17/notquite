@@ -101,7 +101,8 @@ def test_public_docs_avoid_banned_wording():
 def test_readme_opens_with_an_overview_then_one_flow_chart():
     readme = (PACKAGE / 'README.md').read_text(encoding='utf-8')
     charts = MERMAID.findall(readme)
-    assert len(charts) == 1
+    assert len(charts) == 2  # the task's fields, then the flow
+    charts = [chart for chart in charts if 'ends mid-task' in chart]
     chart, gif = readme.index('```mermaid'), readme.index('![')
     # What and why come first; file details come after the chart and the GIF.
     overview = readme[:chart]
@@ -133,3 +134,12 @@ def test_charts_use_one_text_size():
     for path in [PACKAGE / 'README.md', *sorted((PACKAGE / 'docs').glob('*.md'))]:
         for chart in MERMAID.findall(path.read_text(encoding='utf-8')):
             assert '<small' not in chart, path.name
+
+
+def test_readme_shows_the_task_fields_above_the_flow_chart():
+    readme = (PACKAGE / 'README.md').read_text(encoding='utf-8')
+    fields, flow = MERMAID.findall(readme)
+    assert 'ends mid-task' in flow and 'the same fields' in fields
+    for field in ('mission', 'context', 'scope', 'acceptance', 'test:', 'receipts', 'status', 'progress',
+                  'next step', 'owner', 'depends on', 'blocks'):
+        assert field in fields, field
