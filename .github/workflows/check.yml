@@ -1,6 +1,10 @@
 name: Checks
 on: [push, pull_request]
 permissions: {contents: read}
+# A newer push to the same branch (or its pull request) replaces the older run.
+concurrency:
+  group: checks-${{ github.head_ref && format('refs/heads/{0}', github.head_ref) || github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ${{ matrix.os }}
