@@ -8,16 +8,16 @@ Agents also say DONE when nothing proves it. Workorder refuses that DONE until t
 
 ```mermaid
 flowchart TD
-    A["An agent works on a task<br/><small>workorder new wrote tasks/TASK-1.md</small>"] --> B["The session ends mid-task<br/><small>progress and the next step stay in the task</small>"]
-    B --> C["A new session picks it up<br/><small>workorder show: the same structure every time</small>"]
+    A["An agent works on a task<br/>workorder new wrote tasks/TASK-1.md"] --> B["The session ends mid-task<br/>progress and the next step<br/>stay in the task"]
+    B --> C["A new session picks it up<br/>workorder show:<br/>the same structure every time"]
     C --> D["It finishes the work, with a test"]
-    D --> E{"It claims DONE<br/><small>workorder done</small>"}
+    D --> E{"It claims DONE<br/>workorder done"}
     E -- "nothing proves it" --> F["Refused, with what is missing"]
-    F --> G["It adds the proof<br/><small>the task's test passes now, failed on the code<br/>before the change, and fails with the change stubbed out</small>"]
+    F --> G["It adds the proof<br/>the test passes now, failed before<br/>the change, and fails with<br/>the change stubbed out"]
     G --> E
     E -- "the test proves it" --> H["DONE, with receipts"]
-    H --> I["One pull request<br/><small>workorder check reruns the evidence</small>"]
-    I --> J["A person reviews and merges<br/><small>whether it was done right is theirs to accept</small>"]
+    H --> I["One pull request<br/>workorder check reruns the evidence"]
+    I --> J["A person reviews and merges<br/>whether it was done right<br/>is theirs to accept"]
 ```
 
 ![Comic: a coding agent says DONE and Workorder refuses until the task's test passes; then the next session picks up where the work left off from `workorder show`](https://raw.githubusercontent.com/Argento17/workorder/main/docs/workorder-demo.gif)

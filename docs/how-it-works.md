@@ -12,7 +12,7 @@ The three charts below show a task's life, what `workorder done` checks, and wha
 
 ```mermaid
 flowchart LR
-    N["Task written<br/><small>workorder new</small>"] --> IP["IN_PROGRESS"]
+    N["Task written<br/>workorder new"] --> IP["IN_PROGRESS"]
     IP -->|"workorder done<br/>(the evidence supports it)"| D["DONE"]
     IP -->|"workorder done --needs-review<br/>(a finding a reviewer must accept)"| P["DONE, pending review"]
     P -->|"the pull request gets the label<br/>(or, where the rule allows,<br/>an approving review) and merges"| D
@@ -55,10 +55,10 @@ flowchart TD
 ```mermaid
 flowchart TD
     F["A finding in the<br/>pull-request check"] --> Q1{"A finished task's test fails now,<br/>or a DONE lacks evidence?"}
-    Q1 -->|yes| X["Fix it, finish the work,<br/>or workorder renew<br/><small>no review or label clears it</small>"]
+    Q1 -->|yes| X["Fix it, finish the work,<br/>or workorder renew<br/>no review or label clears it"]
     Q1 -->|no| Q2{"Does it change existing tests<br/>(edited, removed, skipped, weakened,<br/>or now failing, including the project test)<br/>or the Workorder workflow file?"}
-    Q2 -->|yes| L["A label only<br/><small>workorder-allow:ID, workorder-allow:tests<br/>or workorder-allow:workflow</small>"]
-    Q2 -->|no| A["An approving review<br/>or a label<br/><small>workorder-allow:ID, no-task or scope:ID</small>"]
+    Q2 -->|yes| L["A label only<br/>workorder-allow:ID,<br/>workorder-allow:tests<br/>or workorder-allow:workflow"]
+    Q2 -->|no| A["An approving review<br/>or a label<br/>workorder-allow:ID,<br/>no-task or scope:ID"]
 ```
 
 Labels must come from someone other than the pull request's author, and an approving review must come from another person and cover the current head. A project test that already failed on the base is only a Note. Each refusal names what clears it; the [reviewer guide](reviewer-guide.md) has the full table and explains each finding.

@@ -126,3 +126,10 @@ def test_how_it_works_has_three_short_charts():
     for phrase in ('commit the code first', 'does not exercise the change', 'does not show the change works',
                    'workorder done --needs-review', 'workorder retire', 'no review or label clears it'):
         assert phrase in text, phrase
+
+
+def test_charts_use_one_text_size():
+    """GitHub sizes a box for <small> text but draws it full size, so the line is cut off."""
+    for path in [PACKAGE / 'README.md', *sorted((PACKAGE / 'docs').glob('*.md'))]:
+        for chart in MERMAID.findall(path.read_text(encoding='utf-8')):
+            assert '<small' not in chart, path.name
