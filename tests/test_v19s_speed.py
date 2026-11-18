@@ -209,7 +209,7 @@ def test_done_runs_the_base_and_stubbed_and_new_code_copy_at_the_same_time(local
     if jobs == '1':
         assert overlapping == [], runs
     else:
-        assert overlapping, runs
+        assert overlapping, (runs, result.stderr)
     assert store.record(root, 'TASK-1')['status'] == 'DONE', first
 
 

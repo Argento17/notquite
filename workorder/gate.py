@@ -3919,6 +3919,12 @@ class ConcurrentResults(dict):
             self._settle(key)
 
 
+def _debug(message):
+    """WORKORDER_DEBUG=1 prints why a parallel run did not start."""
+    if os.environ.get('WORKORDER_DEBUG'):
+        print(f'workorder: {message}', file=sys.stderr)
+
+
 def prefetch_comparison(root, base, record, results, pool, *, timeout=None):
     """Start done's current-code copy run and base-code run beside the stubbed run.
 
@@ -3962,14 +3968,17 @@ def prefetch_comparison(root, base, record, results, pool, *, timeout=None):
         with s.read_scope(root):
             if not task_change_touched(root, base, record):
                 plan = None
+                _debug('parallel base run skipped: the change does not touch the task')
             else:
                 refactor = latest_test_run(root, record).get('refactor') is True
                 protected = strict_test_files(root, record, base)
                 own_command, overlays, _ = base_code_plan(root, base, record, protected, refactor=refactor)
                 own_key, revision = ref_code_key(root, base, record, own_command, overlays, timeout)
                 plan = own_key, partial(base_code, own_command, overlays, revision)
-    except (OSError, ValueError, s.Refused, subprocess.SubprocessError):
-        return
+    except (OSError, ValueError, s.Refused, subprocess.SubprocessError) as error:
+        # The base run is then left to the comparison; the new-code copy run still starts here.
+        plan = None
+        _debug(f'parallel base run not planned: {error!r}')
     jobs = [(_test_key(record, timeout), current)]
     if plan is not None:
         jobs.append(plan)

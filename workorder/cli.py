@@ -465,6 +465,8 @@ def finish_task(root, tid, note=None, timeout=None, needs_review=False, no_code_
                 s.read_text(root, f"tasks/{tid}.md")) if node is not None])
         notes = []
         proven = set()  # done's comparison showed the task's tests fail on the base code
+        if not (base and (jobs or 3) > 1):
+            gate._debug(f'no parallel runs: target {base!r}, jobs {jobs!r}')
         if base and (jobs or 3) > 1:
             # The new-code copy, base-code and stubbed runs are independent: run them at the same time.
             # Their output is printed in the usual order when each result is read.
