@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 (unreleased)
+## 1.0.0 (18 Nov 2026)
 
 - **Continuity first.** The README and a new "How it works" page explain the product with flow charts: a
   session ends mid-task, the next one recovers it with `workorder show` in the same structure every time,
