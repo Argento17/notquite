@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1 (18 Nov 2026)
+
+- PyPI lists Workorder as stable (it still said alpha).
+- The README shows the fields every task has, in a chart above the flow chart; chart lines
+  are no longer cut off on GitHub.
+- CI cancels a run when a newer push to the same branch replaces it.
+
 ## 1.0.0 (18 Nov 2026)
 
 - **Continuity first.** The README and a new "How it works" page explain the product with flow charts: a

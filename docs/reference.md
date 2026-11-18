@@ -1005,7 +1005,7 @@ jobs:
         with: {python-version: '3.12'}
       - name: Install project test dependencies
         run: python -m pip install -e '.[test]'
-      - run: python -m pip install workorder==1.0.0
+      - run: python -m pip install workorder==1.0.1
       - name: Check tasks after merge
         if: github.event_name == 'push'
         run: |
@@ -1323,7 +1323,7 @@ use `uv pip install --group tests -e .`, or install the group's requirements, th
 
 It then installs Workorder at exactly the running version: a Git install's PEP 610 direct_url.json
 gives `python -m pip install 'git+<url>@<commit>'` (with any subdirectory), otherwise
-`workorder==1.0.0`. Pull requests run
+`workorder==1.0.1`. Pull requests run
 `workorder check --base "origin/<base>" --run-tests --all-tests --require-task` with labels added by
 someone other than the author (task ids, `scope:<ID>`, `tests`, `no-task`, `workflow`) as `--allow`,
 and `--approving-review` for a current-head approval. Pushes run `workorder check --run-tests --all-tests`.
