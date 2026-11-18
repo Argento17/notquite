@@ -81,7 +81,7 @@ def test_comparison_copies_share_the_object_store_instead_of_copying_it(local_re
     assert (destination / 'app.py').read_text() == 'value = 1\n'
     # The copy stays independent: its commits do not reach the work tree's repository.
     (destination / 'app.py').write_text('value = 2\n')
-    git(destination, 'commit', '-qam', 'copy only')
+    git(destination, '-c', 'user.name=copy', '-c', 'user.email=copy@example.com', 'commit', '-qam', 'copy only')
     assert git(root, 'rev-parse', 'HEAD') != git(destination, 'rev-parse', 'HEAD')
     assert (root / 'app.py').read_text() == 'value = 1\n'
 
@@ -192,8 +192,16 @@ def intervals(log):
 def test_done_runs_the_base_and_stubbed_and_new_code_copy_at_the_same_time(local_repo, jobs):
     root = local_repo
     log = timed_project(root)
-    first = ok(root, 'done', '--task', 'TASK-1', *(('--jobs', jobs) if jobs else ()))
+    import os
+    os.environ['WORKORDER_DEBUG'] = '1'  # a parallel run that fails says why on stderr
+    try:
+        result = cli(root, 'done', '--task', 'TASK-1', *(('--jobs', jobs) if jobs else ()))
+    finally:
+        del os.environ['WORKORDER_DEBUG']
+    assert result.returncode == 0, result.stdout + result.stderr
+    first = result.stdout
     runs = intervals(log)
+    assert 'parallel run failed' not in result.stderr, result.stderr
     base = [run for run in runs if run[0] == 'base']
     assert len(base) == 1, runs
     _, start, end = base[0]

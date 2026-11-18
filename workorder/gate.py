@@ -3940,7 +3940,11 @@ def prefetch_comparison(root, base, record, results, pool, *, timeout=None):
                 with s.temporary_checkout(prefix='workorder-tests-') as temporary, console.capture(output), \
                         s.read_session(seed=seed), s.base_reuse():
                     return function(Path(temporary)), output
-            except Exception:  # noqa: BLE001 - the comparison then runs it itself, with its usual errors
+            except Exception as error:  # noqa: BLE001 - the comparison then runs it itself, with its usual errors
+                if os.environ.get('WORKORDER_DEBUG'):
+                    import traceback
+                    print(f'workorder: parallel run failed, run again in order: {error!r}', file=sys.stderr)
+                    traceback.print_exc(file=sys.stderr)
                 return None, []
             finally:
                 s._READS.reset(token)
